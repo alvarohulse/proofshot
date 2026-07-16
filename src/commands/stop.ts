@@ -6,10 +6,22 @@ import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { closeBrowser, getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
-import { loadSession, clearSession } from '../session/state.js';
+import { clearSession, saveSession } from '../session/state.js';
+import {
+  formatSessionChoices,
+  listActiveBrowserSessionNames,
+  registerSession,
+  resolveSession,
+  SessionSelectionError,
+  unregisterSession,
+} from '../session/registry.js';
+import {
+  isSessionStillStarting,
+  stopOwnedServer,
+} from '../session/lifecycle.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
-import { loadSessionLog } from './exec.js';
+import { loadSessionLog, type SessionLogEntry } from './exec.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
 
 /**
@@ -51,15 +63,39 @@ function parseTimestampedServerLog(
 
 interface StopOptions {
   noClose?: boolean;
+  session?: string;
 }
 
 export async function stopCommand(options: StopOptions): Promise<void> {
   const config = loadConfig();
-  setAgentBrowserDefaults({ configPath: config.browser.configPath });
-  const outputDir = path.resolve(config.output);
+  const legacyOutputDir = path.resolve(config.output);
+  let activeBrowserSessionNames: Set<string> | null = null;
+  try {
+    activeBrowserSessionNames = listActiveBrowserSessionNames();
+  } catch {
+    // Fall back to registry-only resolution when agent-browser is unavailable.
+  }
 
   // Load session state
-  const session = loadSession(outputDir);
+  let session;
+  try {
+    session = resolveSession({
+      sessionName: options.session,
+      workingDirectory: process.cwd(),
+      legacyOutputDir,
+      activeBrowserSessionNames,
+    });
+  } catch (error) {
+    if (error instanceof SessionSelectionError) {
+      console.error(
+        chalk.red('✗') +
+          ` ${error.message}\n` +
+          chalk.dim(`Use --session <id> to choose one:\n${formatSessionChoices(error.sessions)}`),
+      );
+      process.exit(1);
+    }
+    throw error;
+  }
   if (!session) {
     console.error(
       chalk.red('✗') +
@@ -68,6 +104,19 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     );
     process.exit(1);
   }
+  if (isSessionStillStarting(session)) {
+    console.error(
+      chalk.red('✗') +
+        ' This ProofShot session is still starting.\n' +
+        chalk.dim('Wait for start to finish before stopping it.'),
+    );
+    process.exit(1);
+  }
+  const browserConfigPath =
+    session.browserConfigPath === undefined
+      ? config.browser.configPath
+      : session.browserConfigPath ?? undefined;
+  setAgentBrowserDefaults({ configPath: browserConfigPath });
 
   const startTime = new Date(session.startedAt).getTime();
   const durationMs = Date.now() - startTime;
@@ -153,9 +202,12 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   // Step 7: Generate SUMMARY.md
   const summaryPath = path.join(sessionDir, 'SUMMARY.md');
   const summary = generateProofSummary({
+    projectDirectory: session.startDirectory || process.cwd(),
     description: session.description,
     serverCommand: session.serverCommand,
     port: session.port,
+    headless: session.headless ?? config.headless,
+    viewport: session.viewport || config.viewport,
     videoPath: session.videoPath,
     screenshots,
     consoleErrors,
@@ -209,7 +261,22 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   });
 
   // Step 8: Clear session state
-  clearSession(outputDir);
+  let serverCleanupError: Error | null = null;
+  try {
+    stopOwnedServer(session);
+  } catch (error) {
+    serverCleanupError =
+      error instanceof Error ? error : new Error(String(error));
+    session.recordingActive = false;
+    session.lifecycleStatus = 'stopped';
+    session.ownerPid = null;
+    saveSession(session);
+    registerSession(session);
+  }
+  if (serverCleanupError === null) {
+    clearSession(session.outputDir, session.sessionName);
+    unregisterSession(session.sessionName);
+  }
 
   // Step 9: Print results
   console.log('');
@@ -237,6 +304,18 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   console.log('');
   console.log(`Proof artifacts saved to ${chalk.dim(sessionDir)}`);
 
+  if (serverCleanupError !== null) {
+    console.error('');
+    console.error(
+      chalk.yellow('⚠') +
+        ` ${serverCleanupError.message}\n` +
+        chalk.dim(
+          `Session state was preserved. Resolve the process manually, then run "proofshot session clean".`,
+        ),
+    );
+    process.exitCode = 1;
+  }
+
   // If errors were found, print them for immediate feedback
   if (consoleErrorCount > 0) {
     console.log('');
@@ -261,10 +340,13 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
 }
 
-interface SummaryData {
+export interface SummaryData {
+  projectDirectory: string;
   description: string | null;
   serverCommand: string | null;
   port: number;
+  headless: boolean;
+  viewport: { width: number; height: number };
   videoPath: string;
   screenshots: string[];
   consoleErrors: string;
@@ -276,9 +358,9 @@ interface SummaryData {
   outputDir: string;
 }
 
-function generateProofSummary(data: SummaryData): string {
+export function generateProofSummary(data: SummaryData): string {
   const date = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const projectName = path.basename(process.cwd());
+  const projectName = path.basename(data.projectDirectory);
 
   let md = `# ProofShot Verification Report
 
@@ -345,8 +427,8 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
 
   // Environment
   md += `## Environment
-- Browser: Chromium (headless)
-- Viewport: 1280x720
+- Browser: Chromium (${data.headless ? 'headless' : 'headed'})
+- Viewport: ${data.viewport.width}x${data.viewport.height}
 - Duration: ${data.durationSec} seconds
 `;
 
@@ -362,12 +444,12 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
  *
  * Buffers: 5s before first action, 3s after last action.
  */
-function trimVideo(
+export function trimVideo(
   videoPath: string,
   screenshots: string[],
   outputDir: string,
   recordingStartMs: number,
-  sessionLog: import('./exec.js').SessionLogEntry[],
+  sessionLog: SessionLogEntry[],
 ): number {
   let firstActionSec: number | null = null;
   let lastActionSec: number | null = null;
@@ -424,9 +506,10 @@ function trimVideo(
     fs.renameSync(videoPath, rawPath);
 
     execSync(
-      `ffmpeg -i "${rawPath}" -ss ${trimStartSec.toFixed(2)} -to ${trimEndSec.toFixed(2)} -c copy "${videoPath}"`,
+      `ffmpeg -y -i "${rawPath}" -ss ${trimStartSec.toFixed(2)} -to ${trimEndSec.toFixed(2)} -c copy -abort_on empty_output "${videoPath}"`,
       { stdio: 'pipe', timeout: 60000 },
     );
+    validateTrimmedVideo(videoPath);
 
     // Remove raw file on success
     fs.unlinkSync(rawPath);
@@ -435,14 +518,24 @@ function trimVideo(
     return trimStartSec;
   } catch {
     // Restore original if trimming failed
+    if (fs.existsSync(videoPath)) {
+      fs.unlinkSync(videoPath);
+    }
     if (fs.existsSync(rawPath)) {
-      if (!fs.existsSync(videoPath)) {
-        fs.renameSync(rawPath, videoPath);
-      } else {
-        fs.unlinkSync(rawPath);
-      }
+      fs.renameSync(rawPath, videoPath);
     }
     console.log(chalk.dim('Video trimming failed, keeping original'));
     return 0;
   }
+}
+
+function validateTrimmedVideo(videoPath: string): void {
+  if (!fs.existsSync(videoPath) || fs.statSync(videoPath).size === 0) {
+    throw new Error('FFmpeg produced an empty video');
+  }
+
+  execSync(
+    `ffmpeg -v error -i "${videoPath}" -map 0:v:0 -frames:v 1 -f null -`,
+    { stdio: 'pipe', timeout: 60000 },
+  );
 }
