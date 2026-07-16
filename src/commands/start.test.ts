@@ -13,7 +13,17 @@ const mocks = vi.hoisted(() => ({
   saveSession: vi.fn(),
   hasActiveSession: vi.fn(),
   clearSession: vi.fn(),
+  loadSession: vi.fn(),
+  reserveOutputSession: vi.fn(),
   generateAgentBrowserSessionName: vi.fn(),
+  listRegisteredSessions: vi.fn(),
+  registerSession: vi.fn(),
+  reserveSession: vi.fn(),
+  unregisterSession: vi.fn(),
+  discardSession: vi.fn(),
+  isSessionStillStarting: vi.fn(),
+  terminateProcessTree: vi.fn(),
+  isProcessRunning: vi.fn(),
   writeMetadata: vi.fn(),
   execSync: vi.fn(),
 }));
@@ -23,6 +33,7 @@ vi.mock('../utils/config.js', () => ({
 }));
 
 vi.mock('../server/start.js', () => ({
+  DevServerStartError: class DevServerStartError extends Error {},
   ensureDevServer: mocks.ensureDevServer,
 }));
 
@@ -45,7 +56,21 @@ vi.mock('../session/state.js', () => ({
   saveSession: mocks.saveSession,
   hasActiveSession: mocks.hasActiveSession,
   clearSession: mocks.clearSession,
+  loadSession: mocks.loadSession,
+  reserveOutputSession: mocks.reserveOutputSession,
   generateAgentBrowserSessionName: mocks.generateAgentBrowserSessionName,
+}));
+
+vi.mock('../session/registry.js', () => ({
+  listRegisteredSessions: mocks.listRegisteredSessions,
+  registerSession: mocks.registerSession,
+  reserveSession: mocks.reserveSession,
+  unregisterSession: mocks.unregisterSession,
+}));
+
+vi.mock('../session/lifecycle.js', () => ({
+  discardSession: mocks.discardSession,
+  isSessionStillStarting: mocks.isSessionStillStarting,
 }));
 
 vi.mock('../session/metadata.js', () => ({
@@ -54,6 +79,11 @@ vi.mock('../session/metadata.js', () => ({
 
 vi.mock('child_process', () => ({
   execSync: mocks.execSync,
+}));
+
+vi.mock('../utils/process.js', () => ({
+  isProcessRunning: mocks.isProcessRunning,
+  terminateProcessTree: mocks.terminateProcessTree,
 }));
 
 describe('startCommand', () => {
@@ -76,6 +106,9 @@ describe('startCommand', () => {
       },
     });
     mocks.hasActiveSession.mockReturnValue(false);
+    mocks.loadSession.mockReturnValue(null);
+    mocks.listRegisteredSessions.mockReturnValue([]);
+    mocks.isSessionStillStarting.mockReturnValue(false);
     mocks.generateTimestamp.mockReturnValue('2026-04-08_07-28-00');
     mocks.generateSessionDirName.mockReturnValue('2026-04-08_07-28-00_test');
     mocks.generateAgentBrowserSessionName.mockReturnValue('proofshot-2026-04-08_07-28-00');
@@ -130,5 +163,86 @@ describe('startCommand', () => {
     expect(mocks.closeBrowser).toHaveBeenCalledTimes(1);
     expect(mocks.startRecording).not.toHaveBeenCalled();
     expect(mocks.saveSession).not.toHaveBeenCalled();
+  });
+
+  it('persists the same session in artifact and global state', async () => {
+    await startCommand({});
+
+    expect(mocks.saveSession).toHaveBeenCalledTimes(1);
+    expect(mocks.registerSession).toHaveBeenCalledWith(
+      mocks.saveSession.mock.calls[0][0],
+    );
+    expect(mocks.saveSession.mock.calls[0][0]).toMatchObject({
+      startDirectory: process.cwd(),
+      browserConfigPath: null,
+      headless: true,
+    });
+  });
+
+  it('records owned-server identity before waiting for startup readiness', async () => {
+    const server = {
+      alreadyRunning: false,
+      port: 3000,
+      pid: 1234,
+      ownershipToken: 'ownership-token',
+      processStartTime: 'start-time',
+    };
+    mocks.ensureDevServer.mockImplementation(
+      async (
+        _command: string,
+        _port: number,
+        _timeout: number,
+        _logPath: string,
+        onSpawn: (state: typeof server) => void,
+      ) => {
+        onSpawn(server);
+        return server;
+      },
+    );
+
+    await startCommand({ run: 'npm run dev' });
+
+    expect(mocks.registerSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverPid: 1234,
+        serverOwnershipToken: 'ownership-token',
+        serverProcessStartTime: 'start-time',
+      }),
+    );
+  });
+
+  it('cleans up live resources when registry persistence fails', async () => {
+    mocks.registerSession.mockImplementation(() => {
+      throw new Error('state directory is read-only');
+    });
+
+    await expect(startCommand({})).rejects.toMatchObject({ message: 'process.exit:1' });
+
+    expect(mocks.discardSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionName: expect.stringContaining('proofshot-') }),
+    );
+  });
+
+  it('does not clear another session when output reservation fails', async () => {
+    mocks.reserveOutputSession.mockImplementation(() => {
+      throw Object.assign(new Error('already reserved'), { code: 'EEXIST' });
+    });
+
+    await startCommand({});
+
+    expect(mocks.clearSession).not.toHaveBeenCalled();
+    expect(mocks.reserveSession).toHaveBeenCalled();
+    expect(mocks.openBrowser).not.toHaveBeenCalled();
+  });
+
+  it('propagates non-contention output reservation errors', async () => {
+    mocks.reserveOutputSession.mockImplementation(() => {
+      throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    });
+
+    await expect(startCommand({})).rejects.toThrow('permission denied');
+
+    expect(mocks.unregisterSession).toHaveBeenCalled();
+    expect(mocks.openBrowser).not.toHaveBeenCalled();
   });
 });

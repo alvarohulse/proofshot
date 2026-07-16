@@ -1,8 +1,10 @@
+import * as path from 'path';
 import chalk from 'chalk';
 import { PROOFSHOT_VERSION } from '../version.js';
 import { findConfigPath, loadConfig } from '../utils/config.js';
 import { findExecutablePath, readCommandVersion } from '../utils/process.js';
 import { loadSession } from '../session/state.js';
+import { listRegisteredSessions } from '../session/registry.js';
 
 function statusLabel(ok: boolean, text: string): string {
   return ok ? `${chalk.green('✓')} ${text}` : `${chalk.yellow('⚠')} ${text}`;
@@ -16,7 +18,14 @@ export async function doctorCommand(): Promise<void> {
   const configPath = findConfigPath();
   const config = loadConfig();
   const outputDir = config.output;
-  const session = loadSession(outputDir);
+  const registeredSessions = listRegisteredSessions();
+  const legacySession = loadSession(path.resolve(outputDir));
+  const sessions =
+    registeredSessions.length > 0
+      ? registeredSessions
+      : legacySession
+        ? [legacySession]
+        : [];
 
   const agentBrowserPath = findExecutablePath('agent-browser');
   const ffmpegPath = findExecutablePath('ffmpeg');
@@ -43,12 +52,12 @@ export async function doctorCommand(): Promise<void> {
   printLine('Version', ffmpegVersion || chalk.dim('not available'));
   console.log('');
 
-  console.log(statusLabel(Boolean(session), 'active session'));
-  if (session) {
+  printLine('Sessions', sessions.length === 0 ? chalk.dim('none') : String(sessions.length));
+  if (sessions.length === 1) {
+    const session = sessions[0];
+    printLine('Session', session.sessionName);
     printLine('Session dir', session.sessionDir);
     printLine('Recording', session.recordingActive ? 'active' : 'stopped');
     printLine('Port', String(session.port));
-  } else {
-    printLine('Session dir', chalk.dim('none'));
   }
 }

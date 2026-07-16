@@ -1,9 +1,14 @@
 import * as path from 'path';
 import chalk from 'chalk';
 import { execSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
-import { ensureDevServer } from '../server/start.js';
+import {
+  DevServerStartError,
+  ensureDevServer,
+  type ServerStartResult,
+} from '../server/start.js';
 import { closeBrowser, openBrowser } from '../browser/session.js';
 import { startRecording } from '../browser/capture.js';
 import { ensureOutputDir, generateTimestamp, generateSessionDirName } from '../artifacts/bundle.js';
@@ -11,9 +16,23 @@ import {
   saveSession,
   hasActiveSession,
   clearSession,
+  loadSession,
+  reserveOutputSession,
   generateAgentBrowserSessionName,
+  type SessionState,
 } from '../session/state.js';
+import {
+  listRegisteredSessions,
+  registerSession,
+  reserveSession,
+  unregisterSession,
+} from '../session/registry.js';
+import {
+  discardSession,
+  isSessionStillStarting,
+} from '../session/lifecycle.js';
 import { writeMetadata } from '../session/metadata.js';
+import { isProcessRunning, terminateProcessTree } from '../utils/process.js';
 
 interface StartOptions {
   description?: string;
@@ -34,10 +53,31 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   const outputDir = path.resolve(config.output);
   const timestamp = generateTimestamp();
+  const registeredSession = listRegisteredSessions().find(
+    (session) => path.resolve(session.outputDir) === outputDir,
+  );
+  const existingSession = registeredSession || loadSession(outputDir);
 
-  if (hasActiveSession(outputDir)) {
+  if (existingSession || hasActiveSession(outputDir)) {
     if (options.force) {
-      clearSession(outputDir);
+      if (existingSession) {
+        if (isSessionStillStarting(existingSession)) {
+          console.log(
+            chalk.yellow('⚠ A session is still starting.') +
+              chalk.dim(' Wait for it to finish or stop its ProofShot process first.'),
+          );
+          return;
+        }
+        try {
+          discardSession(existingSession);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(chalk.red('✗') + ` Could not clear stale session: ${message}`);
+          process.exit(1);
+        }
+      } else {
+        clearSession(outputDir);
+      }
       console.log(chalk.yellow('⚠') + chalk.dim(' Cleared stale session'));
     } else {
       console.log(
@@ -50,9 +90,10 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   ensureOutputDir(outputDir);
 
-  const sessionDirName = generateSessionDirName(timestamp, options.description || null);
+  const sessionSuffix = randomUUID().slice(0, 8);
+  const sessionDirName = `${generateSessionDirName(timestamp, options.description || null)}-${sessionSuffix}`;
   const sessionDir = path.join(outputDir, sessionDirName);
-  const sessionName = generateAgentBrowserSessionName(timestamp);
+  const sessionName = generateAgentBrowserSessionName(`${timestamp}-${sessionSuffix}`);
   ensureOutputDir(sessionDir);
 
   const videoPath = path.join(sessionDir, 'session.webm');
@@ -84,22 +125,75 @@ export async function startCommand(options: StartOptions): Promise<void> {
     description: options.description || null,
   });
 
-  let serverAlreadyRunning = true;
+  const session: SessionState = {
+    startedAt: new Date().toISOString(),
+    startDirectory: process.cwd(),
+    lifecycleStatus: 'starting',
+    ownerPid: process.pid,
+    description: options.description || null,
+    outputDir,
+    sessionDir,
+    sessionName,
+    browserConfigPath: config.browser.configPath || null,
+    headless: config.headless,
+    videoPath,
+    serverErrorLog,
+    port: config.devServer.port,
+    serverCommand: options.run || null,
+    serverOwnershipToken: null,
+    serverProcessStartTime: null,
+    serverPid: null,
+    serverAlreadyRunning: options.run === undefined,
+    recordingActive: false,
+    viewport: { width: config.viewport.width, height: config.viewport.height },
+  };
+
+  try {
+    reserveSession(session);
+  } catch (error) {
+    throw error;
+  }
+  try {
+    reserveOutputSession(outputDir, sessionName);
+  } catch (error) {
+    unregisterSession(sessionName);
+    if (!isAlreadyExistsError(error)) {
+      throw error;
+    }
+    console.log(
+      chalk.yellow('⚠ A session is already active.') +
+        chalk.dim(' Run "proofshot stop" first, or use --force to override.'),
+    );
+    return;
+  }
 
   if (options.run) {
     console.log(chalk.dim(`Starting: ${options.run}`));
     try {
-      await ensureDevServer(
+      const server = await ensureDevServer(
         options.run,
         config.devServer.port,
         config.devServer.startupTimeout,
         serverErrorLog,
+        (spawnedServer) => {
+          applyServerState(session, spawnedServer);
+          registerSession(session);
+        },
       );
-      serverAlreadyRunning = false;
+      applyServerState(session, server);
+      registerSession(session);
       console.log(chalk.green('✓') + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk.dim(`  Server logs → ${serverErrorLog}`));
-    } catch (error: any) {
-      console.error(chalk.red('✗') + ` Failed to start dev server: ${error.message}`);
+    } catch (error) {
+      if (error instanceof DevServerStartError && error.recoveryState !== null) {
+        applyServerState(session, error.recoveryState);
+        persistRecoverySession(session);
+      } else {
+        unregisterSession(sessionName);
+        clearSession(outputDir, sessionName);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(chalk.red('✗') + ` Failed to start dev server: ${message}`);
       process.exit(1);
     }
   } else {
@@ -114,11 +208,15 @@ export async function startCommand(options: StartOptions): Promise<void> {
     openBrowser(openUrl, config.viewport, config.headless, sessionName, config.browser);
     console.log(chalk.green('✓') + ' Browser ready');
   } catch (error: any) {
-    closeBrowser();
+    closeBrowser(sessionName);
+    const cleanupComplete = cleanupFailedSession(session);
     console.error(
       chalk.red('✗') +
         ` Failed to open browser: ${error.message}\n` +
-        chalk.dim('Make sure agent-browser is installed: npm install -g agent-browser'),
+        chalk.dim('Make sure agent-browser is installed: npm install -g agent-browser') +
+        (cleanupComplete
+          ? ''
+          : chalk.dim('\nServer cleanup failed; recovery state was preserved.')),
     );
     process.exit(1);
   }
@@ -147,7 +245,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
   }
 
   if (!recordingStarted) {
-    closeBrowser();
+    closeBrowser(sessionName);
+    const cleanupComplete = cleanupFailedSession(session);
     console.error(
       chalk.red('✗') +
         ` Failed to initialize recording after ${RECORDING_RETRIES} attempts: ${lastError?.message}\n` +
@@ -155,25 +254,38 @@ export async function startCommand(options: StartOptions): Promise<void> {
         chalk.dim('Troubleshooting:\n') +
         chalk.dim('  1. Make sure agent-browser is installed and running\n') +
         chalk.dim('  2. Try "proofshot clean" then re-run "proofshot start"\n') +
-        chalk.dim('  3. If the port was already in use, stop the old server first'),
+        chalk.dim('  3. If the port was already in use, stop the old server first') +
+        (cleanupComplete
+          ? ''
+          : chalk.dim('\nServer cleanup failed; recovery state was preserved.')),
     );
     process.exit(1);
   }
 
-  saveSession({
-    startedAt: new Date().toISOString(),
-    description: options.description || null,
-    outputDir,
-    sessionDir,
-    sessionName,
-    videoPath,
-    serverErrorLog,
-    port: config.devServer.port,
-    serverCommand: options.run || null,
-    serverAlreadyRunning,
-    recordingActive: true,
-    viewport: { width: config.viewport.width, height: config.viewport.height },
-  });
+  session.lifecycleStatus = 'active';
+  session.ownerPid = null;
+  session.recordingActive = true;
+  try {
+    saveSession(session);
+    registerSession(session);
+  } catch (error) {
+    let cleanupComplete = false;
+    try {
+      discardSession(session);
+      cleanupComplete = true;
+    } catch {
+      persistRecoverySession(session);
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      chalk.red('✗') +
+        ` Failed to persist session state: ${message}` +
+        (cleanupComplete
+          ? ''
+          : chalk.dim('\nCleanup failed; recovery state was preserved.')),
+    );
+    process.exit(1);
+  }
 
   console.log('');
   console.log(chalk.green.bold('✅ ProofShot session started'));
@@ -196,4 +308,66 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log(chalk.dim('  proofshot exec screenshot step.png    # Capture a moment'));
   console.log('');
   console.log(`When done, run: ${chalk.white('proofshot stop')}`);
+
+  function terminateStartedServer(pid: number | null): boolean {
+    if (pid === null) {
+      return true;
+    }
+
+    try {
+      terminateProcessTree(pid);
+    } catch {
+      return !isProcessRunning(pid);
+    }
+    return !isProcessRunning(pid);
+  }
+
+  function cleanupFailedSession(failedSession: SessionState): boolean {
+    if (!terminateStartedServer(failedSession.serverPid ?? null)) {
+      persistRecoverySession(failedSession);
+      return false;
+    }
+
+    try {
+      unregisterSession(failedSession.sessionName);
+      clearSession(failedSession.outputDir, failedSession.sessionName);
+      return true;
+    } catch {
+      persistRecoverySession(failedSession);
+      return false;
+    }
+  }
+
+  function persistRecoverySession(recoverySession: SessionState): void {
+    recoverySession.lifecycleStatus = 'stopped';
+    recoverySession.ownerPid = null;
+    recoverySession.recordingActive = false;
+    try {
+      saveSession(recoverySession);
+    } catch {
+      // The global registry remains the primary recovery record.
+    }
+    try {
+      registerSession(recoverySession);
+    } catch {
+      // Preserve any provisional registry record already on disk.
+    }
+  }
+
+  function applyServerState(
+    targetSession: SessionState,
+    server: ServerStartResult,
+  ): void {
+    targetSession.serverAlreadyRunning = server.alreadyRunning;
+    targetSession.serverPid = server.pid;
+    targetSession.serverOwnershipToken = server.ownershipToken;
+    targetSession.serverProcessStartTime = server.processStartTime;
+  }
+
+  function isAlreadyExistsError(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      (error as NodeJS.ErrnoException).code === 'EEXIST'
+    );
+  }
 }

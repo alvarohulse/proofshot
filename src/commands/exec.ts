@@ -3,7 +3,14 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import { loadConfig } from '../utils/config.js';
 import { ab, buildAgentBrowserCommand, setAgentBrowserDefaults } from '../utils/exec.js';
-import { loadSession, saveSession, type SessionState } from '../session/state.js';
+import { saveSession } from '../session/state.js';
+import {
+  formatSessionChoices,
+  listActiveBrowserSessionNames,
+  registerSession,
+  resolveSession,
+  SessionSelectionError,
+} from '../session/registry.js';
 
 const SESSION_LOG_FILENAME = 'session-log.json';
 
@@ -16,6 +23,10 @@ export interface SessionLogEntry {
     bbox: { x: number; y: number; width: number; height: number };
     viewport: { width: number; height: number };
   };
+}
+
+export interface ExecOptions {
+  session?: string;
 }
 
 /**
@@ -175,14 +186,42 @@ function isRefTargetedAction(args: string[]): boolean {
  * 6. Pass through to agent-browser and return its output
  * 7. If action was `set viewport`, update cached viewport in session state
  */
-export async function execCommand(args: string[]): Promise<void> {
+export async function execCommand(args: string[], options: ExecOptions = {}): Promise<void> {
   const action = args.join(' ');
 
   // Load session state
   const config = loadConfig();
-  setAgentBrowserDefaults({ configPath: config.browser.configPath });
   const outputDir = path.resolve(config.output);
-  const session = loadSession(outputDir);
+  let activeBrowserSessionNames: Set<string> | null = null;
+  try {
+    activeBrowserSessionNames = listActiveBrowserSessionNames();
+  } catch {
+    // Fall back to registry-only resolution when agent-browser is unavailable.
+  }
+  let session;
+  try {
+    session = resolveSession({
+      sessionName: options.session,
+      workingDirectory: process.cwd(),
+      legacyOutputDir: outputDir,
+      activeBrowserSessionNames,
+    });
+  } catch (error) {
+    if (error instanceof SessionSelectionError) {
+      console.error(
+        `${error.message}\nUse --session <id> to choose one:\n${formatSessionChoices(error.sessions)}`,
+      );
+      process.exit(1);
+    }
+    throw error;
+  }
+  const browserConfigPath =
+    session?.browserConfigPath === undefined
+      ? config.browser.configPath
+      : session.browserConfigPath ?? undefined;
+  setAgentBrowserDefaults({
+    configPath: browserConfigPath,
+  });
 
   if (session && !session.recordingActive) {
     console.error(
@@ -263,6 +302,7 @@ export async function execCommand(args: string[]): Promise<void> {
       const vp = JSON.parse(vpJson);
       session.viewport = { width: vp.width, height: vp.height };
       saveSession(session);
+      registerSession(session);
     } catch {
       // Non-critical — viewport cache stays stale
     }

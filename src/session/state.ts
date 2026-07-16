@@ -2,17 +2,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const SESSION_FILENAME = '.session.json';
+const SESSION_LOCK_FILENAME = '.session.lock';
 
 export interface SessionState {
   startedAt: string;
+  startDirectory?: string;
+  lifecycleStatus?: 'starting' | 'active' | 'stopped';
+  ownerPid?: number | null;
   description: string | null;
   outputDir: string;
   sessionDir: string;
   sessionName: string;
+  browserConfigPath?: string | null;
+  headless?: boolean;
   videoPath: string;
   serverErrorLog: string;
   port: number;
   serverCommand: string | null;
+  serverOwnershipToken?: string | null;
+  serverProcessStartTime?: string | null;
+  serverPid?: number | null;
   serverAlreadyRunning: boolean;
   recordingActive: boolean;
   viewport?: { width: number; height: number };
@@ -24,6 +33,19 @@ export interface SessionState {
 export function saveSession(state: SessionState): void {
   const sessionPath = path.join(state.outputDir, SESSION_FILENAME);
   fs.writeFileSync(sessionPath, JSON.stringify(state, null, 2) + '\n');
+}
+
+export function reserveOutputSession(outputDir: string, sessionName: string): void {
+  const lockPath = path.join(outputDir, SESSION_LOCK_FILENAME);
+  fs.writeFileSync(
+    lockPath,
+    JSON.stringify({
+      pid: process.pid,
+      sessionName,
+      createdAt: new Date().toISOString(),
+    }) + '\n',
+    { flag: 'wx' },
+  );
 }
 
 /**
@@ -44,16 +66,40 @@ export function loadSession(outputDir: string): SessionState | null {
  * Check if a session is currently active.
  */
 export function hasActiveSession(outputDir: string): boolean {
-  return fs.existsSync(path.join(outputDir, SESSION_FILENAME));
+  return (
+    fs.existsSync(path.join(outputDir, SESSION_FILENAME)) ||
+    fs.existsSync(path.join(outputDir, SESSION_LOCK_FILENAME))
+  );
 }
 
 /**
  * Delete the session state file (called after stop).
  */
-export function clearSession(outputDir: string): void {
+export function clearSession(outputDir: string, sessionName?: string): void {
   const sessionPath = path.join(outputDir, SESSION_FILENAME);
-  if (fs.existsSync(sessionPath)) {
+  const lockPath = path.join(outputDir, SESSION_LOCK_FILENAME);
+  if (
+    fs.existsSync(sessionPath) &&
+    (sessionName === undefined || readSessionName(sessionPath) === sessionName)
+  ) {
     fs.unlinkSync(sessionPath);
+  }
+  if (
+    fs.existsSync(lockPath) &&
+    (sessionName === undefined || readSessionName(lockPath) === sessionName)
+  ) {
+    fs.unlinkSync(lockPath);
+  }
+}
+
+function readSessionName(filePath: string): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+      sessionName?: unknown;
+    };
+    return typeof parsed.sessionName === 'string' ? parsed.sessionName : null;
+  } catch {
+    return null;
   }
 }
 

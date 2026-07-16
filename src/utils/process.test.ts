@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   findExecutablePath,
+  getProcessStartTime,
   getShellExecutable,
   parseWindowsNetstatOutput,
+  processHasEnvironmentValue,
   readCommandVersion,
 } from './process.js';
 
@@ -34,6 +36,45 @@ TCP    [::]:3000              [::]:0                 LISTENING       5678
 `;
 
     expect(parseWindowsNetstatOutput(output, 3000)).toEqual([1234, 5678]);
+  });
+});
+
+describe('processHasEnvironmentValue', () => {
+  it('verifies an ownership token in macOS process output', () => {
+    const execSpy = vi
+      .fn()
+      .mockReturnValue('npm run dev PROOFSHOT_SERVER_TOKEN=ownership-token\n');
+
+    expect(
+      processHasEnvironmentValue(
+        1234,
+        'PROOFSHOT_SERVER_TOKEN',
+        'ownership-token',
+        'darwin',
+        execSpy as never,
+      ),
+    ).toBe(true);
+  });
+
+  it('does not claim ownership on unsupported platforms', () => {
+    expect(
+      processHasEnvironmentValue(
+        1234,
+        'PROOFSHOT_SERVER_TOKEN',
+        'ownership-token',
+        'win32',
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('getProcessStartTime', () => {
+  it('reads the process creation time on Windows', () => {
+    const execSpy = vi.fn().mockReturnValue('133987654321000000\n');
+
+    expect(getProcessStartTime(1234, 'win32', execSpy as never)).toBe(
+      '133987654321000000',
+    );
   });
 });
 

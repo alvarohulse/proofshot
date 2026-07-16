@@ -7,10 +7,12 @@ import { cleanCommand } from './commands/clean.js';
 import { prCommand } from './commands/pr.js';
 import { execCommand } from './commands/exec.js';
 import { doctorCommand } from './commands/doctor.js';
+import { sessionCleanCommand, sessionListCommand } from './commands/session.js';
 import { PROOFSHOT_VERSION } from './version.js';
 
 export function createCLI(): Command {
   const program = new Command();
+  program.enablePositionalOptions();
 
   program
     .name('proofshot')
@@ -45,6 +47,7 @@ export function createCLI(): Command {
     .command('stop')
     .description('Stop session: stop recording, collect errors, bundle proof artifacts')
     .option('--no-close', 'Don\'t close the browser (keep it open for further use)')
+    .option('--session <id>', 'Target a specific active ProofShot session')
     .action(async (options) => {
       await stopCommand(options);
     });
@@ -93,10 +96,32 @@ export function createCLI(): Command {
   program
     .command('exec')
     .description('Run an agent-browser command with logging (use instead of agent-browser directly)')
+    .option('--session <id>', 'Target a specific active ProofShot session')
     .argument('<args...>', 'agent-browser command and arguments')
+    .passThroughOptions()
     .allowUnknownOption()
-    .action(async (args) => {
-      await execCommand(args);
+    .action(async (args, options) => {
+      await execCommand(args, options);
+    });
+
+  const session = program
+    .command('session')
+    .description('List and clean registered ProofShot sessions');
+
+  session
+    .command('list')
+    .description('List all registered ProofShot sessions')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (options) => {
+      await sessionListCommand(options);
+    });
+
+  session
+    .command('clean')
+    .description('Remove orphaned ProofShot sessions')
+    .option('--all', 'Stop and remove all registered ProofShot sessions')
+    .action(async (options) => {
+      await sessionCleanCommand(options);
     });
 
   return program;

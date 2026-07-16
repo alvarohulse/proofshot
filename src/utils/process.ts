@@ -1,4 +1,5 @@
 import { execSync, spawn, type ChildProcess, type SpawnOptions } from 'child_process';
+import * as fs from 'fs';
 
 type ExecSyncLike = typeof execSync;
 
@@ -95,6 +96,76 @@ export function terminateProcessTree(pid: number): void {
   }
 
   process.kill(-pid, 'SIGKILL');
+}
+
+export function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+export function waitForProcessExit(pid: number, timeoutMs = 1000): boolean {
+  const deadline = Date.now() + timeoutMs;
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+
+  while (Date.now() < deadline) {
+    if (!isProcessRunning(pid)) {
+      return true;
+    }
+    Atomics.wait(waitBuffer, 0, 0, 25);
+  }
+
+  return !isProcessRunning(pid);
+}
+
+export function processHasEnvironmentValue(
+  pid: number,
+  key: string,
+  expectedValue: string,
+  platform = process.platform,
+  execFn: ExecSyncLike = execSync,
+): boolean | null {
+  const expectedEntry = `${key}=${expectedValue}`;
+
+  try {
+    if (platform === 'linux') {
+      const environment = fs.readFileSync(`/proc/${pid}/environ`, 'utf-8');
+      return environment.split('\0').includes(expectedEntry);
+    }
+    if (platform === 'darwin') {
+      const output = execFn(`ps eww -p ${pid} -o command=`, {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      return output.split(/\s+/).includes(expectedEntry);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function getProcessStartTime(
+  pid: number,
+  platform = process.platform,
+  execFn: ExecSyncLike = execSync,
+): string | null {
+  try {
+    const command =
+      platform === 'win32'
+        ? `powershell -NoProfile -Command "(Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks"`
+        : `ps -o lstart= -p ${pid}`;
+    const output = execFn(command, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    return output || null;
+  } catch {
+    return null;
+  }
 }
 
 export function findExecutablePath(

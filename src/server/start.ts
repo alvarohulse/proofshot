@@ -1,36 +1,33 @@
 import * as fs from 'fs';
+import { randomUUID } from 'crypto';
 import { Transform } from 'stream';
 import { isPortOpen, waitForPort } from '../utils/port.js';
 import {
-  findPidsListeningOnPort,
-  killPids,
+  getProcessStartTime,
+  isProcessRunning,
   spawnShellCommand,
   terminateProcessTree,
+  waitForProcessExit,
 } from '../utils/process.js';
 
 export interface ServerStartResult {
   alreadyRunning: boolean;
   port: number;
+  pid: number | null;
+  ownershipToken: string;
+  processStartTime: string | null;
 }
 
-/**
- * Kill whatever process is listening on the given port.
- * Retries up to 3 times to ensure the port is actually freed.
- * Returns true if something was killed.
- */
-async function killPort(port: number): Promise<boolean> {
-  let killed = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const pids = findPidsListeningOnPort(port);
-    if (pids.length > 0) {
-      killed = killPids(pids) || killed;
-    }
+export const SERVER_OWNERSHIP_ENV = 'PROOFSHOT_SERVER_TOKEN';
 
-    // Wait for the OS to release the port
-    await new Promise((r) => setTimeout(r, 1000));
-    if (!(await isPortOpen(port))) return killed;
+export class DevServerStartError extends Error {
+  constructor(
+    message: string,
+    public readonly recoveryState: ServerStartResult | null,
+  ) {
+    super(message);
+    this.name = 'DevServerStartError';
   }
-  return killed;
 }
 
 /**
@@ -66,55 +63,71 @@ export async function ensureDevServer(
   port: number,
   startupTimeout: number,
   logPath: string,
+  onSpawn?: (server: ServerStartResult) => void,
 ): Promise<ServerStartResult> {
-  // If port is occupied, kill the existing process — the user explicitly
-  // asked proofshot to own the server via --run.
   if (await isPortOpen(port)) {
-    const killed = await killPort(port);
-    if (killed) {
-      process.stderr.write(`Port ${port} was in use — killed existing process\n`);
-    }
-    // Final check — if still occupied, fail fast with a clear message
-    if (await isPortOpen(port)) {
-      throw new Error(
-        `Port ${port} is still in use after attempting to kill the process.\n` +
-          `Manually stop whatever is running on port ${port} and retry.`,
-      );
-    }
+    throw new Error(
+      `Port ${port} is already in use. Omit --run to use the existing server, ` +
+        'or choose another port.',
+    );
   }
 
+  const ownershipToken = randomUUID();
   const proc = spawnShellCommand(command, {
     cwd: process.cwd(),
+    env: {
+      ...process.env,
+      [SERVER_OWNERSHIP_ENV]: ownershipToken,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });
-
-  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-  const tsOut = createTimestampTransform();
-  const tsErr = createTimestampTransform();
-  proc.stdout?.pipe(tsOut).pipe(logStream, { end: false });
-  proc.stderr?.pipe(tsErr).pipe(logStream, { end: false });
-
-  proc.unref();
+  const processStartTime =
+    proc.pid === undefined ? null : getProcessStartTime(proc.pid);
+  const serverState: ServerStartResult = {
+    alreadyRunning: false,
+    port,
+    pid: proc.pid ?? null,
+    ownershipToken,
+    processStartTime,
+  };
 
   try {
+    onSpawn?.(serverState);
+
+    const logStream = fs.createWriteStream(logPath, { flags: 'a' });
+    const tsOut = createTimestampTransform();
+    const tsErr = createTimestampTransform();
+    proc.stdout?.pipe(tsOut).pipe(logStream, { end: false });
+    proc.stderr?.pipe(tsErr).pipe(logStream, { end: false });
+    proc.unref();
+
     await waitForPort(port, startupTimeout);
   } catch (error) {
     // Clean up the spawned process if it failed to start on the expected port
+    let cleanupSucceeded = true;
     try {
       if (proc.pid) terminateProcessTree(proc.pid);
     } catch {
-      // Already exited
+      cleanupSucceeded = proc.pid === undefined || !isProcessRunning(proc.pid);
     }
-    throw new Error(
+    if (proc.pid && cleanupSucceeded) {
+      cleanupSucceeded = waitForProcessExit(proc.pid);
+    }
+    const message =
       `Failed to start dev server with "${command}" on port ${port}.\n` +
         `Make sure the command is correct and the port is available.\n` +
-        `Original error: ${error instanceof Error ? error.message : error}`,
+        `Original error: ${error instanceof Error ? error.message : error}`;
+    throw new DevServerStartError(
+      message,
+      cleanupSucceeded
+        ? null
+        : serverState,
     );
   }
 
   // Small delay for stability
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  return { alreadyRunning: false, port };
+  return serverState;
 }
