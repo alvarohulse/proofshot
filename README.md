@@ -141,13 +141,27 @@ proofshot start --run "npm run dev" --port 3000         # Start and capture serv
 proofshot start --description "Verify checkout flow"    # Add description to report
 proofshot start --url http://localhost:3000/login       # Open specific URL
 proofshot start --headed                                # Show browser (debugging)
+proofshot start --output /tmp/proof                     # Store artifacts elsewhere
 proofshot start --force                                 # Override a stale session from a previous crash
 ```
 
-You can also configure browser launch behavior in `proofshot.config.json`:
+The `--output` override is stored with the active session. Later `exec` and `stop`
+commands find it automatically, even when run from another directory.
+
+You can also configure defaults and browser launch behavior in `proofshot.config.json`:
 
 ```json
 {
+  "devServer": {
+    "port": 3000,
+    "startupTimeout": 30000
+  },
+  "output": "./proofshot-artifacts",
+  "viewport": {
+    "width": 1280,
+    "height": 720
+  },
+  "headless": true,
   "browser": {
     "configPath": "./agent-browser.local.json",
     "ignoreHttpsErrors": true,
@@ -165,6 +179,7 @@ Stop recording, collect errors, generate proof artifacts.
 ```bash
 proofshot stop              # Stop session and close browser
 proofshot stop --no-close   # Stop but keep browser open
+proofshot stop --session proofshot-2026-04-07_22-30-00
 ```
 
 ### `proofshot exec`
@@ -176,7 +191,29 @@ When a ProofShot session is active, `proofshot exec` reuses the same isolated `a
 ```bash
 proofshot exec click @e3
 proofshot exec screenshot step-checkout.png
+proofshot exec --session proofshot-2026-04-07_22-30-00 snapshot -i
 ```
+
+ProofShot automatically selects a session started from the current directory.
+When only one session is active globally, it selects that session from any
+directory. Use `--session <id>` before the agent-browser command when multiple
+sessions are active. Options after the agent-browser command are passed through
+unchanged.
+
+### `proofshot session`
+
+List active and orphaned ProofShot sessions across all projects, or clean stale
+registry entries and ProofShot-owned dev servers.
+
+```bash
+proofshot session list
+proofshot session list --json
+proofshot session clean       # Clean orphaned sessions only
+proofshot session clean --all # Stop and remove every registered session
+```
+
+Session registry files live under `$XDG_STATE_HOME/proofshot/sessions`, falling
+back to `~/.local/state/proofshot/sessions`.
 
 ### `proofshot diff`
 
