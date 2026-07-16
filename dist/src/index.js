@@ -679,7 +679,6 @@ ${message}`,
 // src/server/start.ts
 import * as fs5 from "fs";
 import { randomUUID } from "crypto";
-import { Transform } from "stream";
 
 // src/utils/port.ts
 import * as net from "net";
@@ -731,26 +730,6 @@ var DevServerStartError = class extends Error {
     this.name = "DevServerStartError";
   }
 };
-function createTimestampTransform() {
-  let buffer = "";
-  return new Transform({
-    transform(chunk, _encoding, callback) {
-      buffer += chunk.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-      for (const line of lines) {
-        this.push(`${Date.now()}	${line}
-`);
-      }
-      callback();
-    },
-    flush(callback) {
-      if (buffer) this.push(`${Date.now()}	${buffer}
-`);
-      callback();
-    }
-  });
-}
 async function ensureDevServer(command, port, startupTimeout, logPath, onSpawn) {
   if (await isPortOpen(port)) {
     throw new Error(
@@ -758,15 +737,7 @@ async function ensureDevServer(command, port, startupTimeout, logPath, onSpawn) 
     );
   }
   const ownershipToken = randomUUID();
-  const proc = spawnShellCommand(command, {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      [SERVER_OWNERSHIP_ENV]: ownershipToken
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true
-  });
+  const proc = spawnLoggedServer(command, logPath, ownershipToken);
   const processStartTime = proc.pid === void 0 ? null : getProcessStartTime(proc.pid);
   const serverState = {
     alreadyRunning: false,
@@ -777,11 +748,6 @@ async function ensureDevServer(command, port, startupTimeout, logPath, onSpawn) 
   };
   try {
     onSpawn?.(serverState);
-    const logStream = fs5.createWriteStream(logPath, { flags: "a" });
-    const tsOut = createTimestampTransform();
-    const tsErr = createTimestampTransform();
-    proc.stdout?.pipe(tsOut).pipe(logStream, { end: false });
-    proc.stderr?.pipe(tsErr).pipe(logStream, { end: false });
     proc.unref();
     await waitForPort(port, startupTimeout);
   } catch (error) {
@@ -804,6 +770,22 @@ Original error: ${error instanceof Error ? error.message : error}`;
   }
   await new Promise((resolve11) => setTimeout(resolve11, 1e3));
   return serverState;
+}
+function spawnLoggedServer(command, logPath, ownershipToken) {
+  const logFileDescriptor = fs5.openSync(logPath, "a");
+  try {
+    return spawnShellCommand(command, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        [SERVER_OWNERSHIP_ENV]: ownershipToken
+      },
+      stdio: ["ignore", logFileDescriptor, logFileDescriptor],
+      detached: true
+    });
+  } finally {
+    fs5.closeSync(logFileDescriptor);
+  }
 }
 
 // src/browser/session.ts

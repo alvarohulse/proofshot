@@ -1,6 +1,6 @@
 import * as fs from 'fs';
+import type { ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
-import { Transform } from 'stream';
 import { isPortOpen, waitForPort } from '../utils/port.js';
 import {
   getProcessStartTime,
@@ -31,32 +31,10 @@ export class DevServerStartError extends Error {
 }
 
 /**
- * Create a Transform stream that prepends an epoch-ms timestamp to each line.
- * Format: "1720612345678\toriginal line\n"
- */
-function createTimestampTransform(): Transform {
-  let buffer = '';
-  return new Transform({
-    transform(chunk, _encoding, callback) {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop()!;
-      for (const line of lines) {
-        this.push(`${Date.now()}\t${line}\n`);
-      }
-      callback();
-    },
-    flush(callback) {
-      if (buffer) this.push(`${Date.now()}\t${buffer}\n`);
-      callback();
-    },
-  });
-}
-
-/**
  * Start a dev server command and wait for it to be ready.
  * Only called when the agent provides a --run command.
- * Pipes stdout/stderr to logPath for server error capture.
+ * Writes stdout/stderr directly to logPath so the detached server does not
+ * keep the ProofShot CLI process alive.
  */
 export async function ensureDevServer(
   command: string,
@@ -73,15 +51,7 @@ export async function ensureDevServer(
   }
 
   const ownershipToken = randomUUID();
-  const proc = spawnShellCommand(command, {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      [SERVER_OWNERSHIP_ENV]: ownershipToken,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
-  });
+  const proc = spawnLoggedServer(command, logPath, ownershipToken);
   const processStartTime =
     proc.pid === undefined ? null : getProcessStartTime(proc.pid);
   const serverState: ServerStartResult = {
@@ -94,12 +64,6 @@ export async function ensureDevServer(
 
   try {
     onSpawn?.(serverState);
-
-    const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-    const tsOut = createTimestampTransform();
-    const tsErr = createTimestampTransform();
-    proc.stdout?.pipe(tsOut).pipe(logStream, { end: false });
-    proc.stderr?.pipe(tsErr).pipe(logStream, { end: false });
     proc.unref();
 
     await waitForPort(port, startupTimeout);
@@ -130,4 +94,25 @@ export async function ensureDevServer(
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
   return serverState;
+}
+
+function spawnLoggedServer(
+  command: string,
+  logPath: string,
+  ownershipToken: string,
+): ChildProcess {
+  const logFileDescriptor = fs.openSync(logPath, 'a');
+  try {
+    return spawnShellCommand(command, {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        [SERVER_OWNERSHIP_ENV]: ownershipToken,
+      },
+      stdio: ['ignore', logFileDescriptor, logFileDescriptor],
+      detached: true,
+    });
+  } finally {
+    fs.closeSync(logFileDescriptor);
+  }
 }

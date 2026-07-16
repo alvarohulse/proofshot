@@ -19,7 +19,8 @@ interface ServerStartResult {
 /**
  * Start a dev server command and wait for it to be ready.
  * Only called when the agent provides a --run command.
- * Pipes stdout/stderr to logPath for server error capture.
+ * Writes stdout/stderr directly to logPath so the detached server does not
+ * keep the ProofShot CLI process alive.
  */
 declare function ensureDevServer(command: string, port: number, startupTimeout: number, logPath: string, onSpawn?: (server: ServerStartResult) => void): Promise<ServerStartResult>;
 
