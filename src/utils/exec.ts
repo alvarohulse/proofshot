@@ -14,15 +14,25 @@ export class ProofShotError extends Error {
 export interface AgentBrowserCommandOptions {
   configPath?: string;
   session?: string;
+  socketDir?: string;
   timeoutMs?: number;
 }
 
-let defaultAgentBrowserOptions: Pick<AgentBrowserCommandOptions, 'configPath'> = {};
+let defaultAgentBrowserOptions: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'> = {};
 
 export function setAgentBrowserDefaults(
-  options: Pick<AgentBrowserCommandOptions, 'configPath'>,
+  options: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'>,
 ): void {
   defaultAgentBrowserOptions = { ...options };
+}
+
+export function getAgentBrowserEnvironment(
+  options: Pick<AgentBrowserCommandOptions, 'socketDir'> = {},
+): NodeJS.ProcessEnv {
+  const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
+  return socketDir
+    ? { ...process.env, AGENT_BROWSER_SOCKET_DIR: socketDir }
+    : { ...process.env };
 }
 
 function shellQuote(value: string): string {
@@ -62,6 +72,7 @@ export function ab(
       encoding: 'utf-8',
       timeout: options.timeoutMs ?? 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: getAgentBrowserEnvironment(options),
     }).trim();
   } catch (error: any) {
     const stderr = error?.stderr?.toString?.() || '';

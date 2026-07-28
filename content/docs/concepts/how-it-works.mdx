@@ -45,11 +45,11 @@ ProofShot uses a three-phase model.
 `proofshot start` initializes the session:
 
 1. Check if the port is available (fail fast on conflicts)
-2. Spawn the dev server if `--run` is provided, pipe output to `server.log`
+2. Spawn an isolated dev-server process session if `--run` is provided, pipe timestamped output to `server.log`, and persist its immutable PID/process-group identity
 3. Wait for the port to respond (polls every 500ms, 30s timeout)
-4. Open headless Chromium
+4. Open the requested URL in a short, collision-safe agent-browser session and persist its daemon identity
 5. Start video recording
-6. Write `.session.json` (active session state) and `metadata.json` (git branch/commit, persists after stop)
+6. Write `.session.json` to the configured/default control directory and `metadata.json` beside the evidence (git branch/commit, persists after stop)
 
 Recording is mandatory. If it fails after 3 retries, the session aborts.
 
@@ -69,11 +69,12 @@ Each `proofshot exec` call:
 
 1. Collects browser console errors and output (point-in-time snapshot)
 2. Stops video recording
-3. Closes the browser
-4. Trims video dead time using ffmpeg (5s buffer before first action, 3s after last). Adjusts all `session-log.json` timestamps by the trim offset.
-5. Scans `server.log` with multi-language regex patterns for errors
-6. Generates `SUMMARY.md` and `viewer.html`
-7. Clears `.session.json`
+3. Closes the exact owned browser session
+4. Stops only the dev-server process session created by this run
+5. Trims video dead time using ffmpeg (5s buffer before first action, 3s after last). Adjusts all `session-log.json` timestamps by the trim offset.
+6. Scans `server.log` with multi-language regex patterns for errors
+7. Generates `SUMMARY.md` and `viewer.html`
+8. Clears `.session.json` (or retains exact browser ownership after `--no-close`)
 
 ## Design principles
 
@@ -81,6 +82,6 @@ Each `proofshot exec` call:
 
 **Minimal dependencies.** Three production dependencies: `commander`, `chalk`, `detect-port`. agent-browser is an optional peer dependency. Small install, small supply chain.
 
-**Session isolation.** `.session.json` lives in the output directory, not globally. This supports parallel sessions in different projects.
+**Session isolation.** Each project keeps control state in its configured/default output directory. A CLI-only custom evidence path cannot hide the session from a later process, while different projects still run independently.
 
 **ESM-only.** All imports use explicit `.js` extensions for correct resolution after TypeScript compilation.

@@ -1,60 +1,59 @@
 import * as fs from 'fs';
-import { Transform } from 'stream';
+import { spawn } from 'child_process';
 import { isPortOpen, waitForPort } from '../utils/port.js';
 import {
-  findPidsListeningOnPort,
-  killPids,
-  spawnShellCommand,
+  captureProcessIdentity,
+  getShellExecutable,
+  terminateOwnedProcessTree,
   terminateProcessTree,
+  type ProcessIdentity,
 } from '../utils/process.js';
 
 export interface ServerStartResult {
   alreadyRunning: boolean;
   port: number;
+  process: ProcessIdentity;
 }
 
-/**
- * Kill whatever process is listening on the given port.
- * Retries up to 3 times to ensure the port is actually freed.
- * Returns true if something was killed.
- */
-async function killPort(port: number): Promise<boolean> {
-  let killed = false;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const pids = findPidsListeningOnPort(port);
-    if (pids.length > 0) {
-      killed = killPids(pids) || killed;
-    }
-
-    // Wait for the OS to release the port
-    await new Promise((r) => setTimeout(r, 1000));
-    if (!(await isPortOpen(port))) return killed;
-  }
-  return killed;
-}
-
-/**
- * Create a Transform stream that prepends an epoch-ms timestamp to each line.
- * Format: "1720612345678\toriginal line\n"
- */
-function createTimestampTransform(): Transform {
+// A detached supervisor keeps timestamping server output after the short-lived
+// `proofshot start` process exits. It and the server share one new process
+// session, whose immutable identity is persisted for exact later cleanup.
+const SERVER_RUNNER_SOURCE = String.raw`
+const fs = require('fs');
+const { spawn } = require('child_process');
+const [command, cwd, logPath, shell] = process.argv.slice(1);
+const fd = fs.openSync(logPath, 'a');
+let closed = false;
+const write = (text) => {
+  if (!closed) fs.writeSync(fd, Date.now() + '\t' + text + '\n');
+};
+const child = spawn(command, {
+  cwd,
+  shell,
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+const attach = (stream) => {
   let buffer = '';
-  return new Transform({
-    transform(chunk, _encoding, callback) {
-      buffer += chunk.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop()!;
-      for (const line of lines) {
-        this.push(`${Date.now()}\t${line}\n`);
-      }
-      callback();
-    },
-    flush(callback) {
-      if (buffer) this.push(`${Date.now()}\t${buffer}\n`);
-      callback();
-    },
+  stream.on('data', (chunk) => {
+    buffer += chunk.toString();
+    const lines = buffer.split('\n');
+    buffer = lines.pop();
+    for (const line of lines) write(line);
   });
-}
+  stream.on('end', () => {
+    if (buffer) write(buffer);
+    buffer = '';
+  });
+};
+attach(child.stdout);
+attach(child.stderr);
+child.on('error', (error) => write(error.stack || error.message || String(error)));
+child.on('close', (code) => {
+  closed = true;
+  fs.closeSync(fd);
+  process.exit(code == null ? 1 : code);
+});
+`;
 
 /**
  * Start a dev server command and wait for it to be ready.
@@ -67,45 +66,50 @@ export async function ensureDevServer(
   startupTimeout: number,
   logPath: string,
 ): Promise<ServerStartResult> {
-  // If port is occupied, kill the existing process — the user explicitly
-  // asked proofshot to own the server via --run.
+  // Port ownership is not session ownership. Never kill an unrelated listener.
   if (await isPortOpen(port)) {
-    const killed = await killPort(port);
-    if (killed) {
-      process.stderr.write(`Port ${port} was in use — killed existing process\n`);
-    }
-    // Final check — if still occupied, fail fast with a clear message
-    if (await isPortOpen(port)) {
-      throw new Error(
-        `Port ${port} is still in use after attempting to kill the process.\n` +
-          `Manually stop whatever is running on port ${port} and retry.`,
-      );
-    }
+    throw new Error(
+      `Port ${port} is already in use by a process ProofShot did not start.\n` +
+        'Choose another port or stop that process explicitly, then retry.',
+    );
   }
 
-  const proc = spawnShellCommand(command, {
-    cwd: process.cwd(),
-    stdio: ['ignore', 'pipe', 'pipe'],
+  // Ensure log creation errors surface before launching the detached runner.
+  const logFd = fs.openSync(logPath, 'a');
+  fs.closeSync(logFd);
+  const proc = spawn(process.execPath, [
+    '-e',
+    SERVER_RUNNER_SOURCE,
+    command,
+    process.cwd(),
+    logPath,
+    getShellExecutable(),
+  ], {
+    stdio: 'ignore',
     detached: true,
   });
 
-  const logStream = fs.createWriteStream(logPath, { flags: 'a' });
-  const tsOut = createTimestampTransform();
-  const tsErr = createTimestampTransform();
-  proc.stdout?.pipe(tsOut).pipe(logStream, { end: false });
-  proc.stderr?.pipe(tsErr).pipe(logStream, { end: false });
-
   proc.unref();
+  let processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
+  for (let attempt = 0; !processIdentity && attempt < 5; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
+  }
+
+  if (!processIdentity || processIdentity.sessionId !== processIdentity.pid) {
+    try {
+      if (proc.pid) terminateProcessTree(proc.pid);
+    } catch {
+      // The child may already have exited.
+    }
+    throw new Error('ProofShot could not record an exact identity for the dev server process.');
+  }
 
   try {
     await waitForPort(port, startupTimeout);
   } catch (error) {
     // Clean up the spawned process if it failed to start on the expected port
-    try {
-      if (proc.pid) terminateProcessTree(proc.pid);
-    } catch {
-      // Already exited
-    }
+    await terminateOwnedProcessTree(processIdentity);
     throw new Error(
       `Failed to start dev server with "${command}" on port ${port}.\n` +
         `Make sure the command is correct and the port is available.\n` +
@@ -116,5 +120,5 @@ export async function ensureDevServer(
   // Small delay for stability
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  return { alreadyRunning: false, port };
+  return { alreadyRunning: false, port, process: processIdentity };
 }

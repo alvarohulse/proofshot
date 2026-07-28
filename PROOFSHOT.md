@@ -11,6 +11,8 @@ After building or modifying UI features, verify with this workflow:
 
 ProofShot keeps all `proofshot exec` commands inside the same isolated `agent-browser` session that was created by `proofshot start`, so recording, screenshots, and browser actions stay aligned.
 
+Use `--url` on `start` when verification must begin on a specific target. In an isolated HOME, ProofShot discovers executable-only Chrome/Chromium installs from system/account locations; use `--browser-executable /absolute/path/to/chrome` to select one explicitly.
+
 Key proofshot exec commands:
 - `proofshot exec snapshot -i` — see interactive elements
 - `proofshot exec click @e3` — click an element
@@ -18,6 +20,7 @@ Key proofshot exec commands:
 - `proofshot exec screenshot step.png` — capture a moment
 
 Artifacts saved to ./proofshot-artifacts/ including video, screenshots, errors, and summary.
+Custom `--output` paths do not move active control state, so a separate `proofshot stop` still finds the session. `stop` is idempotent; after `stop --no-close`, run a later plain `stop` to close that exact retained browser without rebundling.
 You can customize browser launch behavior in `proofshot.config.json`, including HTTPS error ignoring, a custom browser executable path, and a project-specific `agent-browser` config path.
 
 Use `proofshot doctor` when the local setup looks wrong. It prints the current config path, browser mode, viewport, installed binaries, and any active ProofShot session.

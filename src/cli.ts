@@ -36,6 +36,7 @@ export function createCLI(): Command {
     .option('--headed', 'Show browser window for debugging')
     .option('--output <dir>', 'Custom output directory')
     .option('--url <url>', 'Open this URL instead of the root')
+    .option('--browser-executable <path>', 'Use this Chrome/Chromium executable')
     .option('--force', 'Override a stale session without running stop first')
     .action(async (options) => {
       await startCommand(options);
@@ -46,7 +47,7 @@ export function createCLI(): Command {
     .description('Stop session: stop recording, collect errors, bundle proof artifacts')
     .option('--no-close', 'Don\'t close the browser (keep it open for further use)')
     .action(async (options) => {
-      await stopCommand(options);
+      await stopCommand({ noClose: options.close === false });
     });
 
   program

@@ -48,6 +48,8 @@ proofshot start [options]
 | `--description <text>` | Description of what you're verifying (appears in reports) | — |
 | `--headed` | Show the browser window (visible Chromium) | `false` |
 | `--output <dir>` | Custom output directory for artifacts | `./proofshot-artifacts` |
+| `--browser-executable <path>` | Use an exact Chrome/Chromium executable | auto-discovered |
+| `--force` | Clean up and replace an active session | `false` |
 
 **Examples:**
 
@@ -55,16 +57,17 @@ proofshot start [options]
 proofshot start                                            # Server already running on port 3000
 proofshot start --run "npm run dev" --port 3000             # Start server, capture logs
 proofshot start --url http://localhost:3000/login            # Open a specific page
+proofshot start --browser-executable /path/to/chrome          # Use an exact browser binary
 proofshot start --description "Verify checkout flow"        # Add description to report
 proofshot start --headed                                    # Show the browser window
 ```
 
 **What happens:**
-1. If `--run` is provided: starts the dev server, pipes output to `server.log`, waits for the port
+1. If `--run` is provided: fails without killing anything when the port is occupied; otherwise starts an owned dev-server process session, pipes timestamped output to `server.log`, and waits for the port
 2. Opens headless Chromium via agent-browser
 3. Navigates to `--url` (or `http://localhost:<port>`)
 4. Starts video recording (retries up to 3 times)
-5. Writes `.session.json` and `metadata.json` (git branch and commit SHA)
+5. Writes control `.session.json` to the configured/default output and durable `metadata.json` beside the evidence. A CLI-only `--output` changes evidence placement, not control discovery.
 
 ---
 
@@ -83,11 +86,14 @@ proofshot stop [options]
 **What happens:**
 1. Collects console errors and output from the browser
 2. Stops video recording
-3. Closes the browser (unless `--no-close`)
-4. Trims video dead time (requires ffmpeg): 5s buffer before first action, 3s after last
-5. Scans `server.log` for errors across 10+ languages
-6. Generates `SUMMARY.md` and `viewer.html`
-7. Clears `.session.json`
+3. Closes the exact owned browser session (unless `--no-close`)
+4. Stops only the dev-server process session created by this ProofShot start
+5. Trims video dead time (requires ffmpeg): 5s buffer before first action, 3s after last
+6. Scans `server.log` for errors across 10+ languages
+7. Generates `SUMMARY.md` and `viewer.html`
+8. Clears `.session.json`, or retains it after `--no-close` until a later plain `stop` closes that exact browser
+
+Repeated `stop` calls are successful no-ops. If bundling fails, control state remains retryable; a later `stop` reuses already-collected artifacts instead of widening process cleanup.
 
 ---
 
@@ -187,4 +193,4 @@ Remove the entire artifacts directory.
 proofshot clean
 ```
 
-Deletes `./proofshot-artifacts/` (or the configured output directory). No flags.
+Deletes `./proofshot-artifacts/` (or the configured output directory). No flags. If active or retained control state exists, `clean` refuses and asks you to run `proofshot stop` first so exact process ownership metadata is not discarded.

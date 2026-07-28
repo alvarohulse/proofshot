@@ -1,10 +1,31 @@
+import * as fs from 'fs';
+import { spawn } from 'child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  captureProcessIdentity,
   findExecutablePath,
   getShellExecutable,
+  parseLinuxProcStat,
   parseWindowsNetstatOutput,
   readCommandVersion,
+  terminateOwnedProcessTree,
 } from './process.js';
+
+function waitForExit(pid: number, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      if (!captureProcessIdentity(pid)) {
+        resolve();
+      } else if (Date.now() >= deadline) {
+        reject(new Error(`process ${pid} did not exit`));
+      } else {
+        setTimeout(poll, 25);
+      }
+    };
+    poll();
+  });
+}
 
 describe('getShellExecutable', () => {
   it('uses cmd.exe on Windows when ComSpec is missing', () => {
@@ -60,5 +81,55 @@ describe('readCommandVersion', () => {
 
     expect(readCommandVersion('ffmpeg', ['--version'], execSpy as never)).toBe('ffmpeg version 7.0');
     expect(execSpy).toHaveBeenCalledWith('ffmpeg --version', expect.any(Object));
+  });
+});
+
+describe('process ownership', () => {
+  it('parses immutable Linux ownership fields', () => {
+    if (process.platform !== 'linux') return;
+    const stat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf-8');
+    const identity = parseLinuxProcStat(stat);
+    expect(identity).toMatchObject({ pid: process.pid });
+    expect(identity?.processGroupId).toBeGreaterThan(0);
+    expect(identity?.sessionId).toBeGreaterThan(0);
+    expect(identity?.startTime).toMatch(/^\d+$/);
+  });
+
+  it('terminates only the exact detached process session it owns', async () => {
+    if (process.platform === 'win32') return;
+    const owned = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    owned.unref();
+    unrelated.unref();
+
+    const ownedIdentity = captureProcessIdentity(owned.pid!);
+    const unrelatedIdentity = captureProcessIdentity(unrelated.pid!);
+    expect(ownedIdentity?.sessionId).toBe(owned.pid);
+    expect(unrelatedIdentity?.sessionId).toBe(unrelated.pid);
+
+    try {
+      await expect(
+        terminateOwnedProcessTree(ownedIdentity, { graceMs: 200 }),
+      ).resolves.toBe(true);
+      await waitForExit(owned.pid!);
+      expect(captureProcessIdentity(unrelated.pid!)).not.toBeNull();
+
+      await expect(
+        terminateOwnedProcessTree(
+          ownedIdentity && { ...ownedIdentity, startTime: `${ownedIdentity.startTime}-reused` },
+          { graceMs: 20 },
+        ),
+      ).resolves.toBe(false);
+      expect(captureProcessIdentity(unrelated.pid!)).not.toBeNull();
+    } finally {
+      await terminateOwnedProcessTree(unrelatedIdentity, { graceMs: 200 });
+      await waitForExit(unrelated.pid!);
+    }
   });
 });

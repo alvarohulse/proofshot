@@ -303,6 +303,8 @@ proofshot clean
 # Removes ./proofshot-artifacts/
 ```
 
+If `.session.json` exists, `clean` refuses and directs the user to `proofshot stop`; it never discards exact process ownership metadata or performs implicit broad cleanup.
+
 ### `proofshot pr`
 
 Format artifacts for inclusion in a PR description.
@@ -362,22 +364,26 @@ async function ensureDevServer(config, errorLogPath: string) {
 
 ## 6. Session State
 
-ProofShot uses a `.session.json` file in the output directory to track the active session:
+ProofShot uses a `.session.json` file in the configured/default output directory to track the active session. A CLI-only `--output` override moves evidence but not this discoverable control file:
 
 ```json
 {
   "startedAt": "2026-02-25T14:32:00.000Z",
   "description": "Login form: fill credentials, submit, verify redirect",
-  "outputDir": "./proofshot-artifacts",
-  "videoPath": "./proofshot-artifacts/session-2026-02-25.webm",
-  "serverErrorLog": "./proofshot-artifacts/server-errors.log",
+  "outputDir": "/audit/custom-evidence",
+  "sessionDir": "/audit/custom-evidence/2026-02-25_login-form",
+  "sessionName": "ps-2026-02-a1b2c3d4e5f6",
+  "targetUrl": "http://localhost:5173/login",
+  "agentBrowserSocketDir": "/run/user/1000/proofshot/agent-browser",
+  "videoPath": "/audit/custom-evidence/2026-02-25_login-form/session.webm",
+  "serverErrorLog": "/audit/custom-evidence/2026-02-25_login-form/server.log",
   "port": 5173,
-  "framework": "Vite",
-  "pid": 12345
+  "serverProcess": { "pid": 12345, "processGroupId": 12345, "sessionId": 12345, "startTime": "987654" },
+  "browserProcess": { "pid": 12367, "processGroupId": 12367, "sessionId": 12367, "startTime": "987699" }
 }
 ```
 
-`proofshot stop` reads this file to know where to find artifacts and what metadata to include in the summary.
+`proofshot exec` and `proofshot stop` read this file from separate CLI processes. Cleanup verifies the immutable identities and signals only process groups inside the recorded process sessions; it never kills by command name or occupied port.
 
 ---
 
@@ -568,8 +574,8 @@ function ab(command: string): string {
 proofshot start:
   1. Load config
   2. Ensure output dir exists
-  3. Start dev server (if needed), piping stderr to server-errors.log
-  4. Open browser via agent-browser
+  3. Fail actionably if the requested port is occupied; otherwise start an owned dev-server process session and timestamp output in server.log
+  4. Open the requested URL in a short, collision-safe agent-browser session and persist its daemon identity
   5. Start recording via agent-browser
   6. Write .session.json with metadata
   7. Print instructions for the agent
@@ -581,12 +587,13 @@ proofshot stop:
   2. Collect console errors via agent-browser errors
   3. Collect console output via agent-browser console
   4. Stop recording via agent-browser record stop
-  5. Close browser via agent-browser close
-  6. Read server-errors.log
-  7. List all screenshots in output dir
-  8. Generate SUMMARY.md
-  9. Delete .session.json
-  10. Print summary to stdout
+  5. Close the exact browser session via agent-browser close
+  6. Stop only the owned dev-server process session
+  7. Read server.log
+  8. List all screenshots in the evidence session dir
+  9. Generate SUMMARY.md and viewer.html
+  10. Delete .session.json (or retain exact browser ownership after --no-close)
+  11. Print summary to stdout
 ```
 
 ### Server Error Capture

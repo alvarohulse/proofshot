@@ -1,12 +1,23 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
 import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
-import { closeBrowser, getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
+import { getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
-import { loadSession, clearSession } from '../session/state.js';
+import {
+  loadSession,
+  clearSession,
+  resolveSessionControlDir,
+  saveSession,
+} from '../session/state.js';
+import {
+  canAddressOwnedBrowserSession,
+  stopOwnedBrowser,
+  stopOwnedServer,
+} from '../session/lifecycle.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { loadSessionLog } from './exec.js';
@@ -55,56 +66,126 @@ interface StopOptions {
 
 export async function stopCommand(options: StopOptions): Promise<void> {
   const config = loadConfig();
-  setAgentBrowserDefaults({ configPath: config.browser.configPath });
-  const outputDir = path.resolve(config.output);
+  const controlDir = resolveSessionControlDir(config.output);
 
   // Load session state
-  const session = loadSession(outputDir);
+  const session = loadSession(controlDir);
   if (!session) {
-    console.error(
-      chalk.red('✗') +
-        ' No active session found.\n' +
-        chalk.dim('Run "proofshot start" first.'),
+    console.log(
+      chalk.dim('No active session found; all owned processes are already stopped.'),
     );
-    process.exit(1);
+    return;
+  }
+  setAgentBrowserDefaults({
+    configPath: session.agentBrowserConfigPath || config.browser.configPath,
+    socketDir: session.agentBrowserSocketDir,
+  });
+
+  if (session.bundleComplete) {
+    if (session.browserRetained && !options.noClose) {
+      console.log(chalk.dim('Closing retained browser...'));
+      const browserSessionAddressable = canAddressOwnedBrowserSession(session);
+      await stopOwnedBrowser(session);
+      session.browserRetained = false;
+      clearSession(controlDir);
+      if (browserSessionAddressable) {
+        console.log(chalk.green('✓') + ' Retained browser closed; proof artifacts were already bundled.');
+      } else {
+        console.log(
+          chalk.yellow('⚠') +
+            ' Retained browser ownership was no longer current; skipped session-name close and cleared control state after exact recorded-tree cleanup.',
+        );
+      }
+    } else if (session.browserRetained) {
+      console.log(
+        chalk.dim('Proof artifacts are already bundled; the owned browser remains intentionally open.'),
+      );
+    } else {
+      clearSession(controlDir);
+      console.log(chalk.dim('Proof artifacts are already bundled and all owned processes are stopped.'));
+    }
+    return;
   }
 
+  const retryingStoppedSession = !session.recordingActive;
+  const recordingWasActive = session.recordingActive;
   const startTime = new Date(session.startedAt).getTime();
   const durationMs = Date.now() - startTime;
   const durationSec = Math.round(durationMs / 1000);
+  const browserSessionAvailable = canAddressOwnedBrowserSession(session);
+
+  const priorConsoleEvidenceAvailable = session.consoleEvidenceAvailable === true;
+  if (!browserSessionAvailable && priorConsoleEvidenceAvailable) {
+    console.log(
+      chalk.dim('Browser already stopped; reusing console evidence collected before cleanup.'),
+    );
+  } else if (!browserSessionAvailable) {
+    console.log(
+      chalk.yellow('⚠') +
+        ' Browser ownership could not be verified; skipping console and recording commands.\n' +
+        chalk.dim('  Browser evidence may be incomplete; exact recorded-process cleanup will still run.'),
+    );
+  }
 
   // Step 1: Collect console errors and output
   console.log(chalk.dim('Collecting errors...'));
   let consoleErrors = '';
   let consoleOutput = '';
   let consoleEntries: TimestampedLogEntry[] = [];
-  try {
-    consoleErrors = getConsoleErrors(session.sessionName);
-    consoleOutput = getConsoleOutput(session.sessionName);
-    // Get timestamped console messages for viewer sync
-    const consoleMessages = getConsoleOutputJson(session.sessionName);
-    consoleEntries = consoleMessages.map((msg) => ({
-      text: `[${msg.type}] ${msg.text}`,
-      relativeTimeSec: Math.max(0, parseFloat(((msg.timestamp - startTime) / 1000).toFixed(1))),
-    }));
-  } catch {
-    // Browser may already be closed
+  if (browserSessionAvailable) {
+    try {
+      consoleErrors = getConsoleErrors(session.sessionName);
+      consoleOutput = getConsoleOutput(session.sessionName);
+      // Get timestamped console messages for viewer sync
+      const consoleMessages = getConsoleOutputJson(session.sessionName);
+      consoleEntries = consoleMessages.map((msg) => ({
+        text: `[${msg.type}] ${msg.text}`,
+        relativeTimeSec: Math.max(0, parseFloat(((msg.timestamp - startTime) / 1000).toFixed(1))),
+      }));
+    } catch {
+      // Browser may already be closed
+    }
   }
 
   // Write console output to file (before closing browser)
   if (consoleOutput.trim()) {
     fs.writeFileSync(path.join(session.sessionDir, 'console-output.log'), consoleOutput);
+  } else if (priorConsoleEvidenceAvailable) {
+    const savedConsoleOutput = path.join(session.sessionDir, 'console-output.log');
+    if (fs.existsSync(savedConsoleOutput)) {
+      consoleOutput = fs.readFileSync(savedConsoleOutput, 'utf-8');
+    }
   }
 
   // Step 2: Stop recording
   console.log(chalk.dim('Stopping recording...'));
-  stopRecording(session.sessionName);
+  if (browserSessionAvailable) {
+    stopRecording(session.sessionName);
+  }
+  session.recordingActive = false;
+  saveSession(session, controlDir);
 
   // Step 3: Close browser (unless --no-close)
+  let cleanupError: unknown;
   if (!options.noClose) {
     console.log(chalk.dim('Closing browser...'));
-    closeBrowser(session.sessionName);
+    try {
+      await stopOwnedBrowser(session);
+    } catch (error) {
+      cleanupError = error;
+    }
   }
+
+  // Step 3.5: Stop only the detached process session created by this start.
+  if (session.serverProcess) {
+    console.log(chalk.dim('Stopping dev server...'));
+    try {
+      await stopOwnedServer(session);
+    } catch (error) {
+      cleanupError ||= error;
+    }
+  }
+  if (cleanupError) throw cleanupError;
 
   // Step 4: Read server log (with timestamp parsing)
   let serverLog = '';
@@ -126,22 +207,40 @@ export async function stopCommand(options: StopOptions): Promise<void> {
 
   // Step 5.5: Trim video dead time
   const sessionLog = loadSessionLog(sessionDir);
-  let trimOffsetSec = 0;
-  if (fs.existsSync(session.videoPath)) {
-    trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
-  } else if (session.recordingActive) {
-    console.log(
-      chalk.yellow('⚠') +
-        ' Recording was active but no video file was produced.\n' +
-        chalk.dim('  The screencast may have been interrupted. Screenshots and logs are still saved.'),
-    );
+  let trimOffsetSec = session.trimOffsetSec ?? 0;
+  if (!session.videoTrimComplete) {
+    if (fs.existsSync(session.videoPath)) {
+      trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
+    } else if (recordingWasActive) {
+      console.log(
+        chalk.yellow('⚠') +
+          ' Recording was active but no video file was produced.\n' +
+          chalk.dim('  The screencast may have been interrupted. Screenshots and logs are still saved.'),
+      );
+    }
+    session.videoTrimComplete = true;
+    session.trimOffsetSec = trimOffsetSec;
+    saveSession(session, controlDir);
   }
 
   // Step 6: Count errors
   const consoleErrorLines = consoleErrors
     .split('\n')
     .filter((l) => l.trim() && l.trim() !== 'No errors');
-  const consoleErrorCount = consoleErrorLines.length > 0 && consoleErrors.trim() !== '' ? consoleErrorLines.length : 0;
+  const observedConsoleErrorCount =
+    consoleErrorLines.length > 0 && consoleErrors.trim() !== ''
+      ? consoleErrorLines.length
+      : 0;
+  const consoleEvidenceAvailable =
+    browserSessionAvailable || priorConsoleEvidenceAvailable;
+  const consoleErrorCount = browserSessionAvailable
+    ? observedConsoleErrorCount
+    : session.consoleErrorCount ?? 0;
+  if (browserSessionAvailable) {
+    session.consoleEvidenceAvailable = true;
+    session.consoleErrorCount = consoleErrorCount;
+    saveSession(session, controlDir);
+  }
 
   // Extract errors from server log using multi-language patterns
   const serverErrorLines = extractServerErrors(serverLog);
@@ -160,28 +259,35 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     screenshots,
     consoleErrors,
     consoleErrorCount,
+    consoleEvidenceAvailable,
     serverLog,
     serverErrorCount,
     tokenUsage,
     durationSec,
     outputDir: sessionDir,
   });
-  fs.writeFileSync(summaryPath, summary);
+  if (!retryingStoppedSession || !fs.existsSync(summaryPath)) {
+    writeTextFileAtomically(summaryPath, summary);
+  }
 
   // Step 7.5: Generate interactive viewer (if session log exists)
   // Adjust session log timestamps to match the trimmed video
-  const viewerEntries =
-    trimOffsetSec > 0
-      ? sessionLog.map((e) => ({
-          ...e,
-          relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1)),
-        }))
-      : sessionLog;
+  let viewerEntries = sessionLog;
+  if (trimOffsetSec > 0 && !session.sessionLogAdjusted) {
+    viewerEntries = sessionLog.map((e) => ({
+      ...e,
+      relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1)),
+    }));
+  }
 
   // Write adjusted log back to disk so timestamps match the trimmed video
-  if (trimOffsetSec > 0 && viewerEntries.length > 0) {
+  if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
     const logPath = path.join(sessionDir, 'session-log.json');
-    fs.writeFileSync(logPath, JSON.stringify(viewerEntries, null, 2) + '\n');
+    writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + '\n');
+  }
+  if (!session.sessionLogAdjusted) {
+    session.sessionLogAdjusted = true;
+    saveSession(session, controlDir);
   }
 
   // Apply trimOffsetSec to log entries (same adjustment as session log)
@@ -199,6 +305,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     durationSec,
     videoFilename: fs.existsSync(session.videoPath) ? path.basename(session.videoPath) : null,
     consoleErrorCount,
+    consoleEvidenceAvailable,
     serverErrorCount,
     consoleOutput,
     serverLog,
@@ -208,8 +315,14 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     tokenUsage,
   });
 
-  // Step 8: Clear session state
-  clearSession(outputDir);
+  // Step 8: Retain exact browser ownership only when explicitly requested.
+  session.bundleComplete = true;
+  session.browserRetained = Boolean(options.noClose);
+  if (session.browserRetained) {
+    saveSession(session, controlDir);
+  } else {
+    clearSession(controlDir);
+  }
 
   // Step 9: Print results
   console.log('');
@@ -228,7 +341,13 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
   console.log('');
   console.log(
-    `Console errors:   ${consoleErrorCount === 0 ? chalk.green('0') : chalk.red(String(consoleErrorCount))}`,
+    `Console errors:   ${
+      !consoleEvidenceAvailable
+        ? chalk.yellow('unavailable')
+        : consoleErrorCount === 0
+          ? chalk.green('0')
+          : chalk.red(String(consoleErrorCount))
+    }`,
   );
   console.log(
     `Server errors:    ${serverErrorCount === 0 ? chalk.green('0') : chalk.red(String(serverErrorCount))}`,
@@ -236,6 +355,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   console.log(`Duration:         ${durationSec} seconds`);
   console.log('');
   console.log(`Proof artifacts saved to ${chalk.dim(sessionDir)}`);
+  if (session.browserRetained) {
+    console.log(chalk.dim('Browser retained. Run "proofshot stop" later to close this exact session.'));
+  }
 
   // If errors were found, print them for immediate feedback
   if (consoleErrorCount > 0) {
@@ -261,6 +383,16 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
 }
 
+function writeTextFileAtomically(filePath: string, contents: string): void {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, contents);
+    fs.renameSync(temporaryPath, filePath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+  }
+}
+
 interface SummaryData {
   description: string | null;
   serverCommand: string | null;
@@ -269,6 +401,7 @@ interface SummaryData {
   screenshots: string[];
   consoleErrors: string;
   consoleErrorCount: number;
+  consoleEvidenceAvailable: boolean;
   serverLog: string;
   serverErrorCount: number;
   tokenUsage?: TokenUsage | null;
@@ -318,7 +451,9 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
   md += `## Console Errors
 
 `;
-  if (data.consoleErrorCount === 0) {
+  if (!data.consoleEvidenceAvailable) {
+    md += `Browser ownership could not be verified, so console evidence was unavailable.\n\n`;
+  } else if (data.consoleErrorCount === 0) {
     md += `No console errors detected.\n\n`;
   } else {
     md += `${data.consoleErrorCount} error(s) detected:\n\n\`\`\`\n${data.consoleErrors}\n\`\`\`\n\n`;

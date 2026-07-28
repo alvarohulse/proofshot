@@ -1,6 +1,33 @@
-import { execSync, spawn, type ChildProcess, type SpawnOptions } from 'child_process';
+import * as fs from 'fs';
+import {
+  execFileSync,
+  execSync,
+  spawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from 'child_process';
 
 type ExecSyncLike = typeof execSync;
+
+/**
+ * Immutable identity for a process which started an isolated process session.
+ *
+ * A PID alone is not sufficient ownership proof because the operating system
+ * can reuse it. `startTime` lets cleanup reject a recycled PID, while the
+ * process/session group ids let ProofShot terminate only descendants created
+ * by the detached process it started.
+ */
+export interface ProcessIdentity {
+  pid: number;
+  processGroupId: number;
+  sessionId: number;
+  startTime: string;
+}
+
+export interface TerminateProcessTreeOptions {
+  graceMs?: number;
+  pollIntervalMs?: number;
+}
 
 export function getShellExecutable(
   platform = process.platform,
@@ -21,6 +48,215 @@ export function spawnShellCommand(
     ...options,
     shell: getShellExecutable(),
   });
+}
+
+/** Parse the ownership fields from Linux `/proc/<pid>/stat`. */
+export function parseLinuxProcStat(stat: string): ProcessIdentity | null {
+  const closeParen = stat.lastIndexOf(')');
+  if (closeParen < 0) return null;
+
+  const pid = Number(stat.slice(0, stat.indexOf(' ')));
+  const fields = stat.slice(closeParen + 2).trim().split(/\s+/);
+  const processGroupId = Number(fields[2]);
+  const sessionId = Number(fields[3]);
+  const startTime = fields[19];
+
+  if (
+    !Number.isInteger(pid) ||
+    !Number.isInteger(processGroupId) ||
+    !Number.isInteger(sessionId) ||
+    !startTime
+  ) {
+    return null;
+  }
+
+  return { pid, processGroupId, sessionId, startTime };
+}
+
+/**
+ * Capture the current immutable identity for a process.
+ * Returns null when the process is already gone or cannot be inspected.
+ */
+export function captureProcessIdentity(pid: number): ProcessIdentity | null {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+
+  if (process.platform === 'linux') {
+    try {
+      return parseLinuxProcStat(fs.readFileSync(`/proc/${pid}/stat`, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  if (process.platform !== 'win32') {
+    try {
+      const output = execFileSync(
+        'ps',
+        ['-o', 'pgid=', '-o', 'sid=', '-o', 'lstart=', '-p', String(pid)],
+        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+      ).trim();
+      const match = output.match(/^(\d+)\s+(\d+)\s+(.+)$/);
+      if (!match) return null;
+      return {
+        pid,
+        processGroupId: Number(match[1]),
+        sessionId: Number(match[2]),
+        startTime: match[3],
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // Windows has no /proc-style start token available through Node. Keep the
+  // identity scoped to the exact PID; taskkill below still targets only it and
+  // its descendants rather than using a command-name match.
+  try {
+    process.kill(pid, 0);
+    return { pid, processGroupId: pid, sessionId: pid, startTime: `pid:${pid}` };
+  } catch {
+    return null;
+  }
+}
+
+export function processIdentityMatches(identity: ProcessIdentity): boolean {
+  const current = captureProcessIdentity(identity.pid);
+  return Boolean(current && identitiesMatch(current, identity));
+}
+
+function identitiesMatch(left: ProcessIdentity, right: ProcessIdentity): boolean {
+  return (
+    left.pid === right.pid &&
+    left.processGroupId === right.processGroupId &&
+    left.sessionId === right.sessionId &&
+    left.startTime === right.startTime
+  );
+}
+
+function listProcessGroupsInSession(sessionId: number): number[] {
+  const groups = new Set<number>();
+
+  if (process.platform === 'linux') {
+    let entries: string[] = [];
+    try {
+      entries = fs.readdirSync('/proc');
+    } catch {
+      return [];
+    }
+
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const identity = parseLinuxProcStat(
+          fs.readFileSync(`/proc/${entry}/stat`, 'utf-8'),
+        );
+        if (identity?.sessionId === sessionId) {
+          groups.add(identity.processGroupId);
+        }
+      } catch {
+        // The process may exit while /proc is being scanned.
+      }
+    }
+    return [...groups];
+  }
+
+  if (process.platform !== 'win32') {
+    try {
+      const output = execFileSync('ps', ['-axo', 'pgid=,sid='], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      for (const line of output.split(/\r?\n/)) {
+        const match = line.trim().match(/^(\d+)\s+(\d+)$/);
+        if (match && Number(match[2]) === sessionId) {
+          groups.add(Number(match[1]));
+        }
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  return [...groups];
+}
+
+export function ownedProcessTreeIsAlive(identity: ProcessIdentity): boolean {
+  if (process.platform === 'win32') return processIdentityMatches(identity);
+
+  const current = captureProcessIdentity(identity.pid);
+  if (current && !identitiesMatch(current, identity)) return false;
+
+  return listProcessGroupsInSession(identity.sessionId).length > 0;
+}
+
+function signalOwnedTree(identity: ProcessIdentity, signal: NodeJS.Signals): boolean {
+  if (process.platform === 'win32') return false;
+
+  const current = captureProcessIdentity(identity.pid);
+  if (current && !identitiesMatch(current, identity)) return false;
+
+  // Detached children created by ProofShot are session leaders. If that leader
+  // has already exited, its session id cannot be reused while descendants from
+  // that session remain, so scanning the recorded session stays ownership-safe.
+  if (identity.sessionId !== identity.pid) return false;
+  const groups = listProcessGroupsInSession(identity.sessionId);
+  if (groups.length === 0) return false;
+
+  let signalled = false;
+  for (const groupId of groups) {
+    if (!Number.isInteger(groupId) || groupId <= 0) continue;
+    try {
+      process.kill(-groupId, signal);
+      signalled = true;
+    } catch {
+      // A group can exit between discovery and signalling.
+    }
+  }
+  return signalled;
+}
+
+/**
+ * Terminate only the detached process session represented by `identity`.
+ * Missing/already-dead processes are an idempotent no-op. A recycled PID is
+ * rejected rather than widening cleanup to a name or port match.
+ */
+export async function terminateOwnedProcessTree(
+  identity: ProcessIdentity | null | undefined,
+  options: TerminateProcessTreeOptions = {},
+): Promise<boolean> {
+  if (!identity) return false;
+
+  if (process.platform === 'win32') {
+    if (!processIdentityMatches(identity)) return false;
+    try {
+      execFileSync('taskkill', ['/F', '/T', '/PID', String(identity.pid)], {
+        stdio: 'pipe',
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (!ownedProcessTreeIsAlive(identity)) return false;
+  const signalled = signalOwnedTree(identity, 'SIGTERM');
+  if (!signalled) return false;
+
+  const graceMs = options.graceMs ?? 1500;
+  const pollIntervalMs = options.pollIntervalMs ?? 50;
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline && ownedProcessTreeIsAlive(identity)) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  if (ownedProcessTreeIsAlive(identity)) {
+    signalOwnedTree(identity, 'SIGKILL');
+    const killDeadline = Date.now() + 500;
+    while (Date.now() < killDeadline && ownedProcessTreeIsAlive(identity)) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+  return true;
 }
 
 export function parseWindowsNetstatOutput(output: string, port: number): number[] {

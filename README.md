@@ -140,6 +140,7 @@ proofshot start                                        # Server already running
 proofshot start --run "npm run dev" --port 3000         # Start and capture server
 proofshot start --description "Verify checkout flow"    # Add description to report
 proofshot start --url http://localhost:3000/login       # Open specific URL
+proofshot start --browser-executable /path/to/chrome    # Reuse an exact browser binary
 proofshot start --headed                                # Show browser (debugging)
 proofshot start --force                                 # Override a stale session from a previous crash
 ```
@@ -158,6 +159,10 @@ You can also configure browser launch behavior in `proofshot.config.json`:
 
 Set `browser.configPath` when you need ProofShot to run `agent-browser` against a project-specific config instead of inheriting `~/.agent-browser/config.json`. Relative paths are resolved from the directory that contains `proofshot.config.json`.
 
+ProofShot discovers system and account-level Chrome/Chromium installs even when the command runs with an isolated `HOME`. If no runnable browser is found, `start` prints the exact `agent-browser install` action. An explicit `--browser-executable` takes precedence for one run.
+
+`--output` changes only where evidence is written. Active control state stays in the configured/default output directory, so later `proofshot exec` and `proofshot stop` processes can find the same session.
+
 ### `proofshot stop`
 
 Stop recording, collect errors, generate proof artifacts.
@@ -166,6 +171,8 @@ Stop recording, collect errors, generate proof artifacts.
 proofshot stop              # Stop session and close browser
 proofshot stop --no-close   # Stop but keep browser open
 ```
+
+`stop` is idempotent. With `--no-close`, ProofShot retains exact ownership metadata after bundling; run a later plain `proofshot stop` to close that browser without rebuilding the artifacts.
 
 ### `proofshot exec`
 
@@ -210,6 +217,8 @@ Remove the `./proofshot-artifacts/` directory.
 ```bash
 proofshot clean
 ```
+
+`clean` refuses while active or retained session control state exists. Run `proofshot stop` first so ProofShot does not discard exact process ownership metadata.
 
 ### `proofshot doctor`
 

@@ -14,6 +14,7 @@ interface ViewerData {
   videoFilename: string | null;
   entries: SessionLogEntry[];
   consoleErrorCount: number;
+  consoleEvidenceAvailable?: boolean;
   serverErrorCount: number;
   consoleOutput?: string;
   serverLog?: string;
@@ -157,9 +158,15 @@ export function generateViewer(data: ViewerData): string {
     ? `<p class="description" id="description"><span class="description-text">${escapeHtml(data.description)}</span><button class="show-more" id="showMoreBtn" style="display:none" onclick="toggleDescription()">Show more</button></p>`
     : '';
 
-  const consoleBadgeClass = data.consoleErrorCount === 0 ? 'clean' : 'has-errors';
-  const consoleBadgeText =
-    data.consoleErrorCount === 0
+  const consoleEvidenceAvailable = data.consoleEvidenceAvailable !== false;
+  const consoleBadgeClass = !consoleEvidenceAvailable
+    ? 'unavailable'
+    : data.consoleErrorCount === 0
+      ? 'clean'
+      : 'has-errors';
+  const consoleBadgeText = !consoleEvidenceAvailable
+    ? 'Console: unavailable'
+    : data.consoleErrorCount === 0
       ? 'Console: clean'
       : `Console: ${data.consoleErrorCount} error(s)`;
 
@@ -458,6 +465,12 @@ export function generateViewer(data: ViewerData): string {
       border: 1px solid rgba(248, 81, 73, 0.25);
     }
 
+    .error-badge.unavailable {
+      background: rgba(210, 153, 34, 0.12);
+      color: #d29922;
+      border: 1px solid rgba(210, 153, 34, 0.25);
+    }
+
     .error-badge .badge-dot {
       width: 6px;
       height: 6px;
@@ -470,6 +483,10 @@ export function generateViewer(data: ViewerData): string {
 
     .error-badge.has-errors .badge-dot {
       background: #f85149;
+    }
+
+    .error-badge.unavailable .badge-dot {
+      background: #d29922;
     }
 
     .viewer {

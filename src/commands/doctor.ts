@@ -2,7 +2,7 @@ import chalk from 'chalk';
 import { PROOFSHOT_VERSION } from '../version.js';
 import { findConfigPath, loadConfig } from '../utils/config.js';
 import { findExecutablePath, readCommandVersion } from '../utils/process.js';
-import { loadSession } from '../session/state.js';
+import { loadSession, resolveSessionControlDir } from '../session/state.js';
 
 function statusLabel(ok: boolean, text: string): string {
   return ok ? `${chalk.green('✓')} ${text}` : `${chalk.yellow('⚠')} ${text}`;
@@ -15,8 +15,8 @@ function printLine(label: string, value: string): void {
 export async function doctorCommand(): Promise<void> {
   const configPath = findConfigPath();
   const config = loadConfig();
-  const outputDir = config.output;
-  const session = loadSession(outputDir);
+  const controlDir = resolveSessionControlDir(config.output);
+  const session = loadSession(controlDir);
 
   const agentBrowserPath = findExecutablePath('agent-browser');
   const ffmpegPath = findExecutablePath('ffmpeg');
@@ -28,7 +28,8 @@ export async function doctorCommand(): Promise<void> {
 
   printLine('ProofShot', PROOFSHOT_VERSION);
   printLine('Config', configPath || chalk.dim('not found'));
-  printLine('Output', outputDir);
+  printLine('Output', config.output);
+  printLine('Control state', controlDir);
   printLine('Browser mode', config.headless ? 'headless' : 'headed');
   printLine('Viewport', `${config.viewport.width}x${config.viewport.height}`);
   console.log('');
@@ -48,6 +49,7 @@ export async function doctorCommand(): Promise<void> {
     printLine('Session dir', session.sessionDir);
     printLine('Recording', session.recordingActive ? 'active' : 'stopped');
     printLine('Port', String(session.port));
+    if (session.targetUrl) printLine('Target', session.targetUrl);
   } else {
     printLine('Session dir', chalk.dim('none'));
   }

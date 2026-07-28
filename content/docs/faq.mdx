@@ -28,7 +28,7 @@ The skill file installed by `proofshot install` teaches your agent the three-ste
 Stable handles to interactive elements on a page. When your agent runs `agent-browser snapshot -i`, it gets a list like `@e1: button "Submit"`, `@e2: input "Email"`. These references persist across commands within a session, so the agent can target elements reliably without CSS selectors.
 
 **Can I run multiple sessions at the same time?**
-Yes. Session state (`.session.json`) lives in the output directory, not globally. Different projects with different output directories can run sessions concurrently.
+Yes. Session state (`.session.json`) lives in each project's configured/default output directory, not globally. Different projects can run concurrently. A one-run `--output` override moves evidence without changing where that project finds active control state.
 
 **What languages does error detection support?**
 JavaScript/Node.js, Python, Ruby/Rails, Go, Java/Kotlin, Rust, PHP, C#/.NET, Elixir/Phoenix, plus generic patterns for `FATAL`, `CRITICAL`, and segfaults. See [How to add error patterns](/docs/guides/add-error-pattern) to extend support.
@@ -39,7 +39,10 @@ When ffmpeg is available, `proofshot stop` cuts dead time from the video — kee
 ## Troubleshooting
 
 **"No active session" when running exec or stop**
-You need to run `proofshot start` first. Each session writes `.session.json` — if it's missing, there's no active session to operate on.
+You need to run `proofshot start` before `exec`. `stop` is idempotent, so it succeeds without changing artifacts when the session is already stopped.
+
+**Chrome is installed, but an isolated HOME cannot find it**
+ProofShot checks system paths and executable-only browser caches under the real account home without reusing a browser profile or storage. You can also pass one exact path with `proofshot start --browser-executable /absolute/path/to/chrome`. If nothing is runnable, run the `agent-browser install` command printed by `proofshot start`.
 
 **Server errors aren't being detected**
 Server log capture only works when ProofShot starts the server itself via `--run`. If your server was already running on the port, ProofShot skips spawning and gets no logs.

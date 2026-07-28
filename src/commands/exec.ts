@@ -2,8 +2,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { loadConfig } from '../utils/config.js';
-import { ab, buildAgentBrowserCommand, setAgentBrowserDefaults } from '../utils/exec.js';
-import { loadSession, saveSession, type SessionState } from '../session/state.js';
+import {
+  ab,
+  buildAgentBrowserCommand,
+  getAgentBrowserEnvironment,
+  setAgentBrowserDefaults,
+} from '../utils/exec.js';
+import {
+  loadSession,
+  resolveSessionControlDir,
+  saveSession,
+  type SessionState,
+} from '../session/state.js';
+import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
 
 const SESSION_LOG_FILENAME = 'session-log.json';
 
@@ -180,9 +191,12 @@ export async function execCommand(args: string[]): Promise<void> {
 
   // Load session state
   const config = loadConfig();
-  setAgentBrowserDefaults({ configPath: config.browser.configPath });
-  const outputDir = path.resolve(config.output);
-  const session = loadSession(outputDir);
+  const controlDir = resolveSessionControlDir(config.output);
+  const session = loadSession(controlDir);
+  setAgentBrowserDefaults({
+    configPath: session?.agentBrowserConfigPath || config.browser.configPath,
+    socketDir: session?.agentBrowserSocketDir,
+  });
 
   if (session && !session.recordingActive) {
     console.error(
@@ -190,6 +204,15 @@ export async function execCommand(args: string[]): Promise<void> {
         'Run "proofshot stop" to end this session, then start a new one.',
     );
     process.exit(1);
+  }
+
+  if (session && !canAddressOwnedBrowserSession(session)) {
+    console.error(
+      'Error: Browser ownership no longer matches this ProofShot session.\n' +
+        'Refusing to address a possibly reused agent-browser session name.',
+    );
+    process.exit(1);
+    return;
   }
 
   // Resolve args (screenshot path rewriting)
@@ -237,6 +260,7 @@ export async function execCommand(args: string[]): Promise<void> {
       encoding: 'utf-8',
       timeout: 60000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: getAgentBrowserEnvironment(),
     });
     if (result.trim()) {
       process.stdout.write(result);
@@ -262,7 +286,7 @@ export async function execCommand(args: string[]): Promise<void> {
       });
       const vp = JSON.parse(vpJson);
       session.viewport = { width: vp.width, height: vp.height };
-      saveSession(session);
+      saveSession(session, controlDir);
     } catch {
       // Non-critical — viewport cache stays stale
     }
