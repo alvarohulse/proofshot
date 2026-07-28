@@ -132,6 +132,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   let consoleErrors = '';
   let consoleOutput = '';
   let consoleEntries: TimestampedLogEntry[] = [];
+  const consoleErrorsPath = path.join(session.sessionDir, 'console-errors.log');
+  const consoleOutputPath = path.join(session.sessionDir, 'console-output.log');
+  const consoleEntriesPath = path.join(session.sessionDir, 'console-entries.json');
   if (browserSessionAvailable) {
     try {
       consoleErrors = getConsoleErrors(session.sessionName);
@@ -145,15 +148,37 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     } catch {
       // Browser may already be closed
     }
-  }
-
-  // Write console output to file (before closing browser)
-  if (consoleOutput.trim()) {
-    fs.writeFileSync(path.join(session.sessionDir, 'console-output.log'), consoleOutput);
+    writeTextFileAtomically(consoleErrorsPath, consoleErrors);
+    writeTextFileAtomically(consoleOutputPath, consoleOutput);
+    writeTextFileAtomically(
+      consoleEntriesPath,
+      JSON.stringify(consoleEntries, null, 2) + '\n',
+    );
+    const capturedErrorLines = consoleErrors
+      .split('\n')
+      .filter((line) => line.trim() && line.trim() !== 'No errors');
+    session.consoleEvidenceAvailable = true;
+    session.consoleErrorCount =
+      capturedErrorLines.length > 0 && consoleErrors.trim() !== ''
+        ? capturedErrorLines.length
+        : 0;
+    // Persist evidence before any cleanup step can fail. A retry must not turn
+    // successfully collected browser facts into an "unavailable" claim.
+    saveSession(session, controlDir);
   } else if (priorConsoleEvidenceAvailable) {
-    const savedConsoleOutput = path.join(session.sessionDir, 'console-output.log');
-    if (fs.existsSync(savedConsoleOutput)) {
-      consoleOutput = fs.readFileSync(savedConsoleOutput, 'utf-8');
+    if (fs.existsSync(consoleErrorsPath)) {
+      consoleErrors = fs.readFileSync(consoleErrorsPath, 'utf-8');
+    }
+    if (fs.existsSync(consoleOutputPath)) {
+      consoleOutput = fs.readFileSync(consoleOutputPath, 'utf-8');
+    }
+    if (fs.existsSync(consoleEntriesPath)) {
+      try {
+        const savedEntries = JSON.parse(fs.readFileSync(consoleEntriesPath, 'utf-8'));
+        if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
+      } catch {
+        // Keep the persisted availability/count; only the optional timeline is absent.
+      }
     }
   }
 

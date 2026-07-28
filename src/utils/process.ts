@@ -108,12 +108,19 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
     }
   }
 
-  // Windows has no /proc-style start token available through Node. Keep the
-  // identity scoped to the exact PID; taskkill below still targets only it and
-  // its descendants rather than using a command-name match.
+  // PowerShell exposes the process creation timestamp. If that immutable token
+  // cannot be read, refuse ownership instead of treating a reusable PID as
+  // sufficient proof for taskkill /T.
   try {
-    process.kill(pid, 0);
-    return { pid, processGroupId: pid, sessionId: pid, startTime: `pid:${pid}` };
+    const script =
+      `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`;
+    const startTime = execFileSync(
+      'powershell.exe',
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+    ).trim();
+    if (!/^\d+$/.test(startTime)) return null;
+    return { pid, processGroupId: pid, sessionId: pid, startTime };
   } catch {
     return null;
   }

@@ -176,6 +176,49 @@ describe('stopCommand retryability', () => {
     expect(fs.statSync(summaryPath).mtimeMs).toBe(summaryMtimeBefore);
   });
 
+  it('persists collected console evidence before cleanup failure and reuses it', async () => {
+    mocks.getConsoleErrors.mockReturnValue('synthetic console failure');
+    mocks.getConsoleOutput.mockReturnValue('captured before cleanup');
+    mocks.getConsoleOutputJson.mockReturnValue([
+      { type: 'error', text: 'synthetic console failure', timestamp: Date.now() },
+    ]);
+    mocks.stopOwnedServer.mockRejectedValueOnce(new Error('simulated server cleanup failure'));
+
+    await expect(stopCommand({})).rejects.toThrow('simulated server cleanup failure');
+
+    expect(session).toMatchObject({
+      recordingActive: false,
+      consoleEvidenceAvailable: true,
+      consoleErrorCount: 1,
+    });
+    expect(fs.readFileSync(path.join(session.sessionDir, 'console-errors.log'), 'utf-8')).toBe(
+      'synthetic console failure',
+    );
+    expect(fs.readFileSync(path.join(session.sessionDir, 'console-output.log'), 'utf-8')).toBe(
+      'captured before cleanup',
+    );
+
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+    mocks.stopOwnedServer.mockResolvedValue(undefined);
+    mocks.writeViewer.mockReturnValue(path.join(session.sessionDir, 'viewer.html'));
+    await stopCommand({});
+
+    expect(mocks.writeViewer).toHaveBeenCalledWith(
+      session.sessionDir,
+      expect.objectContaining({
+        consoleEvidenceAvailable: true,
+        consoleErrorCount: 1,
+        consoleOutput: 'captured before cleanup',
+        consoleEntries: [
+          expect.objectContaining({ text: '[error] synthetic console failure' }),
+        ],
+      }),
+    );
+    const summary = fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8');
+    expect(summary).toContain('1 error(s) detected');
+    expect(summary).toContain('synthetic console failure');
+  });
+
   it('skips every session-addressed browser command when identity is mismatched', async () => {
     mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
     mocks.writeViewer.mockReturnValue(path.join(session.sessionDir, 'viewer.html'));

@@ -40,4 +40,16 @@ describe('loadConfig', () => {
       ignoreHttpsErrors: false,
     });
   });
+
+  it('resolves control output against the ancestor config from a subdirectory', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-output-path-'));
+    const nested = path.join(tempDir, 'nested', 'consumer');
+    fs.mkdirSync(nested, { recursive: true });
+    fs.writeFileSync(
+      path.join(tempDir, 'proofshot.config.json'),
+      JSON.stringify({ output: './project-proof' }),
+    );
+
+    expect(loadConfig(nested).output).toBe(path.join(tempDir, 'project-proof'));
+  });
 });

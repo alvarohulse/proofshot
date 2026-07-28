@@ -77,6 +77,10 @@ export function loadConfig(startDir?: string): ProofShotConfig {
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
+      output: path.resolve(
+        configDir,
+        typeof parsed.output === 'string' ? parsed.output : DEFAULT_CONFIG.output,
+      ),
       devServer: { ...DEFAULT_CONFIG.devServer, ...parsed.devServer },
       viewport: { ...DEFAULT_CONFIG.viewport, ...parsed.viewport },
       browser: resolvedBrowser,

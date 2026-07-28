@@ -291,7 +291,9 @@ describe('isolated CLI lifecycle', () => {
     expect(processIsAlive(ownedServerPid)).toBe(true);
     expect(processIsAlive(unrelated.pid!)).toBe(true);
 
-    const execResult = runCli(audit, env, ['exec', 'get', 'url']);
+    const nestedCwd = path.join(audit, 'nested', 'consumer');
+    fs.mkdirSync(nestedCwd, { recursive: true });
+    const execResult = runCli(nestedCwd, env, ['exec', 'get', 'url']);
     expect(execResult.status, `${execResult.stdout}\n${execResult.stderr}`).toBe(0);
     expect(execResult.stdout.trim()).toBe(intendedUrl);
     expect(execResult.stdout).not.toContain('about:blank');
@@ -316,7 +318,7 @@ describe('isolated CLI lifecycle', () => {
       },
     };
     fs.writeFileSync(controlPath, JSON.stringify(mismatchedState, null, 2) + '\n');
-    const mismatchedExec = runCli(audit, env, ['exec', 'get', 'url']);
+    const mismatchedExec = runCli(nestedCwd, env, ['exec', 'get', 'url']);
     expect(mismatchedExec.status).toBe(1);
     expect(mismatchedExec.stderr).toContain(
       'Browser ownership no longer matches this ProofShot session',
@@ -326,7 +328,7 @@ describe('isolated CLI lifecycle', () => {
     );
     fs.writeFileSync(controlPath, JSON.stringify(state, null, 2) + '\n');
 
-    const stop = runCli(audit, env, ['stop']);
+    const stop = runCli(nestedCwd, env, ['stop']);
     expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
     expect(fs.existsSync(controlPath)).toBe(false);
     await waitForProcessExit(ownedServerPid);
@@ -341,7 +343,7 @@ describe('isolated CLI lifecycle', () => {
     const summaryMtimeBefore = fs.statSync(summaryPath).mtimeMs;
     const browserLogBefore = fs.readFileSync(tools.browserLog, 'utf-8');
 
-    const secondStop = runCli(audit, env, ['stop']);
+    const secondStop = runCli(nestedCwd, env, ['stop']);
     expect(secondStop.status, `${secondStop.stdout}\n${secondStop.stderr}`).toBe(0);
     expect(secondStop.stdout).toContain('already stopped');
     expect(fs.readFileSync(summaryPath, 'utf-8')).toBe(summaryBefore);
