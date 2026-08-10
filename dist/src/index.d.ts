@@ -432,6 +432,10 @@ declare function writeViewer(outputDir: string, data: Omit<ViewerData, 'entries'
 interface SessionMetadata {
     branch: string;
     commitSha: string;
+    repository?: string;
+    repositoryRoot?: string;
+    treeHash?: string;
+    sourceDirty?: boolean;
     startedAt: string;
     description: string | null;
 }
@@ -451,6 +455,49 @@ declare function loadMetadata(sessionDir: string): SessionMetadata | null;
  * Returns session directories sorted newest first (by startedAt).
  */
 declare function findSessionsForBranch(outputDir: string, branch: string): string[];
+
+type GitProvenance = {
+    repository: string;
+    branch: string;
+    commitSha: string;
+    treeHash: string;
+    sourceDirty: boolean;
+};
+type ManifestArtifactKind = 'screenshot' | 'video' | 'viewer' | 'summary' | 'evidence' | 'verdict' | 'log';
+type ManifestArtifact = {
+    id: string;
+    kind: ManifestArtifactKind;
+    path: string;
+    sha256: string;
+    size: number;
+    order: number;
+};
+type ArtifactManifest = {
+    version: 1;
+    sessionId: string;
+    repository: string;
+    branch: string;
+    commitSha: string;
+    treeHash: string;
+    sourceDirty: boolean;
+    sourceDrift: boolean;
+    startedAt: string;
+    finalizedAt: string;
+    completion: 'complete';
+    verdict: Verdict['status'];
+    artifacts: ManifestArtifact[];
+};
+declare function captureGitProvenance(cwd?: string): GitProvenance;
+declare function writeArtifactManifest(options: {
+    sessionId: string;
+    sessionDir: string;
+    metadata: SessionMetadata;
+    evidence: CanonicalEvidence;
+    verdict: Verdict;
+    finalizedProvenance?: GitProvenance;
+}): ArtifactManifest;
+declare function loadArtifactManifest(sessionDir: string): ArtifactManifest | null;
+declare function validateManifestArtifacts(sessionDir: string, manifest: ArtifactManifest): void;
 
 interface PRCommentData {
     description: string | null;
@@ -473,4 +520,4 @@ declare function formatPRComment(data: PRCommentData): string;
 declare function startOwnedEnvironment(environment: EnvironmentConfig | undefined, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<EnvironmentState | null>;
 declare function stopOwnedEnvironment(state: EnvironmentState | null | undefined): Promise<void>;
 
-export { type CanonicalEvidence, type EnvironmentConfig, type EnvironmentState, type EvidenceIncident, type EvidenceSourceSummary, type LogSourceConfig, type LogsConfig, type PRCommentData, type ProofShotConfig, ProofShotError, type SessionLogEntry, type SessionMetadata, type SessionState, type Verdict, type VerdictStatus, ab, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadConfig, loadMetadata, loadSession, saveSession, startOwnedEnvironment, stopOwnedEnvironment, waitForPort, writeCanonicalEvidence, writeConfig, writeMetadata, writeViewer };
+export { type ArtifactManifest, type CanonicalEvidence, type EnvironmentConfig, type EnvironmentState, type EvidenceIncident, type EvidenceSourceSummary, type GitProvenance, type LogSourceConfig, type LogsConfig, type ManifestArtifact, type PRCommentData, type ProofShotConfig, ProofShotError, type SessionLogEntry, type SessionMetadata, type SessionState, type Verdict, type VerdictStatus, ab, captureGitProvenance, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadArtifactManifest, loadConfig, loadMetadata, loadSession, saveSession, startOwnedEnvironment, stopOwnedEnvironment, validateManifestArtifacts, waitForPort, writeArtifactManifest, writeCanonicalEvidence, writeConfig, writeMetadata, writeViewer };

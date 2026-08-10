@@ -6,6 +6,10 @@ const METADATA_FILENAME = 'metadata.json';
 export interface SessionMetadata {
   branch: string;
   commitSha: string;
+  repository?: string;
+  repositoryRoot?: string;
+  treeHash?: string;
+  sourceDirty?: boolean;
   startedAt: string;
   description: string | null;
 }

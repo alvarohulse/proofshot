@@ -327,7 +327,7 @@ function installForTool(tool, force) {
   }
 }
 function checkboxSelect(tools) {
-  return new Promise((resolve11) => {
+  return new Promise((resolve12) => {
     const selected = new Array(tools.length).fill(true);
     let cursor = 0;
     function render() {
@@ -358,7 +358,7 @@ function checkboxSelect(tools) {
         stdin.removeListener("data", onData);
         stdin.pause();
         process.stdout.write("\r\x1B[K\n");
-        resolve11([]);
+        resolve12([]);
         return;
       }
       if (key === "\r" || key === "\n") {
@@ -366,7 +366,7 @@ function checkboxSelect(tools) {
         stdin.removeListener("data", onData);
         stdin.pause();
         process.stdout.write("\r\x1B[K\n");
-        resolve11(tools.filter((_, i) => selected[i]));
+        resolve12(tools.filter((_, i) => selected[i]));
         return;
       }
       if (key === " ") {
@@ -469,9 +469,8 @@ async function installCommand(options) {
 }
 
 // src/commands/start.ts
-import * as path12 from "path";
+import * as path13 from "path";
 import chalk2 from "chalk";
-import { execSync as execSync4 } from "child_process";
 
 // src/utils/config.ts
 import * as fs3 from "fs";
@@ -789,13 +788,13 @@ async function terminateOwnedProcessTree(identity, options = {}) {
   const pollIntervalMs = options.pollIntervalMs ?? 50;
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline && ownedProcessTreeIsAlive(identity)) {
-    await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
+    await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
   }
   if (ownedProcessTreeIsAlive(identity)) {
     signalOwnedTree(identity, "SIGKILL");
     const killDeadline = Date.now() + 500;
     while (Date.now() < killDeadline && ownedProcessTreeIsAlive(identity)) {
-      await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
+      await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
     }
   }
   return true;
@@ -813,7 +812,7 @@ async function terminateOwnedProcess(identity, options = {}) {
   }
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline && processIdentityMatches(identity)) {
-    await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
+    await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
   }
   if (processIdentityMatches(identity)) {
     try {
@@ -923,20 +922,20 @@ async function isPortOpen(port, host = "localhost") {
   return false;
 }
 function tryConnect(port, host) {
-  return new Promise((resolve11) => {
+  return new Promise((resolve12) => {
     const socket = new net.Socket();
     socket.setTimeout(1e3);
     socket.on("connect", () => {
       socket.destroy();
-      resolve11(true);
+      resolve12(true);
     });
     socket.on("timeout", () => {
       socket.destroy();
-      resolve11(false);
+      resolve12(false);
     });
     socket.on("error", () => {
       socket.destroy();
-      resolve11(false);
+      resolve12(false);
     });
     socket.connect(port, host);
   });
@@ -1010,7 +1009,7 @@ Choose another port or stop that process explicitly, then retry.`
   proc.unref();
   let processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
   for (let attempt = 0; !processIdentity && attempt < 5; attempt++) {
-    await new Promise((resolve11) => setTimeout(resolve11, 10));
+    await new Promise((resolve12) => setTimeout(resolve12, 10));
     processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
   }
   if (!processIdentity || !isDetachedProcessIdentity(processIdentity)) {
@@ -1037,7 +1036,7 @@ Make sure the command is correct and the port is available.
 Original error: ${error instanceof Error ? error.message : error}`
     );
   }
-  await new Promise((resolve11) => setTimeout(resolve11, 1e3));
+  await new Promise((resolve12) => setTimeout(resolve12, 1e3));
   return result;
 }
 
@@ -1280,7 +1279,7 @@ async function waitForAgentBrowserProcessIdentity(socketDir, sessionName, timeou
     if (identity) {
       return identity;
     }
-    await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
+    await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
   } while (Date.now() < deadline);
   return captureAgentBrowserProcessIdentity(socketDir, sessionName);
 }
@@ -1540,7 +1539,7 @@ async function waitForCaptureProcess(sourceId, pidFile, timeoutMs = 2e3) {
     if (identity) {
       return { sourceId, process: identity, pidFile };
     }
-    await new Promise((resolve11) => setTimeout(resolve11, 25));
+    await new Promise((resolve12) => setTimeout(resolve12, 25));
   } while (Date.now() < deadline);
   throw new Error(`ProofShot could not capture the log helper identity for ${sourceId}.`);
 }
@@ -1625,7 +1624,7 @@ async function startDetachedWorker(sourceId, pidFile, workerSource, config) {
   worker.unref();
   let identity = worker.pid ? captureProcessIdentity(worker.pid) : null;
   for (let attempt = 0; !identity && attempt < 20; attempt += 1) {
-    await new Promise((resolve11) => setTimeout(resolve11, 10));
+    await new Promise((resolve12) => setTimeout(resolve12, 10));
     identity = worker.pid ? captureProcessIdentity(worker.pid) : null;
   }
   if (!identity) {
@@ -2137,9 +2136,9 @@ async function runCommand(command, cwd) {
   child.stderr?.on("data", (chunk) => {
     stderr += chunk.toString();
   });
-  const exitCode = await new Promise((resolve11, reject) => {
+  const exitCode = await new Promise((resolve12, reject) => {
     child.once("error", reject);
-    child.once("close", resolve11);
+    child.once("close", resolve12);
   });
   if (exitCode !== 0) {
     await terminateOwnedProcessTree(identity);
@@ -2392,7 +2391,7 @@ async function waitForReadiness(checks) {
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
       }
-      await new Promise((resolve11) => setTimeout(resolve11, 100));
+      await new Promise((resolve12) => setTimeout(resolve12, 100));
     }
     if (lastError) {
       const target = check.kind === "http" ? check.url : `${check.host || "127.0.0.1"}:${check.port}`;
@@ -2401,7 +2400,7 @@ async function waitForReadiness(checks) {
   }
 }
 function connectTcp(host, port) {
-  return new Promise((resolve11, reject) => {
+  return new Promise((resolve12, reject) => {
     const socket = net2.createConnection({ host, port });
     const timer = setTimeout(() => {
       socket.destroy();
@@ -2410,7 +2409,7 @@ function connectTcp(host, port) {
     socket.once("connect", () => {
       clearTimeout(timer);
       socket.end();
-      resolve11();
+      resolve12();
     });
     socket.once("error", (error) => {
       clearTimeout(timer);
@@ -2629,6 +2628,169 @@ function findSessionsForBranch(outputDir, branch) {
   return matches.map((m) => m.dir);
 }
 
+// src/session/manifest.ts
+import * as fs16 from "fs";
+import * as path12 from "path";
+import { createHash as createHash2 } from "crypto";
+import { execFileSync as execFileSync3 } from "child_process";
+var MANIFEST_FILENAME = "artifact-manifest.json";
+function captureGitProvenance(cwd = process.cwd()) {
+  const git = (args) => execFileSync3("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"]
+  }).trim();
+  try {
+    const repository = normalizeRepository(git(["remote", "get-url", "origin"]));
+    const branch = git(["branch", "--show-current"]);
+    const commitSha = git(["rev-parse", "HEAD"]);
+    const treeHash = git(["rev-parse", "HEAD^{tree}"]);
+    const sourceDirty = git(["status", "--porcelain", "--untracked-files=all"]) !== "";
+    return { repository, branch, commitSha, treeHash, sourceDirty };
+  } catch {
+    return {
+      repository: "",
+      branch: "",
+      commitSha: "",
+      treeHash: "",
+      sourceDirty: true
+    };
+  }
+}
+function normalizeRepository(remote) {
+  return remote.trim().replace(/^git@([^:]+):/, "$1/").replace(/^ssh:\/\/git@/, "").replace(/^https?:\/\//, "").replace(/\.git$/, "").replace(/\/$/, "");
+}
+function writeArtifactManifest(options) {
+  const finalized = options.finalizedProvenance || captureGitProvenance(options.metadata.repositoryRoot);
+  const sourceDrift = (options.metadata.repository || "") !== finalized.repository || options.metadata.branch !== finalized.branch || options.metadata.commitSha !== finalized.commitSha || (options.metadata.treeHash || "") !== finalized.treeHash || options.metadata.sourceDirty !== false || finalized.sourceDirty;
+  const artifacts = collectManifestArtifacts(
+    options.sessionDir,
+    options.evidence
+  );
+  const manifest = {
+    version: 1,
+    sessionId: options.sessionId,
+    repository: options.metadata.repository || "",
+    branch: options.metadata.branch,
+    commitSha: options.metadata.commitSha,
+    treeHash: options.metadata.treeHash || "",
+    sourceDirty: options.metadata.sourceDirty !== false,
+    sourceDrift,
+    startedAt: options.metadata.startedAt,
+    finalizedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    completion: "complete",
+    verdict: options.verdict.status,
+    artifacts
+  };
+  writeJsonAtomically(
+    path12.join(options.sessionDir, MANIFEST_FILENAME),
+    manifest
+  );
+  return manifest;
+}
+function loadArtifactManifest(sessionDir) {
+  const manifestPath = path12.join(sessionDir, MANIFEST_FILENAME);
+  try {
+    if (fs16.lstatSync(sessionDir).isSymbolicLink() || fs16.lstatSync(manifestPath).isSymbolicLink()) {
+      return null;
+    }
+    const parsed = JSON.parse(
+      fs16.readFileSync(manifestPath, "utf-8")
+    );
+    if (parsed.version !== 1 || parsed.completion !== "complete" || !Array.isArray(parsed.artifacts)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function validateManifestArtifacts(sessionDir, manifest) {
+  const root = fs16.realpathSync(sessionDir);
+  const ids = /* @__PURE__ */ new Set();
+  for (const artifact of manifest.artifacts) {
+    if (ids.has(artifact.id)) {
+      throw new Error(`Duplicate artifact ID: ${artifact.id}`);
+    }
+    ids.add(artifact.id);
+    if (!artifact.path || path12.isAbsolute(artifact.path) || artifact.path.split(/[\\/]/).includes("..")) {
+      throw new Error(`Unsafe artifact path: ${artifact.path}`);
+    }
+    const artifactPath = path12.resolve(sessionDir, artifact.path);
+    const stat = fs16.lstatSync(artifactPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`Artifact is not a regular file: ${artifact.path}`);
+    }
+    const realPath = fs16.realpathSync(artifactPath);
+    if (!realPath.startsWith(`${root}${path12.sep}`)) {
+      throw new Error(`Artifact escapes its session directory: ${artifact.path}`);
+    }
+    const contents = fs16.readFileSync(realPath);
+    const hash = createHash2("sha256").update(contents).digest("hex");
+    if (hash !== artifact.sha256 || contents.length !== artifact.size) {
+      throw new Error(`Artifact hash mismatch: ${artifact.path}`);
+    }
+  }
+}
+function collectManifestArtifacts(sessionDir, evidence) {
+  const screenshotOrder = new Map(
+    evidence.actions.map((action) => action.action.match(/^screenshot\s+(.+)$/)?.[1]).filter((value) => Boolean(value)).map((value, index) => [path12.basename(value), index])
+  );
+  const candidates = listArtifactFiles(sessionDir).filter((file) => classifyArtifact(file) !== null).sort((left, right) => {
+    const leftOrder = screenshotOrder.get(path12.basename(left));
+    const rightOrder = screenshotOrder.get(path12.basename(right));
+    if (leftOrder !== void 0 || rightOrder !== void 0) {
+      return (leftOrder ?? Number.MAX_SAFE_INTEGER) - (rightOrder ?? Number.MAX_SAFE_INTEGER);
+    }
+    return left.localeCompare(right);
+  });
+  return candidates.map((file, order) => {
+    const contents = fs16.readFileSync(path12.join(sessionDir, file));
+    const kind = classifyArtifact(file);
+    return {
+      id: `${kind}:${file}`,
+      kind,
+      path: file,
+      sha256: createHash2("sha256").update(contents).digest("hex"),
+      size: contents.length,
+      order
+    };
+  });
+}
+function listArtifactFiles(root, current = root) {
+  const files = [];
+  for (const entry of fs16.readdirSync(current, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    const absolutePath = path12.join(current, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listArtifactFiles(root, absolutePath));
+    } else if (entry.isFile()) {
+      files.push(path12.relative(root, absolutePath));
+    }
+  }
+  return files;
+}
+function classifyArtifact(file) {
+  const basename8 = path12.basename(file);
+  if (file.endsWith(".png")) return "screenshot";
+  if (basename8 === "session.webm" || basename8 === "session.mp4") return "video";
+  if (basename8 === "viewer.html") return "viewer";
+  if (basename8 === "SUMMARY.md") return "summary";
+  if (basename8 === "evidence.json") return "evidence";
+  if (basename8 === "verdict.json") return "verdict";
+  if (file.endsWith(".log") || file.endsWith(".ndjson")) return "log";
+  return null;
+}
+function writeJsonAtomically(filePath, value) {
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  fs16.writeFileSync(temporaryPath, JSON.stringify(value, null, 2) + "\n", {
+    mode: 384
+  });
+  fs16.renameSync(temporaryPath, filePath);
+}
+
 // src/commands/start.ts
 async function startCommand(options) {
   const config = loadConfig();
@@ -2656,10 +2818,10 @@ async function startCommand(options) {
   if (options.port) config.devServer.port = options.port;
   if (options.output) config.output = options.output;
   if (options.headed !== void 0) config.headless = !options.headed;
-  const outputDir = path12.resolve(config.output);
+  const outputDir = path13.resolve(config.output);
   const timestamp = generateTimestamp();
   const sessionDirName = generateSessionDirName(timestamp, options.description || null);
-  const sessionDir = path12.join(outputDir, sessionDirName);
+  const sessionDir = path13.join(outputDir, sessionDirName);
   const sessionName = generateAgentBrowserSessionName(timestamp);
   let socketDir;
   let browserExecutable;
@@ -2680,27 +2842,12 @@ async function startCommand(options) {
   setAgentBrowserDefaults({ configPath: config.browser.configPath, socketDir });
   ensureOutputDir(outputDir);
   ensureOutputDir(sessionDir);
-  const videoPath = path12.join(sessionDir, "session.webm");
-  const serverErrorLog = path12.join(sessionDir, "server.log");
-  let branch = "";
-  let commitSha = "";
-  try {
-    branch = execSync4("git branch --show-current", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"]
-    }).trim();
-  } catch {
-  }
-  try {
-    commitSha = execSync4("git rev-parse HEAD", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"]
-    }).trim();
-  } catch {
-  }
+  const videoPath = path13.join(sessionDir, "session.webm");
+  const serverErrorLog = path13.join(sessionDir, "server.log");
+  const provenance = captureGitProvenance();
   writeMetadata(sessionDir, {
-    branch,
-    commitSha,
+    ...provenance,
+    repositoryRoot: process.cwd(),
     startedAt: (/* @__PURE__ */ new Date()).toISOString(),
     description: options.description || null
   });
@@ -2812,7 +2959,7 @@ async function startCommand(options) {
           console.log(
             chalk2.yellow("\u26A0") + ` Recording failed (attempt ${attempt}/${RECORDING_RETRIES}), retrying in ${RETRY_DELAY_MS / 1e3}s...`
           );
-          await new Promise((resolve11) => setTimeout(resolve11, RETRY_DELAY_MS));
+          await new Promise((resolve12) => setTimeout(resolve12, RETRY_DELAY_MS));
         }
       }
     }
@@ -2929,15 +3076,15 @@ function getTerminationSignal(error) {
 }
 
 // src/commands/stop.ts
-import * as fs20 from "fs";
-import * as path17 from "path";
+import * as fs21 from "fs";
+import * as path18 from "path";
 import { randomUUID as randomUUID3 } from "crypto";
-import { execFileSync as execFileSync4 } from "child_process";
+import { execFileSync as execFileSync5 } from "child_process";
 import chalk3 from "chalk";
 
 // src/artifacts/viewer.ts
-import * as fs16 from "fs";
-import * as path13 from "path";
+import * as fs17 from "fs";
+import * as path14 from "path";
 var MAX_LOG_BYTES = 50 * 1024;
 function truncateLog(log, maxBytes) {
   if (log.length <= maxBytes) return { text: log, truncated: false };
@@ -4428,26 +4575,26 @@ ${stepsHtml}
 function writeViewer(outputDir, data) {
   let entries = data.entries;
   if (!entries) {
-    const logPath = path13.join(outputDir, "session-log.json");
-    if (!fs16.existsSync(logPath)) return null;
+    const logPath = path14.join(outputDir, "session-log.json");
+    if (!fs17.existsSync(logPath)) return null;
     try {
-      entries = JSON.parse(fs16.readFileSync(logPath, "utf-8"));
+      entries = JSON.parse(fs17.readFileSync(logPath, "utf-8"));
     } catch {
       return null;
     }
   }
   if (!entries || entries.length === 0) return null;
   const html = generateViewer({ ...data, entries });
-  const viewerPath = path13.join(outputDir, "viewer.html");
-  fs16.writeFileSync(viewerPath, html);
+  const viewerPath = path14.join(outputDir, "viewer.html");
+  fs17.writeFileSync(viewerPath, html);
   return viewerPath;
 }
 
 // src/artifacts/evidence.ts
-import * as fs17 from "fs";
-import * as path14 from "path";
-import { createHash as createHash2 } from "crypto";
-import { execFileSync as execFileSync3 } from "child_process";
+import * as fs18 from "fs";
+import * as path15 from "path";
+import { createHash as createHash3 } from "crypto";
+import { execFileSync as execFileSync4 } from "child_process";
 function writeCanonicalEvidence(options) {
   const events = collectEvents(options);
   applyPresentationFilters(events, options.environment?.sources || []);
@@ -4477,18 +4624,18 @@ function writeCanonicalEvidence(options) {
     screenshots
   };
   const verdict = buildVerdict(options, evidence);
-  fs17.writeFileSync(
-    path14.join(options.sessionDir, "evidence.json"),
+  fs18.writeFileSync(
+    path15.join(options.sessionDir, "evidence.json"),
     JSON.stringify(evidence, null, 2) + "\n"
   );
-  fs17.writeFileSync(
-    path14.join(options.sessionDir, "verdict.json"),
+  fs18.writeFileSync(
+    path15.join(options.sessionDir, "verdict.json"),
     JSON.stringify(verdict, null, 2) + "\n"
   );
   return { evidence, verdict };
 }
 function collectEvents(options) {
-  const environmentEvents = options.environment?.evidencePath && fs17.existsSync(options.environment.evidencePath) ? loadEvidenceEvents(options.environment.evidencePath) : [];
+  const environmentEvents = options.environment?.evidencePath && fs18.existsSync(options.environment.evidencePath) ? loadEvidenceEvents(options.environment.evidencePath) : [];
   if (environmentEvents.length === 0) {
     environmentEvents.push(
       ...options.serverEntries.map(
@@ -4641,12 +4788,12 @@ function isHidden(text, config) {
   return Boolean(config.exclude?.some((pattern) => text.includes(pattern)));
 }
 function inspectScreenshots(sessionDir) {
-  return fs17.readdirSync(sessionDir).filter((file) => file.endsWith(".png")).sort().map((file) => {
-    const contents = fs17.readFileSync(path14.join(sessionDir, file));
+  return fs18.readdirSync(sessionDir).filter((file) => file.endsWith(".png")).sort().map((file) => {
+    const contents = fs18.readFileSync(path15.join(sessionDir, file));
     const validPng = isValidPng(contents);
     return {
       file,
-      sha256: createHash2("sha256").update(contents).digest("hex"),
+      sha256: createHash3("sha256").update(contents).digest("hex"),
       validPng,
       size: contents.length
     };
@@ -4660,16 +4807,16 @@ function isValidPng(contents) {
 }
 function buildVerdict(options, evidence) {
   const missingArtifacts = [];
-  if (options.recordingWasActive && !fs17.existsSync(options.videoPath)) {
-    missingArtifacts.push(path14.basename(options.videoPath));
+  if (options.recordingWasActive && !fs18.existsSync(options.videoPath)) {
+    missingArtifacts.push(path15.basename(options.videoPath));
   }
   const screenshotFiles = new Set(
     evidence.screenshots.map((screenshot) => screenshot.file)
   );
   for (const action of options.actions) {
     const match = action.action.match(/^screenshot\s+(.+)$/);
-    if (match && !screenshotFiles.has(path14.basename(match[1]))) {
-      missingArtifacts.push(path14.basename(match[1]));
+    if (match && !screenshotFiles.has(path15.basename(match[1]))) {
+      missingArtifacts.push(path15.basename(match[1]));
     }
   }
   for (const screenshot of evidence.screenshots) {
@@ -4718,11 +4865,11 @@ function buildVerdict(options, evidence) {
   };
 }
 function probeMediaDuration(videoPath) {
-  if (!fs17.existsSync(videoPath)) {
+  if (!fs18.existsSync(videoPath)) {
     return null;
   }
   try {
-    const output = execFileSync3(
+    const output = execFileSync4(
       "ffprobe",
       [
         "-v",
@@ -4864,15 +5011,15 @@ function extractServerErrors(log) {
 }
 
 // src/commands/exec.ts
-import * as fs18 from "fs";
-import * as path15 from "path";
-import { execSync as execSync5 } from "child_process";
+import * as fs19 from "fs";
+import * as path16 from "path";
+import { execSync as execSync4 } from "child_process";
 var SESSION_LOG_FILENAME = "session-log.json";
 function loadSessionLog(sessionDir) {
-  const logPath = path15.join(sessionDir, SESSION_LOG_FILENAME);
-  if (!fs18.existsSync(logPath)) return [];
+  const logPath = path16.join(sessionDir, SESSION_LOG_FILENAME);
+  if (!fs19.existsSync(logPath)) return [];
   try {
-    return JSON.parse(fs18.readFileSync(logPath, "utf-8"));
+    return JSON.parse(fs19.readFileSync(logPath, "utf-8"));
   } catch {
     return [];
   }
@@ -4880,8 +5027,8 @@ function loadSessionLog(sessionDir) {
 function resolveScreenshotPath(args, sessionDir) {
   if (args[0] !== "screenshot" || args.length < 2) return args;
   const screenshotPath = args[args.length - 1];
-  if (path15.isAbsolute(screenshotPath)) return args;
-  const resolved = path15.join(sessionDir, screenshotPath);
+  if (path16.isAbsolute(screenshotPath)) return args;
+  const resolved = path16.join(sessionDir, screenshotPath);
   return [...args.slice(0, -1), resolved];
 }
 function buildShellCommand(args, sessionName) {
@@ -5037,16 +5184,16 @@ async function execCommand(args) {
     if (elementData) {
       entry.element = elementData;
     }
-    const logPath = path15.join(session.sessionDir, SESSION_LOG_FILENAME);
+    const logPath = path16.join(session.sessionDir, SESSION_LOG_FILENAME);
     const entries = loadSessionLog(session.sessionDir);
     entries.push(entry);
-    fs18.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+    fs19.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
     loggedEntry = entry;
     sessionLogPath = logPath;
   }
   const shellCmd = buildShellCommand(resolvedArgs, session?.sessionName);
   try {
-    const result = execSync5(shellCmd, {
+    const result = execSync4(shellCmd, {
       encoding: "utf-8",
       timeout: 6e4,
       stdio: ["pipe", "pipe", "pipe"],
@@ -5104,7 +5251,7 @@ function persistActionOutcome(entry, logPath, outcome, error) {
   if (error) {
     entry.error = error;
   }
-  const entries = loadSessionLog(path15.dirname(logPath));
+  const entries = loadSessionLog(path16.dirname(logPath));
   const matchingEntry = [...entries].reverse().find(
     (candidate) => candidate.timestamp === entry.timestamp && candidate.action === entry.action
   );
@@ -5113,13 +5260,13 @@ function persistActionOutcome(entry, logPath, outcome, error) {
     if (error) {
       matchingEntry.error = error;
     }
-    fs18.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+    fs19.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
   }
 }
 
 // src/utils/token-usage.ts
-import * as fs19 from "fs";
-import * as path16 from "path";
+import * as fs20 from "fs";
+import * as path17 from "path";
 import * as os5 from "os";
 function estimateTokenUsage(sessionDir, startTimeMs, endTimeMs) {
   const claudeUsage = tryClaudeCodeLogs(startTimeMs, endTimeMs);
@@ -5127,12 +5274,12 @@ function estimateTokenUsage(sessionDir, startTimeMs, endTimeMs) {
   return estimateFromContent(sessionDir);
 }
 function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
-  const claudeDir = path16.join(os5.homedir(), ".claude", "sessions");
-  if (!fs19.existsSync(claudeDir)) return null;
+  const claudeDir = path17.join(os5.homedir(), ".claude", "sessions");
+  if (!fs20.existsSync(claudeDir)) return null;
   try {
-    const files = fs19.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
+    const files = fs20.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
-      const data = JSON.parse(fs19.readFileSync(path16.join(claudeDir, file), "utf-8"));
+      const data = JSON.parse(fs20.readFileSync(path17.join(claudeDir, file), "utf-8"));
       const sessionStart = new Date(data.startedAt).getTime();
       if (sessionStart >= startTimeMs - 6e4 && sessionStart <= endTimeMs + 6e4) {
         if (data.totalInputTokens != null || data.totalOutputTokens != null || data.usage) {
@@ -5154,10 +5301,10 @@ function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
   return null;
 }
 function estimateFromContent(sessionDir) {
-  const logPath = path16.join(sessionDir, "session-log.json");
-  if (!fs19.existsSync(logPath)) return null;
+  const logPath = path17.join(sessionDir, "session-log.json");
+  if (!fs20.existsSync(logPath)) return null;
   try {
-    const entries = JSON.parse(fs19.readFileSync(logPath, "utf-8"));
+    const entries = JSON.parse(fs20.readFileSync(logPath, "utf-8"));
     if (!Array.isArray(entries) || entries.length === 0) return null;
     const actionCount = entries.length;
     const inputTokens = actionCount * 500;
@@ -5283,9 +5430,9 @@ async function stopCommand(options) {
   let consoleErrors = "";
   let consoleOutput = "";
   let consoleEntries = [];
-  const consoleErrorsPath = path17.join(session.sessionDir, "console-errors.log");
-  const consoleOutputPath = path17.join(session.sessionDir, "console-output.log");
-  const consoleEntriesPath = path17.join(session.sessionDir, "console-entries.json");
+  const consoleErrorsPath = path18.join(session.sessionDir, "console-errors.log");
+  const consoleOutputPath = path18.join(session.sessionDir, "console-output.log");
+  const consoleEntriesPath = path18.join(session.sessionDir, "console-entries.json");
   if (browserSessionAvailable) {
     try {
       consoleErrors = getConsoleErrors(session.sessionName);
@@ -5308,15 +5455,15 @@ async function stopCommand(options) {
     session.consoleErrorCount = capturedErrorLines.length > 0 && consoleErrors.trim() !== "" ? capturedErrorLines.length : 0;
     persistOwnedSession2(session, controlDir);
   } else if (priorConsoleEvidenceAvailable) {
-    if (fs20.existsSync(consoleErrorsPath)) {
-      consoleErrors = fs20.readFileSync(consoleErrorsPath, "utf-8");
+    if (fs21.existsSync(consoleErrorsPath)) {
+      consoleErrors = fs21.readFileSync(consoleErrorsPath, "utf-8");
     }
-    if (fs20.existsSync(consoleOutputPath)) {
-      consoleOutput = fs20.readFileSync(consoleOutputPath, "utf-8");
+    if (fs21.existsSync(consoleOutputPath)) {
+      consoleOutput = fs21.readFileSync(consoleOutputPath, "utf-8");
     }
-    if (fs20.existsSync(consoleEntriesPath)) {
+    if (fs21.existsSync(consoleEntriesPath)) {
       try {
-        const savedEntries = JSON.parse(fs20.readFileSync(consoleEntriesPath, "utf-8"));
+        const savedEntries = JSON.parse(fs21.readFileSync(consoleEntriesPath, "utf-8"));
         if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
       } catch {
       }
@@ -5364,18 +5511,18 @@ async function stopCommand(options) {
   }
   let serverLog = "";
   let serverEntries = [];
-  if (fs20.existsSync(session.serverErrorLog)) {
-    const rawServerLog = fs20.readFileSync(session.serverErrorLog, "utf-8");
+  if (fs21.existsSync(session.serverErrorLog)) {
+    const rawServerLog = fs21.readFileSync(session.serverErrorLog, "utf-8");
     const parsed = parseTimestampedServerLog(rawServerLog, startTime);
     serverLog = parsed.cleanText;
     serverEntries = parsed.entries;
   }
   const sessionDir = session.sessionDir;
-  const screenshots = fs20.existsSync(sessionDir) ? fs20.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
+  const screenshots = fs21.existsSync(sessionDir) ? fs21.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
   const sessionLog = loadSessionLog(sessionDir);
   let trimOffsetSec = session.trimOffsetSec ?? 0;
   if (!session.videoTrimComplete) {
-    if (fs20.existsSync(session.videoPath)) {
+    if (fs21.existsSync(session.videoPath)) {
       trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
     } else if (recordingWasActive) {
       console.log(
@@ -5398,7 +5545,7 @@ async function stopCommand(options) {
   const serverErrorLines = extractServerErrors(serverLog);
   const serverErrorCount = serverErrorLines.length;
   const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
-  const summaryPath = path17.join(sessionDir, "SUMMARY.md");
+  const summaryPath = path18.join(sessionDir, "SUMMARY.md");
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),
     description: session.description,
@@ -5417,7 +5564,7 @@ async function stopCommand(options) {
     durationSec,
     outputDir: sessionDir
   });
-  if (!retryingStoppedSession || !fs20.existsSync(summaryPath)) {
+  if (!retryingStoppedSession || !fs21.existsSync(summaryPath)) {
     writeTextFileAtomically(summaryPath, summary);
   }
   let viewerEntries = sessionLog;
@@ -5428,7 +5575,7 @@ async function stopCommand(options) {
     }));
   }
   if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
-    const logPath = path17.join(sessionDir, "session-log.json");
+    const logPath = path18.join(sessionDir, "session-log.json");
     writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + "\n");
   }
   if (!session.sessionLogAdjusted) {
@@ -5454,7 +5601,7 @@ async function stopCommand(options) {
     description: session.description,
     serverCommand: session.serverCommand,
     durationSec,
-    videoFilename: fs20.existsSync(session.videoPath) ? path17.basename(session.videoPath) : null,
+    videoFilename: fs21.existsSync(session.videoPath) ? path18.basename(session.videoPath) : null,
     consoleErrorCount,
     consoleEvidenceAvailable,
     serverErrorCount,
@@ -5464,6 +5611,23 @@ async function stopCommand(options) {
     serverEntries: viewerServerEntries.length > 0 ? viewerServerEntries : void 0,
     entries: viewerEntries.length > 0 ? viewerEntries : void 0,
     tokenUsage,
+    evidence,
+    verdict
+  });
+  const metadata = loadMetadata(sessionDir) || {
+    repository: "",
+    repositoryRoot: session.startDirectory,
+    branch: "",
+    commitSha: "",
+    treeHash: "",
+    sourceDirty: true,
+    startedAt: session.startedAt,
+    description: session.description
+  };
+  writeArtifactManifest({
+    sessionId: session.sessionName,
+    sessionDir,
+    metadata,
     evidence,
     verdict
   });
@@ -5478,7 +5642,7 @@ async function stopCommand(options) {
   console.log("");
   console.log(chalk3.green.bold("\u2705 ProofShot verification complete"));
   console.log("");
-  if (fs20.existsSync(session.videoPath)) {
+  if (fs21.existsSync(session.videoPath)) {
     console.log(`\u{1F4F9} Video:         ${chalk3.dim(session.videoPath)} (${durationSec}s)`);
   }
   console.log(`\u{1F4F8} Screenshots:   ${screenshots.length} captured`);
@@ -5526,10 +5690,10 @@ async function stopCommand(options) {
 function writeTextFileAtomically(filePath, contents) {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID3()}.tmp`;
   try {
-    fs20.writeFileSync(temporaryPath, contents);
-    fs20.renameSync(temporaryPath, filePath);
+    fs21.writeFileSync(temporaryPath, contents);
+    fs21.renameSync(temporaryPath, filePath);
   } finally {
-    if (fs20.existsSync(temporaryPath)) fs20.unlinkSync(temporaryPath);
+    if (fs21.existsSync(temporaryPath)) fs21.unlinkSync(temporaryPath);
   }
 }
 function persistOwnedSession2(session, controlDir) {
@@ -5542,7 +5706,7 @@ function clearOwnedSession2(session, controlDir) {
 }
 function generateProofSummary(data) {
   const date = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").slice(0, 19);
-  const projectName = path17.basename(data.projectDirectory);
+  const projectName = path18.basename(data.projectDirectory);
   let md = `# ProofShot Verification Report
 
 **Date:** ${date}
@@ -5557,7 +5721,7 @@ ${data.description}
 
 `;
   }
-  const relativeVideo = path17.basename(data.videoPath);
+  const relativeVideo = path18.basename(data.videoPath);
   md += `## Video Recording
 
 Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationSec}s)
@@ -5637,7 +5801,7 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
   } else if (screenshots.length > 0) {
     const timestamps = screenshots.map((f) => {
       try {
-        return fs20.statSync(path17.join(outputDir, f)).birthtimeMs;
+        return fs21.statSync(path18.join(outputDir, f)).birthtimeMs;
       } catch {
         return null;
       }
@@ -5653,18 +5817,18 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
   const trimEndSec = lastActionSec + BUFFER_AFTER;
   if (trimEndSec - trimStartSec < 5) return 0;
   try {
-    execFileSync4("ffmpeg", ["-version"], { stdio: "pipe" });
+    execFileSync5("ffmpeg", ["-version"], { stdio: "pipe" });
   } catch {
     console.log(chalk3.dim("Tip: Install ffmpeg to auto-trim dead time from videos."));
     return 0;
   }
-  const dir = path17.dirname(videoPath);
-  const ext = path17.extname(videoPath);
-  const base = path17.basename(videoPath, ext);
-  const rawPath = path17.join(dir, `${base}-raw${ext}`);
+  const dir = path18.dirname(videoPath);
+  const ext = path18.extname(videoPath);
+  const base = path18.basename(videoPath, ext);
+  const rawPath = path18.join(dir, `${base}-raw${ext}`);
   try {
-    fs20.renameSync(videoPath, rawPath);
-    execFileSync4(
+    fs21.renameSync(videoPath, rawPath);
+    execFileSync5(
       "ffmpeg",
       [
         "-y",
@@ -5683,26 +5847,26 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
       { stdio: "pipe", timeout: 6e4 }
     );
     validateTrimmedVideo(videoPath);
-    fs20.unlinkSync(rawPath);
+    fs21.unlinkSync(rawPath);
     const trimmedDuration = Math.round(trimEndSec - trimStartSec);
     console.log(chalk3.dim(`Trimmed video to ${trimmedDuration}s (removed dead time)`));
     return trimStartSec;
   } catch {
-    if (fs20.existsSync(videoPath)) {
-      fs20.unlinkSync(videoPath);
+    if (fs21.existsSync(videoPath)) {
+      fs21.unlinkSync(videoPath);
     }
-    if (fs20.existsSync(rawPath)) {
-      fs20.renameSync(rawPath, videoPath);
+    if (fs21.existsSync(rawPath)) {
+      fs21.renameSync(rawPath, videoPath);
     }
     console.log(chalk3.dim("Video trimming failed, keeping original"));
     return 0;
   }
 }
 function validateTrimmedVideo(videoPath) {
-  if (!fs20.existsSync(videoPath) || fs20.statSync(videoPath).size === 0) {
+  if (!fs21.existsSync(videoPath) || fs21.statSync(videoPath).size === 0) {
     throw new Error("FFmpeg produced an empty video");
   }
-  execFileSync4(
+  execFileSync5(
     "ffmpeg",
     ["-v", "error", "-i", videoPath, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-"],
     { stdio: "pipe", timeout: 6e4 }
@@ -5710,39 +5874,39 @@ function validateTrimmedVideo(videoPath) {
 }
 
 // src/commands/diff.ts
-import * as fs21 from "fs";
-import * as path18 from "path";
+import * as fs22 from "fs";
+import * as path19 from "path";
 import chalk4 from "chalk";
 async function diffCommand(options) {
   const config = loadConfig();
-  const currentDir = path18.resolve(config.output);
-  const baselineDir = path18.resolve(options.baseline);
-  if (!fs21.existsSync(baselineDir)) {
+  const currentDir = path19.resolve(config.output);
+  const baselineDir = path19.resolve(options.baseline);
+  if (!fs22.existsSync(baselineDir)) {
     console.error(chalk4.red("\u2717") + ` Baseline directory not found: ${baselineDir}`);
     process.exit(1);
   }
-  if (!fs21.existsSync(currentDir)) {
+  if (!fs22.existsSync(currentDir)) {
     console.error(
       chalk4.red("\u2717") + ` Current artifacts not found: ${currentDir}
 ` + chalk4.dim('Run "proofshot verify" first to generate screenshots.')
     );
     process.exit(1);
   }
-  const baselineFiles = fs21.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
-  const currentFiles = fs21.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const baselineFiles = fs22.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const currentFiles = fs22.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
   if (baselineFiles.length === 0) {
     console.error(chalk4.red("\u2717") + " No baseline screenshots found (looking for page-*.png)");
     process.exit(1);
   }
-  const diffDir = path18.join(currentDir, "diffs");
-  fs21.mkdirSync(diffDir, { recursive: true });
+  const diffDir = path19.join(currentDir, "diffs");
+  fs22.mkdirSync(diffDir, { recursive: true });
   console.log(chalk4.dim("Comparing screenshots...\n"));
   let hasChanges = false;
   for (const file of baselineFiles) {
-    const baselinePath = path18.join(baselineDir, file);
-    const currentPath = path18.join(currentDir, file);
-    const diffPath = path18.join(diffDir, `diff-${file}`);
-    if (!fs21.existsSync(currentPath)) {
+    const baselinePath = path19.join(baselineDir, file);
+    const currentPath = path19.join(currentDir, file);
+    const diffPath = path19.join(diffDir, `diff-${file}`);
+    if (!fs22.existsSync(currentPath)) {
       console.log(chalk4.yellow("\u26A0") + ` ${file}: no matching current screenshot (page removed?)`);
       continue;
     }
@@ -5773,13 +5937,13 @@ async function diffCommand(options) {
 }
 
 // src/commands/clean.ts
-import * as fs22 from "fs";
-import * as path19 from "path";
+import * as fs23 from "fs";
+import * as path20 from "path";
 import chalk5 from "chalk";
 async function cleanCommand() {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
-  const outputDir = path19.resolve(config.output);
+  const outputDir = path20.resolve(config.output);
   if (hasActiveSession(controlDir)) {
     console.error(
       chalk5.red("\u2717") + " Cannot clean while a ProofShot session owns browser or server processes.\n" + chalk5.dim('Run "proofshot stop" first so exact cleanup metadata is preserved.')
@@ -5787,31 +5951,31 @@ async function cleanCommand() {
     process.exit(1);
     return;
   }
-  if (!fs22.existsSync(outputDir)) {
+  if (!fs23.existsSync(outputDir)) {
     console.log(chalk5.dim("Nothing to clean \u2014 no artifacts directory found."));
     return;
   }
-  fs22.rmSync(outputDir, { recursive: true, force: true });
+  fs23.rmSync(outputDir, { recursive: true, force: true });
   console.log(chalk5.green("\u2713") + ` Removed ${chalk5.dim(outputDir)}`);
 }
 
 // src/commands/pr.ts
-import * as fs24 from "fs";
-import * as path21 from "path";
-import { execSync as execSync7 } from "child_process";
+import * as fs26 from "fs";
+import * as path23 from "path";
+import { createHash as createHash4 } from "crypto";
 import chalk6 from "chalk";
 
 // src/utils/github.ts
-import * as fs23 from "fs";
-import * as path20 from "path";
-import { execSync as execSync6 } from "child_process";
+import * as fs24 from "fs";
+import * as path21 from "path";
+import { execFileSync as execFileSync6, execSync as execSync5 } from "child_process";
 var GITHUB_API_VERSION = "2022-11-28";
 var DEFAULT_ARTIFACTS_BRANCH = "proofshot-artifacts";
 function getGitHubToken() {
   const envToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (envToken) return envToken.trim();
   try {
-    return execSync6("gh auth token", {
+    return execSync5("gh auth token", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"]
     }).trim();
@@ -5825,7 +5989,7 @@ function getGitHubToken() {
 async function getRepoInfo(token) {
   let nwo;
   try {
-    nwo = execSync6("gh repo view --json nameWithOwner -q .nameWithOwner", {
+    nwo = execSync5("gh repo view --json nameWithOwner -q .nameWithOwner", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"]
     }).trim();
@@ -5852,7 +6016,7 @@ function getPRNumber(explicitPR) {
     }
     const num = parseInt(explicitPR, 10);
     try {
-      execSync6(`gh pr view ${num} --json number -q .number`, {
+      execSync5(`gh pr view ${num} --json number -q .number`, {
         encoding: "utf-8",
         stdio: ["pipe", "pipe", "pipe"]
       });
@@ -5862,7 +6026,7 @@ function getPRNumber(explicitPR) {
     return num;
   }
   try {
-    const numStr = execSync6("gh pr view --json number -q .number", {
+    const numStr = execSync5("gh pr view --json number -q .number", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"]
     }).trim();
@@ -5873,8 +6037,37 @@ function getPRNumber(explicitPR) {
     );
   }
 }
+function getPRHeadProvenance(prNumber) {
+  try {
+    const raw = execFileSync6(
+      "gh",
+      [
+        "pr",
+        "view",
+        String(prNumber),
+        "--json",
+        "headRefOid,headRefName,headRepository"
+      ],
+      {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+    const parsed = JSON.parse(raw);
+    return {
+      repository: `github.com/${parsed.headRepository.nameWithOwner}`,
+      branch: parsed.headRefName,
+      headSha: parsed.headRefOid
+    };
+  } catch (error) {
+    throw new ProofShotError(
+      `Could not resolve the head provenance for PR #${prNumber}.`,
+      error
+    );
+  }
+}
 function getContentType(filePath) {
-  const ext = path20.extname(filePath).toLowerCase();
+  const ext = path21.extname(filePath).toLowerCase();
   switch (ext) {
     case ".png":
       return "image/png";
@@ -5894,8 +6087,8 @@ function getContentType(filePath) {
   }
 }
 async function uploadAsset(filePath, token, repoId) {
-  const fileName = path20.basename(filePath);
-  const fileSize = fs23.statSync(filePath).size;
+  const fileName = path21.basename(filePath);
+  const fileSize = fs24.statSync(filePath).size;
   const contentType = getContentType(filePath);
   const policyResponse = await fetch("https://github.com/upload/policies/assets", {
     method: "POST",
@@ -5929,7 +6122,7 @@ GitHub response: ${body}`
     );
   }
   const policy = await policyResponse.json();
-  const fileBuffer = fs23.readFileSync(filePath);
+  const fileBuffer = fs24.readFileSync(filePath);
   const formData = new FormData();
   for (const [key, value] of Object.entries(policy.form)) {
     formData.append(key, value);
@@ -5961,7 +6154,7 @@ async function uploadAssetsToWebAttachments(options) {
   const { filePaths, token, repo, onProgress } = options;
   for (let i = 0; i < filePaths.length; i += 1) {
     const filePath = filePaths[i];
-    const fileName = path20.basename(filePath);
+    const fileName = path21.basename(filePath);
     onProgress?.(i + 1, filePaths.length, fileName);
     try {
       const asset = await uploadAsset(filePath, token, repo.id);
@@ -5978,13 +6171,13 @@ async function uploadAssetsToRepoContents(options) {
   await ensureArtifactsBranch(options.repo, artifactsBranch, options.token);
   for (let i = 0; i < options.filePaths.length; i += 1) {
     const filePath = options.filePaths[i];
-    const fileName = path20.basename(filePath);
+    const fileName = path21.basename(filePath);
     options.onProgress?.(i + 1, options.filePaths.length, fileName);
     try {
-      const content = fs23.readFileSync(filePath, "base64");
-      const uploadPath = path20.posix.join(
+      const content = fs24.readFileSync(filePath, "base64");
+      const uploadPath = path21.posix.join(
         options.uploadRoot,
-        path20.basename(path20.dirname(filePath)),
+        path21.basename(path21.dirname(filePath)),
         fileName
       );
       await githubApi(
@@ -6062,7 +6255,7 @@ async function githubApi(apiPath, token, init = {}) {
 }
 function postPRComment(prNumber, body) {
   try {
-    execSync6(`gh pr comment ${prNumber} --body-file -`, {
+    execSync5(`gh pr comment ${prNumber} --body-file -`, {
       input: body,
       encoding: "utf-8",
       timeout: 12e4,
@@ -6149,122 +6342,220 @@ function formatPRComment(data) {
   return md;
 }
 
+// src/session/publication.ts
+import * as fs25 from "fs";
+import * as path22 from "path";
+function selectPublication(options) {
+  const sessions = discoverFinalizedSessions(options.outputDir);
+  let candidates;
+  if (options.sessionId) {
+    candidates = sessions.filter(
+      ({ sessionDir, manifest }) => manifest.sessionId === options.sessionId || path22.basename(sessionDir) === options.sessionId
+    );
+    if (candidates.length === 0) {
+      throw new Error(
+        `Finalized ProofShot session not found: ${options.sessionId}`
+      );
+    }
+  } else {
+    candidates = sessions.filter(
+      ({ manifest }) => isCompatibleManifest(manifest, options)
+    );
+    if (candidates.length !== 1) {
+      const choices = candidates.map(
+        ({ manifest }) => `${manifest.sessionId} (${manifest.verdict}, ${manifest.commitSha.slice(0, 7)})`
+      );
+      throw new Error(
+        candidates.length === 0 ? "No complete finalized session matches the target PR head. Use --session to inspect an explicit choice." : `Multiple complete sessions match the target PR head. Choose one with --session:
+${choices.join("\n")}`
+      );
+    }
+  }
+  if (candidates.length > 1) {
+    throw new Error(
+      `Session ID is ambiguous: ${options.sessionId}. Use the exact session folder name.`
+    );
+  }
+  const selected = candidates[0];
+  assertCompatibleManifest(selected.manifest, options);
+  validateManifestArtifacts(selected.sessionDir, selected.manifest);
+  assertRequiredManifestArtifacts(selected.manifest);
+  const allScreenshots = selected.manifest.artifacts.filter(
+    (artifact) => artifact.kind === "screenshot"
+  );
+  const screenshots = options.screenshotIds?.length ? selectScreenshots(allScreenshots, options.screenshotIds) : allScreenshots;
+  const videos = selected.manifest.artifacts.filter(
+    (artifact) => artifact.kind === "video"
+  );
+  if (videos.length > 1) {
+    throw new Error("Finalized session contains multiple video artifacts.");
+  }
+  return {
+    ...selected,
+    screenshots,
+    video: videos[0] || null
+  };
+}
+function discoverFinalizedSessions(outputDir) {
+  if (!fs25.existsSync(outputDir)) {
+    return [];
+  }
+  return fs25.readdirSync(outputDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).map((entry) => path22.join(outputDir, entry.name)).map((sessionDir) => ({
+    sessionDir,
+    manifest: loadArtifactManifest(sessionDir)
+  })).filter(
+    (entry) => entry.manifest !== null
+  ).sort(
+    (left, right) => right.manifest.finalizedAt.localeCompare(left.manifest.finalizedAt)
+  );
+}
+function isCompatibleManifest(manifest, target) {
+  return manifest.completion === "complete" && manifest.verdict !== "INCOMPLETE" && manifest.verdict !== "BLOCKED" && !manifest.sourceDirty && !manifest.sourceDrift && manifest.repository === target.repository && manifest.branch === target.branch && manifest.commitSha === target.headSha;
+}
+function assertCompatibleManifest(manifest, target) {
+  const reasons = [];
+  if (manifest.completion !== "complete") reasons.push("session is incomplete");
+  if (manifest.verdict === "INCOMPLETE" || manifest.verdict === "BLOCKED") {
+    reasons.push(`verdict is ${manifest.verdict}`);
+  }
+  if (manifest.sourceDirty || manifest.sourceDrift) {
+    reasons.push("source drift was detected");
+  }
+  if (manifest.repository !== target.repository) {
+    reasons.push("repository does not match");
+  }
+  if (manifest.branch !== target.branch) reasons.push("branch does not match");
+  if (manifest.commitSha !== target.headSha) {
+    reasons.push("commit does not match the target PR head");
+  }
+  if (reasons.length > 0) {
+    throw new Error(
+      `Session ${manifest.sessionId} cannot be published: ${reasons.join("; ")}.`
+    );
+  }
+}
+function assertRequiredManifestArtifacts(manifest) {
+  for (const kind of ["evidence", "verdict"]) {
+    if (!manifest.artifacts.some((artifact) => artifact.kind === kind)) {
+      throw new Error(
+        `Finalized session is missing its ${kind} artifact record.`
+      );
+    }
+  }
+}
+function selectScreenshots(screenshots, requested) {
+  const selected = [];
+  for (const selector of requested) {
+    const matches = screenshots.filter(
+      (artifact) => artifact.id === selector || artifact.path === selector || path22.basename(artifact.path) === selector
+    );
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0 ? `Screenshot artifact not found: ${selector}` : `Screenshot selector is ambiguous: ${selector}`
+      );
+    }
+    if (selected.some((artifact) => artifact.id === matches[0].id)) {
+      throw new Error(`Screenshot selected more than once: ${selector}`);
+    }
+    selected.push(matches[0]);
+  }
+  return selected;
+}
+
 // src/commands/pr.ts
 async function prCommand(options) {
   const config = loadConfig();
-  const outputDir = path21.resolve(config.output);
+  const outputDir = path23.resolve(config.output);
   const uploadProvider = normalizeUploadProvider(options.uploadProvider);
   const artifactsBranch = options.artifactsBranch || "proofshot-artifacts";
-  let branch;
-  try {
-    branch = execSync7("git branch --show-current", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"]
-    }).trim();
-  } catch {
-    console.error(chalk6.red("\u2717") + " Not in a git repository.");
-    process.exit(1);
-  }
-  if (!branch) {
-    console.error(chalk6.red("\u2717") + " Detached HEAD \u2014 cannot determine branch.");
-    process.exit(1);
-  }
-  console.log(chalk6.dim(`Branch: ${branch}`));
-  const sessionDirs = findSessionsForBranch(outputDir, branch);
-  if (sessionDirs.length === 0) {
-    console.error(
-      chalk6.red("\u2717") + ` No ProofShot sessions found for branch "${branch}".
-` + chalk6.dim('Run "proofshot start" and "proofshot stop" first.')
+  const local = captureGitProvenance();
+  if (!local.repository || !local.branch || !local.commitSha) {
+    throw new Error(
+      "ProofShot could not determine the current repository, branch, and commit."
     );
-    process.exit(1);
   }
-  console.log(chalk6.dim(`Found ${sessionDirs.length} session(s) for this branch`));
-  const screenshotPaths = [];
-  let videoPath = null;
-  let errorCount = 0;
-  let latestCommitSha = "";
-  let description = null;
-  for (const sessionDir of sessionDirs) {
-    const metadata = loadMetadata(sessionDir);
-    if (metadata) {
-      if (!description && metadata.description) description = metadata.description;
-      if (metadata.commitSha) latestCommitSha = metadata.commitSha;
+  const prNumber = options.dryRun ? null : getPRNumber(options.prNumber);
+  const target = prNumber ? getPRHeadProvenance(prNumber) : {
+    repository: local.repository,
+    branch: local.branch,
+    headSha: local.commitSha
+  };
+  console.log(
+    chalk6.dim(
+      `Target: ${target.repository} ${target.branch}@${target.headSha.slice(0, 7)}`
+    )
+  );
+  let selection;
+  try {
+    selection = selectPublication({
+      outputDir,
+      sessionId: options.session,
+      screenshotIds: options.screenshot,
+      ...target
+    });
+  } catch (error) {
+    if (!options.legacySession) {
+      throw error;
     }
-    const files = fs24.readdirSync(sessionDir);
-    for (const f of files) {
-      if (f.endsWith(".png")) {
-        screenshotPaths.push(path21.join(sessionDir, f));
-      }
-    }
-    if (!videoPath) {
-      for (const f of files) {
-        if (f === "session.webm" || f === "session.mp4") {
-          videoPath = path21.join(sessionDir, f);
-          break;
-        }
-      }
-    }
-    const summaryPath = path21.join(sessionDir, "SUMMARY.md");
-    if (fs24.existsSync(summaryPath)) {
-      const summary = fs24.readFileSync(summaryPath, "utf-8");
-      const errorMatch = summary.match(/(\d+)\s+error/gi);
-      if (errorMatch) {
-        for (const m of errorMatch) {
-          const num = parseInt(m, 10);
-          if (!isNaN(num)) errorCount += num;
-        }
-      }
-    }
+    selection = selectLegacyPublication({
+      outputDir,
+      sessionId: options.session,
+      screenshotIds: options.screenshot,
+      ...target
+    });
+    console.log(
+      chalk6.yellow(
+        "\u26A0 Publishing an explicitly selected legacy session without a finalized provenance manifest."
+      )
+    );
   }
-  if (videoPath && videoPath.endsWith(".webm")) {
-    const mp4Path = videoPath.replace(/\.webm$/, ".mp4");
-    if (fs24.existsSync(mp4Path)) {
-      videoPath = mp4Path;
-    } else {
-      try {
-        execSync7("ffmpeg -version", { stdio: "pipe" });
-        console.log(chalk6.dim("Converting video to .mp4..."));
-        execSync7(
-          `ffmpeg -i "${videoPath}" -c:v libx264 -preset fast -crf 23 -an "${mp4Path}"`,
-          { stdio: "pipe", timeout: 12e4 }
-        );
-        videoPath = mp4Path;
-        console.log(chalk6.green("\u2713") + " Video converted to .mp4");
-      } catch {
-        console.log(chalk6.dim("ffmpeg not available \u2014 uploading .webm directly"));
-      }
-    }
+  const metadata = loadMetadata(selection.sessionDir);
+  const description = metadata?.description || null;
+  const screenshotPaths = selection.screenshots.map(
+    (artifact) => path23.join(selection.sessionDir, artifact.path)
+  );
+  const videoPath = selection.video ? path23.join(selection.sessionDir, selection.video.path) : null;
+  const errorCount = readIncidentCount(selection.sessionDir);
+  const filesToUpload = [
+    ...screenshotPaths,
+    ...videoPath ? [videoPath] : []
+  ];
+  if (filesToUpload.length === 0) {
+    throw new Error("The selected session has no publishable screenshots or video.");
   }
   if (options.dryRun) {
     const screenshotMap2 = /* @__PURE__ */ new Map();
     for (const ssPath of screenshotPaths) {
-      const label = screenshotLabel(ssPath);
+      const label = path23.basename(ssPath);
       screenshotMap2.set(label, `https://github.com/user-attachments/assets/<${label}>`);
     }
     const commentData2 = {
       description,
-      sessionCount: sessionDirs.length,
+      sessionCount: 1,
       screenshots: screenshotMap2,
       video: videoPath ? {
-        url: `https://github.com/user-attachments/assets/<${path21.basename(videoPath)}>`,
+        url: `https://github.com/user-attachments/assets/<${path23.basename(videoPath)}>`,
         renderMode: "embed"
       } : null,
       errorCount,
-      branch,
-      commitSha: latestCommitSha
+      branch: selection.manifest.branch,
+      commitSha: selection.manifest.commitSha
     };
     console.log("");
     console.log(chalk6.yellow("--- Dry run (not posted) ---"));
     console.log(formatPRComment(commentData2));
     return;
   }
-  const prNumber = getPRNumber(options.prNumber);
+  if (prNumber === null) {
+    throw new Error("A target PR is required for publication.");
+  }
   console.log(chalk6.dim(`Target PR: #${prNumber}`));
   const token = getGitHubToken();
   const repoInfo = await getRepoInfo(token);
-  const filesToUpload = [...screenshotPaths];
-  if (videoPath) filesToUpload.push(videoPath);
-  const uploadRoot = buildUploadRoot(branch, prNumber, latestCommitSha);
+  const uploadRoot = buildUploadRoot(
+    prNumber,
+    selection.manifest
+  );
   console.log(chalk6.dim(`Upload provider: ${uploadProvider}`));
   if (uploadProvider === "repo-contents") {
     console.log(chalk6.dim(`Artifacts branch: ${artifactsBranch}`));
@@ -6281,45 +6572,34 @@ async function prCommand(options) {
       console.log(chalk6.dim(`  [${current}/${total}] ${fileName}`));
     }
   });
+  if (uploaded.size !== filesToUpload.length) {
+    throw new Error(
+      `Only ${uploaded.size}/${filesToUpload.length} artifacts uploaded. PR comment was not posted.`
+    );
+  }
   const screenshotMap = /* @__PURE__ */ new Map();
-  let failedUploads = 0;
   for (const ssPath of screenshotPaths) {
     const asset = uploaded.get(ssPath);
-    if (asset) {
-      screenshotMap.set(screenshotLabel(ssPath), asset.url);
-    } else {
-      failedUploads++;
-    }
+    if (!asset) throw new Error(`Missing uploaded screenshot: ${ssPath}`);
+    screenshotMap.set(path23.basename(ssPath), asset.url);
   }
   let video = null;
   if (videoPath) {
     const videoAsset = uploaded.get(videoPath);
-    if (videoAsset) {
-      video = {
-        url: videoAsset.url,
-        renderMode: uploadProvider === "repo-contents" ? "link" : "embed"
-      };
-    } else failedUploads++;
-  }
-  if (failedUploads > 0) {
-    console.log(chalk6.yellow(`\u26A0 ${failedUploads} artifact(s) failed to upload`));
-  }
-  if (filesToUpload.length > 0 && uploaded.size === 0) {
-    console.error(
-      chalk6.red("\u2717") + " All artifact uploads failed. PR comment was not posted.\n" + chalk6.dim(
-        uploadProvider === "github-web-attachments" ? 'Retry with "proofshot pr --upload-provider repo-contents" or use "proofshot pr --dry-run".' : 'Retry with "proofshot pr --dry-run" to inspect the generated markdown.'
-      )
-    );
-    process.exit(1);
+    if (!videoAsset) throw new Error(`Missing uploaded video: ${videoPath}`);
+    video = {
+      url: videoAsset.url,
+      renderMode: uploadProvider === "repo-contents" ? "link" : "embed"
+    };
   }
   const commentData = {
     description,
-    sessionCount: sessionDirs.length,
+    sessionCount: 1,
     screenshots: screenshotMap,
     video,
     errorCount,
-    branch,
-    commitSha: latestCommitSha
+    branch: selection.manifest.branch,
+    commitSha: selection.manifest.commitSha
   };
   const commentBody = formatPRComment(commentData);
   console.log(chalk6.dim("Posting PR comment..."));
@@ -6330,16 +6610,101 @@ async function prCommand(options) {
     chalk6.dim(`  ${screenshotMap.size} screenshot(s), ${video ? "1 video" : "no video"}`)
   );
 }
-function screenshotLabel(ssPath) {
-  const sessionDir = path21.basename(path21.dirname(ssPath));
-  const fileName = path21.basename(ssPath);
-  return `${sessionDir}/${fileName}`;
+function buildUploadRoot(prNumber, manifest) {
+  const sessionId = manifest.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
+  const manifestHash = createHash4("sha256").update(JSON.stringify(manifest)).digest("hex").slice(0, 12);
+  return path23.posix.join(
+    "proofshot",
+    `pr-${prNumber}`,
+    sessionId,
+    manifestHash
+  );
 }
-function buildUploadRoot(branch, prNumber, commitSha) {
-  const sanitizedBranch = branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
-  const sha = commitSha ? commitSha.slice(0, 7) : "unknown-sha";
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  return path21.posix.join("proofshot", `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
+function readIncidentCount(sessionDir) {
+  try {
+    const evidence = JSON.parse(
+      fs26.readFileSync(path23.join(sessionDir, "evidence.json"), "utf-8")
+    );
+    return (evidence.incidents || []).reduce(
+      (total, incident) => total + (incident.count || 0),
+      0
+    );
+  } catch {
+    return 0;
+  }
+}
+function selectLegacyPublication(options) {
+  if (!options.sessionId || path23.basename(options.sessionId) !== options.sessionId) {
+    throw new Error(
+      "Legacy publication requires an exact --session folder name."
+    );
+  }
+  const sessionDir = path23.join(options.outputDir, options.sessionId);
+  const stat = fs26.lstatSync(sessionDir);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("Legacy session is not a safe directory.");
+  }
+  if (fs26.existsSync(path23.join(sessionDir, "artifact-manifest.json"))) {
+    throw new Error(
+      "A finalized manifest exists; --legacy-session cannot bypass its validation."
+    );
+  }
+  const metadata = loadMetadata(sessionDir);
+  if (!metadata || metadata.branch !== options.branch || metadata.commitSha !== options.headSha) {
+    throw new Error(
+      "Legacy session branch and commit must match the target PR head."
+    );
+  }
+  const artifacts = fs26.readdirSync(sessionDir, { withFileTypes: true }).filter(
+    (entry) => entry.isFile() && !entry.isSymbolicLink() && (entry.name.endsWith(".png") || entry.name === "session.webm" || entry.name === "session.mp4")
+  ).map((entry, order) => {
+    const contents = fs26.readFileSync(path23.join(sessionDir, entry.name));
+    return {
+      id: `${entry.name.endsWith(".png") ? "screenshot" : "video"}:${entry.name}`,
+      kind: entry.name.endsWith(".png") ? "screenshot" : "video",
+      path: entry.name,
+      sha256: createHash4("sha256").update(contents).digest("hex"),
+      size: contents.length,
+      order
+    };
+  });
+  const screenshots = artifacts.filter(
+    (artifact) => artifact.kind === "screenshot"
+  );
+  const requestedScreenshots = options.screenshotIds?.length ? options.screenshotIds.map((selector) => {
+    const matches = screenshots.filter(
+      (artifact) => artifact.id === selector || artifact.path === selector || path23.basename(artifact.path) === selector
+    );
+    if (matches.length !== 1) {
+      throw new Error(`Legacy screenshot selection failed: ${selector}`);
+    }
+    return matches[0];
+  }) : screenshots;
+  const videos = artifacts.filter((artifact) => artifact.kind === "video");
+  if (videos.length > 1) {
+    throw new Error("Legacy session contains multiple videos.");
+  }
+  const manifest = {
+    version: 1,
+    sessionId: options.sessionId,
+    repository: options.repository,
+    branch: metadata.branch,
+    commitSha: metadata.commitSha,
+    treeHash: metadata.treeHash || "",
+    sourceDirty: true,
+    sourceDrift: true,
+    startedAt: metadata.startedAt,
+    finalizedAt: metadata.startedAt,
+    completion: "complete",
+    verdict: "BLOCKED",
+    artifacts
+  };
+  return {
+    sessionDir,
+    manifest,
+    screenshots: requestedScreenshots,
+    video: videos[0] || null
+  };
 }
 function normalizeUploadProvider(provider) {
   if (!provider || provider === "repo-contents" || provider === "github-web-attachments") {
@@ -6531,7 +6896,13 @@ function createCLI() {
   program.command("doctor").description("Inspect the local ProofShot environment and active session state").action(async () => {
     await doctorCommand();
   });
-  program.command("pr").description("Upload session artifacts and post a ProofShot comment on a GitHub PR").argument("[pr-number]", "PR number (auto-detects from current branch if omitted)").option("--dry-run", "Generate the comment markdown without posting").option(
+  program.command("pr").description("Upload session artifacts and post a ProofShot comment on a GitHub PR").argument("[pr-number]", "PR number (auto-detects from current branch if omitted)").option("--dry-run", "Generate the comment markdown without posting").option("--session <id>", "Publish one finalized session").option(
+    "--screenshot <artifact...>",
+    "Publish only the named screenshot artifact(s)"
+  ).option(
+    "--legacy-session",
+    "Allow one explicitly selected pre-manifest session"
+  ).option(
     "--upload-provider <provider>",
     "Artifact upload backend: repo-contents or github-web-attachments",
     "repo-contents"
@@ -6557,6 +6928,7 @@ function createCLI() {
 export {
   ProofShotError,
   ab,
+  captureGitProvenance,
   createCLI,
   ensureDevServer,
   findSessionsForBranch,
@@ -6564,13 +6936,16 @@ export {
   generateViewer,
   installCommand,
   isPortOpen,
+  loadArtifactManifest,
   loadConfig,
   loadMetadata,
   loadSession,
   saveSession,
   startOwnedEnvironment,
   stopOwnedEnvironment,
+  validateManifestArtifacts,
   waitForPort,
+  writeArtifactManifest,
   writeCanonicalEvidence,
   writeConfig,
   writeMetadata,

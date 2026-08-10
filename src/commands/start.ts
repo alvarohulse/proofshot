@@ -1,6 +1,5 @@
 import * as path from 'path';
 import chalk from 'chalk';
-import { execSync } from 'child_process';
 import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { ensureDevServer } from '../server/start.js';
@@ -24,6 +23,7 @@ import {
 import { cleanupFailedStart } from '../session/lifecycle.js';
 import { registerSession, unregisterSession } from '../session/registry.js';
 import { writeMetadata } from '../session/metadata.js';
+import { captureGitProvenance } from '../session/manifest.js';
 import { startOwnedEnvironment } from '../environment/runtime.js';
 
 interface StartOptions {
@@ -102,28 +102,11 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const videoPath = path.join(sessionDir, 'session.webm');
   const serverErrorLog = path.join(sessionDir, 'server.log');
 
-  let branch = '';
-  let commitSha = '';
-  try {
-    branch = execSync('git branch --show-current', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch {
-    // Non-fatal outside a git repo.
-  }
-  try {
-    commitSha = execSync('git rev-parse HEAD', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch {
-    // Non-fatal outside a git repo.
-  }
+  const provenance = captureGitProvenance();
 
   writeMetadata(sessionDir, {
-    branch,
-    commitSha,
+    ...provenance,
+    repositoryRoot: process.cwd(),
     startedAt: new Date().toISOString(),
     description: options.description || null,
   });

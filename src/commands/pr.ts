@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { createHash } from 'crypto';
 import chalk from 'chalk';
 import { loadConfig } from '../utils/config.js';
 import {
@@ -8,17 +8,30 @@ import {
   getGitHubToken,
   getRepoInfo,
   getPRNumber,
+  getPRHeadProvenance,
   uploadAssets,
   postPRComment,
 } from '../utils/github.js';
-import { findSessionsForBranch, loadMetadata } from '../session/metadata.js';
+import { loadMetadata } from '../session/metadata.js';
 import { formatPRComment, type PRCommentData } from '../artifacts/pr-format.js';
+import {
+  captureGitProvenance,
+  type ArtifactManifest,
+  type ManifestArtifact,
+} from '../session/manifest.js';
+import {
+  selectPublication,
+  type PublicationSelection,
+} from '../session/publication.js';
 
 interface PROptions {
   prNumber?: string;
   dryRun?: boolean;
   uploadProvider?: GitHubUploadProvider;
   artifactsBranch?: string;
+  session?: string;
+  screenshot?: string[];
+  legacySession?: boolean;
 }
 
 export async function prCommand(options: PROptions): Promise<void> {
@@ -26,119 +39,81 @@ export async function prCommand(options: PROptions): Promise<void> {
   const outputDir = path.resolve(config.output);
   const uploadProvider = normalizeUploadProvider(options.uploadProvider);
   const artifactsBranch = options.artifactsBranch || 'proofshot-artifacts';
-
-  // 1. Determine current branch
-  let branch: string;
-  try {
-    branch = execSync('git branch --show-current', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch {
-    console.error(chalk.red('✗') + ' Not in a git repository.');
-    process.exit(1);
-  }
-
-  if (!branch) {
-    console.error(chalk.red('✗') + ' Detached HEAD — cannot determine branch.');
-    process.exit(1);
-  }
-
-  console.log(chalk.dim(`Branch: ${branch}`));
-
-  // 2. Find session folders for this branch
-  const sessionDirs = findSessionsForBranch(outputDir, branch);
-
-  if (sessionDirs.length === 0) {
-    console.error(
-      chalk.red('✗') +
-        ` No ProofShot sessions found for branch "${branch}".\n` +
-        chalk.dim('Run "proofshot start" and "proofshot stop" first.'),
+  const local = captureGitProvenance();
+  if (!local.repository || !local.branch || !local.commitSha) {
+    throw new Error(
+      'ProofShot could not determine the current repository, branch, and commit.',
     );
-    process.exit(1);
+  }
+  const prNumber = options.dryRun
+    ? null
+    : getPRNumber(options.prNumber);
+  const target = prNumber
+    ? getPRHeadProvenance(prNumber)
+    : {
+        repository: local.repository,
+        branch: local.branch,
+        headSha: local.commitSha,
+      };
+  console.log(
+    chalk.dim(
+      `Target: ${target.repository} ${target.branch}@${target.headSha.slice(0, 7)}`,
+    ),
+  );
+
+  let selection: PublicationSelection;
+  try {
+    selection = selectPublication({
+      outputDir,
+      sessionId: options.session,
+      screenshotIds: options.screenshot,
+      ...target,
+    });
+  } catch (error) {
+    if (!options.legacySession) {
+      throw error;
+    }
+    selection = selectLegacyPublication({
+      outputDir,
+      sessionId: options.session,
+      screenshotIds: options.screenshot,
+      ...target,
+    });
+    console.log(
+      chalk.yellow(
+        '⚠ Publishing an explicitly selected legacy session without a finalized provenance manifest.',
+      ),
+    );
   }
 
-  console.log(chalk.dim(`Found ${sessionDirs.length} session(s) for this branch`));
-
-  // 3. Gather artifacts from all sessions (sorted newest first)
-  const screenshotPaths: string[] = [];
-  let videoPath: string | null = null;
-  let errorCount = 0;
-  let latestCommitSha = '';
-  let description: string | null = null;
-
-  for (const sessionDir of sessionDirs) {
-    const metadata = loadMetadata(sessionDir);
-    if (metadata) {
-      if (!description && metadata.description) description = metadata.description;
-      if (metadata.commitSha) latestCommitSha = metadata.commitSha;
-    }
-
-    const files = fs.readdirSync(sessionDir);
-
-    // Collect screenshots
-    for (const f of files) {
-      if (f.endsWith('.png')) {
-        screenshotPaths.push(path.join(sessionDir, f));
-      }
-    }
-
-    // Use the most recent video (sessions are newest-first, so only take the first)
-    if (!videoPath) {
-      for (const f of files) {
-        if (f === 'session.webm' || f === 'session.mp4') {
-          videoPath = path.join(sessionDir, f);
-          break;
-        }
-      }
-    }
-
-    // Count errors from SUMMARY.md
-    const summaryPath = path.join(sessionDir, 'SUMMARY.md');
-    if (fs.existsSync(summaryPath)) {
-      const summary = fs.readFileSync(summaryPath, 'utf-8');
-      const errorMatch = summary.match(/(\d+)\s+error/gi);
-      if (errorMatch) {
-        for (const m of errorMatch) {
-          const num = parseInt(m, 10);
-          if (!isNaN(num)) errorCount += num;
-        }
-      }
-    }
+  const metadata = loadMetadata(selection.sessionDir);
+  const description = metadata?.description || null;
+  const screenshotPaths = selection.screenshots.map((artifact) =>
+    path.join(selection.sessionDir, artifact.path),
+  );
+  const videoPath = selection.video
+    ? path.join(selection.sessionDir, selection.video.path)
+    : null;
+  const errorCount = readIncidentCount(selection.sessionDir);
+  const filesToUpload = [
+    ...screenshotPaths,
+    ...(videoPath ? [videoPath] : []),
+  ];
+  if (filesToUpload.length === 0) {
+    throw new Error('The selected session has no publishable screenshots or video.');
   }
 
-  // 4. Convert .webm → .mp4 if ffmpeg is available
-  if (videoPath && videoPath.endsWith('.webm')) {
-    const mp4Path = videoPath.replace(/\.webm$/, '.mp4');
-    if (fs.existsSync(mp4Path)) {
-      videoPath = mp4Path;
-    } else {
-      try {
-        execSync('ffmpeg -version', { stdio: 'pipe' });
-        console.log(chalk.dim('Converting video to .mp4...'));
-        execSync(
-          `ffmpeg -i "${videoPath}" -c:v libx264 -preset fast -crf 23 -an "${mp4Path}"`,
-          { stdio: 'pipe', timeout: 120000 },
-        );
-        videoPath = mp4Path;
-        console.log(chalk.green('✓') + ' Video converted to .mp4');
-      } catch {
-        console.log(chalk.dim('ffmpeg not available — uploading .webm directly'));
-      }
-    }
-  }
-
-  // 5. For --dry-run, generate markdown with placeholder URLs (no GitHub dependency)
+  // For --dry-run, generate markdown with placeholder URLs (no GitHub dependency).
   if (options.dryRun) {
     const screenshotMap = new Map<string, string>();
     for (const ssPath of screenshotPaths) {
-      const label = screenshotLabel(ssPath);
+      const label = path.basename(ssPath);
       screenshotMap.set(label, `https://github.com/user-attachments/assets/<${label}>`);
     }
 
     const commentData: PRCommentData = {
       description,
-      sessionCount: sessionDirs.length,
+      sessionCount: 1,
       screenshots: screenshotMap,
       video: videoPath
         ? {
@@ -147,8 +122,8 @@ export async function prCommand(options: PROptions): Promise<void> {
           }
         : null,
       errorCount,
-      branch,
-      commitSha: latestCommitSha,
+      branch: selection.manifest.branch,
+      commitSha: selection.manifest.commitSha,
     };
 
     console.log('');
@@ -157,19 +132,18 @@ export async function prCommand(options: PROptions): Promise<void> {
     return;
   }
 
-  // 6. Resolve PR number (requires gh CLI)
-  const prNumber = getPRNumber(options.prNumber);
+  if (prNumber === null) {
+    throw new Error('A target PR is required for publication.');
+  }
   console.log(chalk.dim(`Target PR: #${prNumber}`));
 
-  // 7. Authenticate and get repo info
   const token = getGitHubToken();
   const repoInfo = await getRepoInfo(token);
 
-  // 8. Upload artifacts
-  const filesToUpload = [...screenshotPaths];
-  if (videoPath) filesToUpload.push(videoPath);
-
-  const uploadRoot = buildUploadRoot(branch, prNumber, latestCommitSha);
+  const uploadRoot = buildUploadRoot(
+    prNumber,
+    selection.manifest,
+  );
 
   console.log(chalk.dim(`Upload provider: ${uploadProvider}`));
   if (uploadProvider === 'repo-contents') {
@@ -189,57 +163,38 @@ export async function prCommand(options: PROptions): Promise<void> {
     },
   });
 
-  // Build screenshot URL map using full path as upload key
+  if (uploaded.size !== filesToUpload.length) {
+    throw new Error(
+      `Only ${uploaded.size}/${filesToUpload.length} artifacts uploaded. PR comment was not posted.`,
+    );
+  }
+
   const screenshotMap = new Map<string, string>();
-  let failedUploads = 0;
   for (const ssPath of screenshotPaths) {
     const asset = uploaded.get(ssPath);
-    if (asset) {
-      screenshotMap.set(screenshotLabel(ssPath), asset.url);
-    } else {
-      failedUploads++;
-    }
+    if (!asset) throw new Error(`Missing uploaded screenshot: ${ssPath}`);
+    screenshotMap.set(path.basename(ssPath), asset.url);
   }
 
   // Get video URL
   let video: { url: string; renderMode: 'embed' | 'link' } | null = null;
   if (videoPath) {
     const videoAsset = uploaded.get(videoPath);
-    if (videoAsset) {
-      video = {
-        url: videoAsset.url,
-        renderMode: uploadProvider === 'repo-contents' ? 'link' : 'embed',
-      };
-    }
-    else failedUploads++;
+    if (!videoAsset) throw new Error(`Missing uploaded video: ${videoPath}`);
+    video = {
+      url: videoAsset.url,
+      renderMode: uploadProvider === 'repo-contents' ? 'link' : 'embed',
+    };
   }
 
-  if (failedUploads > 0) {
-    console.log(chalk.yellow(`⚠ ${failedUploads} artifact(s) failed to upload`));
-  }
-
-  if (filesToUpload.length > 0 && uploaded.size === 0) {
-    console.error(
-      chalk.red('✗') +
-        ' All artifact uploads failed. PR comment was not posted.\n' +
-        chalk.dim(
-          uploadProvider === 'github-web-attachments'
-            ? 'Retry with "proofshot pr --upload-provider repo-contents" or use "proofshot pr --dry-run".'
-            : 'Retry with "proofshot pr --dry-run" to inspect the generated markdown.',
-        ),
-    );
-    process.exit(1);
-  }
-
-  // 9. Generate and post PR comment
   const commentData: PRCommentData = {
     description,
-    sessionCount: sessionDirs.length,
+    sessionCount: 1,
     screenshots: screenshotMap,
     video,
     errorCount,
-    branch,
-    commitSha: latestCommitSha,
+    branch: selection.manifest.branch,
+    commitSha: selection.manifest.commitSha,
   };
 
   const commentBody = formatPRComment(commentData);
@@ -254,21 +209,139 @@ export async function prCommand(options: PROptions): Promise<void> {
   );
 }
 
-/**
- * Create a unique label for a screenshot using session folder + filename.
- * Avoids collisions when multiple sessions have identically-named files.
- */
-function screenshotLabel(ssPath: string): string {
-  const sessionDir = path.basename(path.dirname(ssPath));
-  const fileName = path.basename(ssPath);
-  return `${sessionDir}/${fileName}`;
+function buildUploadRoot(
+  prNumber: number,
+  manifest: ArtifactManifest,
+): string {
+  const sessionId =
+    manifest.sessionId
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'session';
+  const manifestHash = createHash('sha256')
+    .update(JSON.stringify(manifest))
+    .digest('hex')
+    .slice(0, 12);
+  return path.posix.join(
+    'proofshot',
+    `pr-${prNumber}`,
+    sessionId,
+    manifestHash,
+  );
 }
 
-function buildUploadRoot(branch: string, prNumber: number, commitSha: string): string {
-  const sanitizedBranch = branch.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'branch';
-  const sha = commitSha ? commitSha.slice(0, 7) : 'unknown-sha';
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return path.posix.join('proofshot', `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
+function readIncidentCount(sessionDir: string): number {
+  try {
+    const evidence = JSON.parse(
+      fs.readFileSync(path.join(sessionDir, 'evidence.json'), 'utf-8'),
+    ) as { incidents?: Array<{ count?: number }> };
+    return (evidence.incidents || []).reduce(
+      (total, incident) => total + (incident.count || 0),
+      0,
+    );
+  } catch {
+    return 0;
+  }
+}
+
+function selectLegacyPublication(options: {
+  outputDir: string;
+  sessionId?: string;
+  screenshotIds?: string[];
+  repository: string;
+  branch: string;
+  headSha: string;
+}): PublicationSelection {
+  if (
+    !options.sessionId ||
+    path.basename(options.sessionId) !== options.sessionId
+  ) {
+    throw new Error(
+      'Legacy publication requires an exact --session folder name.',
+    );
+  }
+  const sessionDir = path.join(options.outputDir, options.sessionId);
+  const stat = fs.lstatSync(sessionDir);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error('Legacy session is not a safe directory.');
+  }
+  if (fs.existsSync(path.join(sessionDir, 'artifact-manifest.json'))) {
+    throw new Error(
+      'A finalized manifest exists; --legacy-session cannot bypass its validation.',
+    );
+  }
+  const metadata = loadMetadata(sessionDir);
+  if (
+    !metadata ||
+    metadata.branch !== options.branch ||
+    metadata.commitSha !== options.headSha
+  ) {
+    throw new Error(
+      'Legacy session branch and commit must match the target PR head.',
+    );
+  }
+  const artifacts = fs
+    .readdirSync(sessionDir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        !entry.isSymbolicLink() &&
+        (entry.name.endsWith('.png') ||
+          entry.name === 'session.webm' ||
+          entry.name === 'session.mp4'),
+    )
+    .map((entry, order): ManifestArtifact => {
+      const contents = fs.readFileSync(path.join(sessionDir, entry.name));
+      return {
+        id: `${entry.name.endsWith('.png') ? 'screenshot' : 'video'}:${entry.name}`,
+        kind: entry.name.endsWith('.png') ? 'screenshot' : 'video',
+        path: entry.name,
+        sha256: createHash('sha256').update(contents).digest('hex'),
+        size: contents.length,
+        order,
+      };
+    });
+  const screenshots = artifacts.filter(
+    (artifact) => artifact.kind === 'screenshot',
+  );
+  const requestedScreenshots = options.screenshotIds?.length
+    ? options.screenshotIds.map((selector) => {
+        const matches = screenshots.filter(
+          (artifact) =>
+            artifact.id === selector ||
+            artifact.path === selector ||
+            path.basename(artifact.path) === selector,
+        );
+        if (matches.length !== 1) {
+          throw new Error(`Legacy screenshot selection failed: ${selector}`);
+        }
+        return matches[0];
+      })
+    : screenshots;
+  const videos = artifacts.filter((artifact) => artifact.kind === 'video');
+  if (videos.length > 1) {
+    throw new Error('Legacy session contains multiple videos.');
+  }
+  const manifest: ArtifactManifest = {
+    version: 1,
+    sessionId: options.sessionId,
+    repository: options.repository,
+    branch: metadata.branch,
+    commitSha: metadata.commitSha,
+    treeHash: metadata.treeHash || '',
+    sourceDirty: true,
+    sourceDrift: true,
+    startedAt: metadata.startedAt,
+    finalizedAt: metadata.startedAt,
+    completion: 'complete',
+    verdict: 'BLOCKED',
+    artifacts,
+  };
+  return {
+    sessionDir,
+    manifest,
+    screenshots: requestedScreenshots,
+    video: videos[0] || null,
+  };
 }
 
 function normalizeUploadProvider(provider?: string): GitHubUploadProvider {

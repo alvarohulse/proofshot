@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { ProofShotError } from './exec.js';
 
 // ─── Types ───
@@ -130,6 +130,44 @@ export function getPRNumber(explicitPR?: string): number {
       'No PR found for the current branch.\n' +
         'Either specify a PR number: proofshot pr 42\n' +
         'Or create a PR first: gh pr create',
+    );
+  }
+}
+
+export function getPRHeadProvenance(prNumber: number): {
+  repository: string;
+  branch: string;
+  headSha: string;
+} {
+  try {
+    const raw = execFileSync(
+      'gh',
+      [
+        'pr',
+        'view',
+        String(prNumber),
+        '--json',
+        'headRefOid,headRefName,headRepository',
+      ],
+      {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const parsed = JSON.parse(raw) as {
+      headRefOid: string;
+      headRefName: string;
+      headRepository: { nameWithOwner: string };
+    };
+    return {
+      repository: `github.com/${parsed.headRepository.nameWithOwner}`,
+      branch: parsed.headRefName,
+      headSha: parsed.headRefOid,
+    };
+  } catch (error) {
+    throw new ProofShotError(
+      `Could not resolve the head provenance for PR #${prNumber}.`,
+      error,
     );
   }
 }

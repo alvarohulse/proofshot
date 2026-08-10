@@ -15,6 +15,17 @@ export type {
   Verdict,
   VerdictStatus,
 } from './artifacts/evidence.js';
+export {
+  captureGitProvenance,
+  loadArtifactManifest,
+  validateManifestArtifacts,
+  writeArtifactManifest,
+} from './session/manifest.js';
+export type {
+  ArtifactManifest,
+  GitProvenance,
+  ManifestArtifact,
+} from './session/manifest.js';
 export type { SessionLogEntry } from './commands/exec.js';
 export { writeMetadata, loadMetadata, findSessionsForBranch, type SessionMetadata } from './session/metadata.js';
 export { formatPRComment, type PRCommentData } from './artifacts/pr-format.js';

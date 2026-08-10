@@ -23,6 +23,8 @@ import { registerSession, unregisterSession } from '../session/registry.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { writeCanonicalEvidence } from '../artifacts/evidence.js';
+import { loadMetadata } from '../session/metadata.js';
+import { writeArtifactManifest } from '../session/manifest.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { loadSessionLog, type SessionLogEntry } from './exec.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
@@ -378,6 +380,23 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     serverEntries: viewerServerEntries.length > 0 ? viewerServerEntries : undefined,
     entries: viewerEntries.length > 0 ? viewerEntries : undefined,
     tokenUsage,
+    evidence,
+    verdict,
+  });
+  const metadata = loadMetadata(sessionDir) || {
+    repository: '',
+    repositoryRoot: session.startDirectory,
+    branch: '',
+    commitSha: '',
+    treeHash: '',
+    sourceDirty: true,
+    startedAt: session.startedAt,
+    description: session.description,
+  };
+  writeArtifactManifest({
+    sessionId: session.sessionName,
+    sessionDir,
+    metadata,
     evidence,
     verdict,
   });

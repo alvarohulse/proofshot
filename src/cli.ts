@@ -78,6 +78,15 @@ export function createCLI(): Command {
     .description('Upload session artifacts and post a ProofShot comment on a GitHub PR')
     .argument('[pr-number]', 'PR number (auto-detects from current branch if omitted)')
     .option('--dry-run', 'Generate the comment markdown without posting')
+    .option('--session <id>', 'Publish one finalized session')
+    .option(
+      '--screenshot <artifact...>',
+      'Publish only the named screenshot artifact(s)',
+    )
+    .option(
+      '--legacy-session',
+      'Allow one explicitly selected pre-manifest session',
+    )
     .option(
       '--upload-provider <provider>',
       'Artifact upload backend: repo-contents or github-web-attachments',
