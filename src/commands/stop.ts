@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
@@ -20,7 +20,7 @@ import {
 } from '../session/lifecycle.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
-import { loadSessionLog } from './exec.js';
+import { loadSessionLog, type SessionLogEntry } from './exec.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
 
 /**
@@ -277,9 +277,12 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   // Step 7: Generate SUMMARY.md
   const summaryPath = path.join(sessionDir, 'SUMMARY.md');
   const summary = generateProofSummary({
+    projectDirectory: session.startDirectory || process.cwd(),
     description: session.description,
     serverCommand: session.serverCommand,
     port: session.port,
+    headless: session.headless ?? config.headless ?? true,
+    viewport: session.viewport || config.viewport || { width: 1280, height: 720 },
     videoPath: session.videoPath,
     screenshots,
     consoleErrors,
@@ -418,10 +421,13 @@ function writeTextFileAtomically(filePath: string, contents: string): void {
   }
 }
 
-interface SummaryData {
+export interface SummaryData {
+  projectDirectory: string;
   description: string | null;
   serverCommand: string | null;
   port: number;
+  headless: boolean;
+  viewport: { width: number; height: number };
   videoPath: string;
   screenshots: string[];
   consoleErrors: string;
@@ -434,9 +440,9 @@ interface SummaryData {
   outputDir: string;
 }
 
-function generateProofSummary(data: SummaryData): string {
+export function generateProofSummary(data: SummaryData): string {
   const date = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  const projectName = path.basename(process.cwd());
+  const projectName = path.basename(data.projectDirectory);
 
   let md = `# ProofShot Verification Report
 
@@ -505,8 +511,8 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
 
   // Environment
   md += `## Environment
-- Browser: Chromium (headless)
-- Viewport: 1280x720
+- Browser: Chromium (${data.headless ? 'headless' : 'headed'})
+- Viewport: ${data.viewport.width}x${data.viewport.height}
 - Duration: ${data.durationSec} seconds
 `;
 
@@ -522,12 +528,12 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
  *
  * Buffers: 5s before first action, 3s after last action.
  */
-function trimVideo(
+export function trimVideo(
   videoPath: string,
   screenshots: string[],
   outputDir: string,
   recordingStartMs: number,
-  sessionLog: import('./exec.js').SessionLogEntry[],
+  sessionLog: SessionLogEntry[],
 ): number {
   let firstActionSec: number | null = null;
   let lastActionSec: number | null = null;
@@ -567,7 +573,7 @@ function trimVideo(
 
   // Check if ffmpeg is available
   try {
-    execSync('ffmpeg -version', { stdio: 'pipe' });
+    execFileSync('ffmpeg', ['-version'], { stdio: 'pipe' });
   } catch {
     console.log(chalk.dim('Tip: Install ffmpeg to auto-trim dead time from videos.'));
     return 0;
@@ -583,10 +589,25 @@ function trimVideo(
     // Rename original to -raw
     fs.renameSync(videoPath, rawPath);
 
-    execSync(
-      `ffmpeg -i "${rawPath}" -ss ${trimStartSec.toFixed(2)} -to ${trimEndSec.toFixed(2)} -c copy "${videoPath}"`,
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        rawPath,
+        '-ss',
+        trimStartSec.toFixed(2),
+        '-to',
+        trimEndSec.toFixed(2),
+        '-c',
+        'copy',
+        '-abort_on',
+        'empty_output',
+        videoPath,
+      ],
       { stdio: 'pipe', timeout: 60000 },
     );
+    validateTrimmedVideo(videoPath);
 
     // Remove raw file on success
     fs.unlinkSync(rawPath);
@@ -595,14 +616,25 @@ function trimVideo(
     return trimStartSec;
   } catch {
     // Restore original if trimming failed
+    if (fs.existsSync(videoPath)) {
+      fs.unlinkSync(videoPath);
+    }
     if (fs.existsSync(rawPath)) {
-      if (!fs.existsSync(videoPath)) {
-        fs.renameSync(rawPath, videoPath);
-      } else {
-        fs.unlinkSync(rawPath);
-      }
+      fs.renameSync(rawPath, videoPath);
     }
     console.log(chalk.dim('Video trimming failed, keeping original'));
     return 0;
   }
+}
+
+function validateTrimmedVideo(videoPath: string): void {
+  if (!fs.existsSync(videoPath) || fs.statSync(videoPath).size === 0) {
+    throw new Error('FFmpeg produced an empty video');
+  }
+
+  execFileSync(
+    'ffmpeg',
+    ['-v', 'error', '-i', videoPath, '-map', '0:v:0', '-frames:v', '1', '-f', 'null', '-'],
+    { stdio: 'pipe', timeout: 60000 },
+  );
 }

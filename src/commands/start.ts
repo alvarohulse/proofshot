@@ -129,6 +129,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const openUrl = options.url || baseUrl;
   const session: SessionState = {
     startedAt: new Date().toISOString(),
+    startDirectory: process.cwd(),
     description: options.description || null,
     outputDir,
     sessionDir,
@@ -147,6 +148,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     consoleEvidenceAvailable: false,
     consoleErrorCount: 0,
     targetUrl: openUrl,
+    headless: config.headless,
     agentBrowserSocketDir: socketDir,
     agentBrowserConfigPath: config.browser.configPath,
     serverProcess: null,

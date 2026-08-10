@@ -7,6 +7,7 @@ const SESSION_FILENAME = '.session.json';
 
 export interface SessionState {
   startedAt: string;
+  startDirectory?: string;
   description: string | null;
   outputDir: string;
   sessionDir: string;
@@ -25,6 +26,7 @@ export interface SessionState {
   consoleEvidenceAvailable?: boolean;
   consoleErrorCount?: number;
   targetUrl?: string;
+  headless?: boolean;
   agentBrowserSocketDir?: string;
   agentBrowserConfigPath?: string;
   serverProcess?: ProcessIdentity | null;

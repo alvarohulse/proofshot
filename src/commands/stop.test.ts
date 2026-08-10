@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   extractServerErrors: vi.fn(),
   loadSessionLog: vi.fn(),
   estimateTokenUsage: vi.fn(),
-  execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
 vi.mock('../utils/config.js', () => ({ loadConfig: mocks.loadConfig }));
@@ -47,10 +47,15 @@ vi.mock('./exec.js', () => ({ loadSessionLog: mocks.loadSessionLog }));
 vi.mock('../utils/token-usage.js', () => ({ estimateTokenUsage: mocks.estimateTokenUsage }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
-  return { ...actual, execSync: mocks.execSync };
+  return { ...actual, execFileSync: mocks.execFileSync };
 });
 
-import { stopCommand } from './stop.js';
+import {
+  generateProofSummary,
+  stopCommand,
+  trimVideo,
+  type SummaryData,
+} from './stop.js';
 
 let root: string;
 let session: any;
@@ -63,6 +68,7 @@ beforeEach(() => {
   fs.mkdirSync(sessionDir, { recursive: true });
   session = {
     startedAt: new Date(Date.now() - 1000).toISOString(),
+    startDirectory: path.join(root, 'project'),
     description: 'retry bundle',
     outputDir: path.join(root, 'custom-evidence'),
     sessionDir,
@@ -80,12 +86,19 @@ beforeEach(() => {
     sessionLogAdjusted: false,
     consoleEvidenceAvailable: false,
     consoleErrorCount: 0,
+    headless: false,
+    viewport: { width: 2560, height: 1440 },
     serverProcess: { pid: 1001, processGroupId: 1001, sessionId: 1001, startTime: '1' },
     browserProcess: { pid: 1002, processGroupId: 1002, sessionId: 1002, startTime: '2' },
   };
   fs.writeFileSync(session.serverErrorLog, `${Date.now()}\tserver ready\n`);
 
-  mocks.loadConfig.mockReturnValue({ output: './proofshot-artifacts', browser: {} });
+  mocks.loadConfig.mockReturnValue({
+    output: './proofshot-artifacts',
+    browser: {},
+    headless: true,
+    viewport: { width: 1280, height: 720 },
+  });
   mocks.resolveSessionControlDir.mockReturnValue(path.join(root, 'proofshot-artifacts'));
   mocks.loadSession.mockImplementation(() => session);
   mocks.getConsoleErrors.mockReturnValue('No errors');
@@ -94,7 +107,7 @@ beforeEach(() => {
   mocks.extractServerErrors.mockReturnValue([]);
   mocks.loadSessionLog.mockReturnValue([]);
   mocks.estimateTokenUsage.mockReturnValue(null);
-  mocks.execSync.mockReturnValue('');
+  mocks.execFileSync.mockReturnValue('');
   mocks.stopOwnedBrowser.mockResolvedValue(undefined);
   mocks.stopOwnedServer.mockResolvedValue(undefined);
   mocks.canAddressOwnedBrowserSession.mockReturnValue(true);
@@ -122,14 +135,15 @@ describe('stopCommand retryability', () => {
       JSON.parse(fs.readFileSync(sessionLogPath, 'utf-8')),
     );
     let trimCalls = 0;
-    mocks.execSync.mockImplementation((command: string) => {
-      if (command === 'ffmpeg -version') return '';
-      if (command.startsWith('ffmpeg -i ')) {
+    mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
+      if (command === 'ffmpeg' && args[0] === '-version') return '';
+      if (command === 'ffmpeg' && args.includes('-abort_on')) {
         trimCalls += 1;
         fs.writeFileSync(session.videoPath, `trimmed-video-${trimCalls}`);
         return '';
       }
-      throw new Error(`unexpected command: ${command}`);
+      if (command === 'ffmpeg' && args[0] === '-v') return '';
+      throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
     });
     mocks.writeViewer.mockImplementationOnce(() => {
       throw new Error('simulated viewer write failure');
@@ -262,3 +276,92 @@ describe('stopCommand retryability', () => {
     );
   });
 });
+
+describe('stop artifacts', () => {
+  it('reports the recorded viewport and browser mode', () => {
+    const summary = generateProofSummary(buildSummaryData());
+
+    expect(summary).toContain('**Project:** project');
+    expect(summary).toContain('- Browser: Chromium (headed)');
+    expect(summary).toContain('- Viewport: 2560x1440');
+  });
+
+  it('restores the original video when trimming leaves partial output', () => {
+    const videoPath = path.join(root, 'session.webm');
+    fs.writeFileSync(videoPath, 'original-video');
+    let trimArgs: string[] = [];
+
+    mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (args[0] === '-version') {
+        return '';
+      }
+      trimArgs = args;
+      fs.writeFileSync(videoPath, 'partial-video');
+      throw new Error('empty output');
+    });
+
+    const trimOffset = trimVideo(
+      videoPath,
+      [],
+      root,
+      0,
+      [
+        { action: 'open', relativeTimeSec: 10, timestamp: '2026-07-16T18:00:10.000Z' },
+        { action: 'click', relativeTimeSec: 20, timestamp: '2026-07-16T18:00:20.000Z' },
+      ],
+    );
+
+    expect(trimOffset).toBe(0);
+    expect(trimArgs).toContain('-abort_on');
+    expect(fs.readFileSync(videoPath, 'utf-8')).toBe('original-video');
+    expect(fs.existsSync(path.join(root, 'session-raw.webm'))).toBe(false);
+  });
+
+  it('restores the original video when FFmpeg exits successfully with empty output', () => {
+    const videoPath = path.join(root, 'session.webm');
+    fs.writeFileSync(videoPath, 'original-video');
+
+    mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (args[0] === '-version') {
+        return '';
+      }
+      fs.writeFileSync(videoPath, '');
+      return '';
+    });
+
+    const trimOffset = trimVideo(
+      videoPath,
+      [],
+      root,
+      0,
+      [
+        { action: 'open', relativeTimeSec: 10, timestamp: '2026-07-16T18:00:10.000Z' },
+        { action: 'click', relativeTimeSec: 20, timestamp: '2026-07-16T18:00:20.000Z' },
+      ],
+    );
+
+    expect(trimOffset).toBe(0);
+    expect(fs.readFileSync(videoPath, 'utf-8')).toBe('original-video');
+  });
+});
+
+function buildSummaryData(): SummaryData {
+  return {
+    projectDirectory: path.join(root, 'project'),
+    description: 'artifact verification',
+    serverCommand: 'npm run dev',
+    port: 4173,
+    headless: false,
+    viewport: { width: 2560, height: 1440 },
+    videoPath: path.join(root, 'session.webm'),
+    screenshots: [],
+    consoleErrors: '',
+    consoleErrorCount: 0,
+    consoleEvidenceAvailable: true,
+    serverLog: '',
+    serverErrorCount: 0,
+    tokenUsage: null,
+    durationSec: 30,
+    outputDir: root,
+  };
+}
