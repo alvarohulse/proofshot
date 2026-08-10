@@ -58,13 +58,22 @@ proofshot start --run "npm run dev" --port 3000 --description "Login flow"
 ```
 
 1. Check if port is already occupied (fail fast if `--run` conflicts)
-2. Spawn dev server as a detached process, pipe stdout/stderr to `server.log`
-3. Wait for port to become available (polls every 500ms, 30s timeout)
-4. Open headless Chromium via agent-browser
-5. Start video recording (Playwright screencast → `.webm`)
-6. Write `.session.json` to the artifacts directory
+2. Start the configured environment (`environment` and `logs.sources`): own tmux panes or direct processes, attach file tails, and wait for readiness checks
+3. Spawn dev server as a detached process, pipe stdout/stderr to `server.log`
+4. Wait for port to become available (polls every 500ms, 30s timeout)
+5. Open headless Chromium via agent-browser
+6. Start video recording (Playwright screencast → `.webm`)
+7. Write `.session.json` to the artifacts directory
 
 Recording is mandatory. If it fails after 3 retries, the session aborts. Video proof is the whole point.
+
+Step 2 owns real resources, so it is strict rather than best-effort:
+
+- `--run` and a configured `environment` are mutually exclusive — both start the app, and running both would double-start it.
+- `.session.json` is written *before* the environment starts and re-saved as each process and socket identity is claimed. A failed start can then release exactly what it created, and a failed release keeps the session file as recovery state instead of orphaning resources.
+- `src/session/teardown.ts` is the shared entry point for every path that would otherwise discard that record (`start --force`, `clean`).
+
+The config contract for sources, readiness, and ownership lives in `content/docs/reference/configuration.mdx`.
 
 ### Exec
 
@@ -95,11 +104,14 @@ proofshot stop
 1. Collect console errors and console output from the browser (point-in-time snapshots)
 2. Stop video recording
 3. Close browser (unless `--no-close`)
-4. **Trim video** — remove dead time before first action (5s buffer) and after last action (3s buffer) using ffmpeg. Adjust all `session-log.json` timestamps by the trim offset to stay in sync with the trimmed video.
-5. **Extract server errors** — scan `server.log` with multi-language regex patterns
-6. Generate `SUMMARY.md` — markdown report with description, video link, screenshots, and errors
-7. Generate `viewer.html` — standalone interactive viewer
-8. Clear `.session.json`
+4. **Release the owned environment** — terminate the recorded process and socket identities, never a name that could have been reused
+5. **Trim video** — remove dead time before first action (5s buffer) and after last action (3s buffer) using ffmpeg. Adjust all `session-log.json` timestamps by the trim offset to stay in sync with the trimmed video.
+6. **Extract server errors** — scan `server.log` with multi-language regex patterns
+7. Generate `SUMMARY.md` — markdown report with description, video link, screenshots, errors, and links to the captured environment logs
+8. Generate `viewer.html` — standalone interactive viewer
+9. Clear `.session.json`
+
+Step 4 fails the command rather than degrading: an unreleased resource leaves `.session.json` in place so a later `proofshot stop` can finish the job.
 
 ## Interactive viewer
 
@@ -174,7 +186,8 @@ src/
 │   ├── exec.ts               # Action logging + agent-browser passthrough
 │   ├── diff.ts               # Visual regression (screenshot comparison)
 │   ├── pr.ts                 # GitHub PR description formatting
-│   └── clean.ts              # Artifact directory removal
+│   ├── clean.ts              # Environment release + artifact directory removal
+│   └── doctor.ts             # Local environment and active session inspection
 ├── browser/
 │   ├── session.ts            # Browser open/close, console collection
 │   ├── capture.ts            # Recording start/stop, screenshots, diffs
@@ -182,18 +195,33 @@ src/
 │   └── interact.ts           # Click, fill, type, scroll, press
 ├── server/
 │   └── start.ts              # Dev server spawn + port waiting
+├── environment/
+│   ├── runtime.ts            # Start/stop the owned environment and log capture
+│   ├── types.ts              # Environment config, ownership state, evidence events
+│   ├── evidence.ts           # environment.ndjson append/read, ANSI normalization
+│   ├── workers.ts            # Detached capture workers for processes and file tails
+│   ├── tmux.ts               # tmux environment orchestration
+│   ├── tmux-launch.ts        # Owned socket/session creation, external launchers
+│   ├── tmux-panes.ts         # Pane selection, titles, source identity
+│   ├── tmux-identity.ts      # Socket identity capture and verification
+│   ├── tmux-cleanup.ts       # Ownership-checked tmux teardown
+│   └── tmux-command.ts       # tmux/shell invocation helpers
 ├── session/
-│   └── state.ts              # .session.json read/write/clear
+│   ├── state.ts              # .session.json read/write/clear
+│   ├── metadata.ts           # Per-session git branch/commit for PR matching
+│   └── teardown.ts           # Release the active session's environment
 ├── artifacts/
 │   ├── viewer.ts             # Interactive HTML viewer generation
 │   ├── summary.ts            # Markdown summary generation
 │   ├── pr-format.ts          # PR description formatting
 │   └── bundle.ts             # Artifact bundling
 └── utils/
-    ├── config.ts             # Config file search + merge
+    ├── config.ts             # Config file search + validation + merge
     ├── exec.ts               # ab() and exec() shell wrappers
     ├── error-patterns.ts     # Multi-language regex patterns
+    ├── errors.ts             # CLI error rendering, including nested causes
     ├── port.ts               # isPortOpen, waitForPort
+    ├── process.ts            # Owned-process identity, signalling, termination
     └── skills.ts             # Skill file bundling
 ```
 
@@ -205,8 +233,10 @@ src/
 
 **Minimal dependencies.** Only three production dependencies: `commander` (CLI framework), `chalk` (terminal colors), `detect-port` (port checking). agent-browser is an optional peer dependency. This keeps the install fast and the supply chain small.
 
-**Session state in the output directory.** `.session.json` lives alongside artifacts, not in a global location. This allows parallel sessions in different projects and ensures `proofshot clean` removes everything.
+**Session state in the output directory.** `.session.json` lives alongside artifacts, not in a global location. This allows parallel sessions in different projects and ensures `proofshot clean` removes everything. It is also the only record of the process and socket identities a session owns, so `clean` releases them before deleting the directory and refuses to delete it while a release is failing.
 
 **Config file walk-up.** `proofshot.config.json` is searched from cwd upward to filesystem root, supporting monorepo layouts where config lives at the repo root.
 
 **Graceful degradation everywhere.** Missing ffmpeg skips video trimming. Failed element data capture skips overlays. Browser already closed gets a silent catch. Console errors unavailable shows "0 errors". Non-critical failures never abort a session.
+
+**Except for owned resources.** Starting and releasing an owned environment fails loudly. A silently dropped log source produces evidence that looks complete but is not, and a silently leaked process or tmux socket outlives the session — so both are errors, and an invalid `proofshot.config.json` now fails `start` instead of falling back to defaults.

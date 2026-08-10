@@ -48,6 +48,7 @@ proofshot start [options]
 | `--description <text>` | Description of what you're verifying (appears in reports) | — |
 | `--headed` | Show the browser window (visible Chromium) | `false` |
 | `--output <dir>` | Custom output directory for artifacts | `./proofshot-artifacts` |
+| `--force` | Override a stale session without running `stop` first | `false` |
 
 **Examples:**
 
@@ -60,11 +61,16 @@ proofshot start --headed                                    # Show the browser w
 ```
 
 **What happens:**
-1. If `--run` is provided: starts the dev server, pipes output to `server.log`, waits for the port
-2. Opens headless Chromium via agent-browser
-3. Navigates to `--url` (or `http://localhost:<port>`)
-4. Starts video recording (retries up to 3 times)
-5. Writes `.session.json` and `metadata.json` (git branch and commit SHA)
+1. If `environment` or `logs.sources` are configured: starts the owned tmux panes, direct processes, and file tails, waits for the configured readiness checks, and records evidence to `environment.ndjson` and `logs/`
+2. If `--run` is provided: starts the dev server, pipes output to `server.log`, waits for the port
+3. Opens headless Chromium via agent-browser
+4. Navigates to `--url` (or `http://localhost:<port>`)
+5. Starts video recording (retries up to 3 times)
+6. Writes `.session.json` and `metadata.json` (git branch and commit SHA)
+
+`--run` and a configured `environment` are mutually exclusive — pick one way to start your app. See the [configuration reference](/docs/reference/configuration) for the `environment` and `logs` contracts.
+
+If any startup step fails, ProofShot releases the environment it started before exiting. `--force` releases the previous session's environment before clearing `.session.json`. When that release fails, `start` exits non-zero, keeps `.session.json` as recovery state, and names the resource to resolve — rerun `proofshot stop` once it is resolved.
 
 ---
 
@@ -84,10 +90,13 @@ proofshot stop [options]
 1. Collects console errors and output from the browser
 2. Stops video recording
 3. Closes the browser (unless `--no-close`)
-4. Trims video dead time (requires ffmpeg): 5s buffer before first action, 3s after last
-5. Scans `server.log` for errors across 10+ languages
-6. Generates `SUMMARY.md` and `viewer.html`
-7. Clears `.session.json`
+4. Stops environment capture and releases the processes and tmux sockets the session owns
+5. Trims video dead time (requires ffmpeg): 5s buffer before first action, 3s after last
+6. Scans `server.log` for errors across 10+ languages
+7. Generates `SUMMARY.md` and `viewer.html`
+8. Clears `.session.json`
+
+If releasing an owned resource fails, `stop` exits non-zero and keeps `.session.json` as recovery state so the remaining processes and sockets are still recorded. Resolve the reported resource and run `proofshot stop` again.
 
 ---
 
@@ -188,3 +197,5 @@ proofshot clean
 ```
 
 Deletes `./proofshot-artifacts/` (or the configured output directory). No flags.
+
+If an active session is recorded there, `clean` first releases the environment it owns, because `.session.json` is the only record of those processes and sockets. When that release fails, `clean` refuses to delete the directory, keeps the recovery state, and exits non-zero.

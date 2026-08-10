@@ -11,6 +11,8 @@ ProofShot is configured via `proofshot.config.json`. This file is optional — d
 
 ProofShot searches for `proofshot.config.json` starting from your current directory and walking up to the filesystem root. This supports monorepo layouts where the config lives at the repo root.
 
+Relative paths inside the file — `output`, `browser.configPath`, `environment` working directories, and `file` log source paths — resolve from the directory that contains `proofshot.config.json`, not from the directory you run ProofShot in.
+
 ## All options
 
 ```json filename="proofshot.config.json"
@@ -146,6 +148,10 @@ Pane titles resolve in this order: launcher mapping title, non-empty tmux pane t
 Tmux panes are one PTY byte stream and are always recorded as `stream: "pty"`; stdout and stderr cannot be recovered after tmux multiplexes them. ProofShot installs `pipe-pane` before backfilling retained scrollback. Canonical evidence keeps untimed `history` and timestamped `live` segments plus their overlap/capture-gap boundary.
 
 `maxBytesPerSource` bounds the combined canonical NDJSON and plain-text log bytes written for each source, and records truncation instead of silently discarding integrity state.
+
+## Validation
+
+`proofshot start` fails fast on an unreadable or invalid config and names the offending field, so a typo never silently downgrades capture to defaults. `proofshot stop` and `proofshot clean` instead warn and continue with the resolvable output directory, so an invalid config can never strand a session's owned processes and sockets.
 
 ## CLI flag precedence
 

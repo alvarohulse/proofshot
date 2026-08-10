@@ -117,8 +117,11 @@ export async function startTmuxEnvironment(
     if (state) {
       await stopTmuxEnvironment(state).catch(() => {});
     } else {
-      if (pendingLauncher) {
-        await terminateOwnedProcessTree(pendingLauncher.launcher.process).catch(() => {});
+      // Assigned from the launcher callback, which control-flow analysis cannot
+      // see, so the declared type has to be restored before the null check.
+      const launcherState = pendingLauncher as LauncherEnvironmentState | null;
+      if (launcherState) {
+        await terminateOwnedProcessTree(launcherState.launcher.process).catch(() => {});
       }
       await releaseUnverifiedTmux(config, unverifiedConnection);
     }

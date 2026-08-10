@@ -45,13 +45,16 @@ ProofShot uses a three-phase model.
 `proofshot start` initializes the session:
 
 1. Check if the port is available (fail fast on conflicts)
-2. Spawn the dev server if `--run` is provided, pipe output to `server.log`
-3. Wait for the port to respond (polls every 500ms, 30s timeout)
-4. Open headless Chromium
-5. Start video recording
-6. Write `.session.json` (active session state) and `metadata.json` (git branch/commit, persists after stop)
+2. Start the configured `environment` and `logs` sources — tmux panes, direct processes, and file tails — and wait for their readiness checks
+3. Spawn the dev server if `--run` is provided, pipe output to `server.log`
+4. Wait for the port to respond (polls every 500ms, 30s timeout)
+5. Open headless Chromium
+6. Start video recording
+7. Write `.session.json` (active session state) and `metadata.json` (git branch/commit, persists after stop)
 
 Recording is mandatory. If it fails after 3 retries, the session aborts.
+
+`--run` and `environment` are two ways to start the same app, so ProofShot rejects using both. `.session.json` is written before the environment starts and updated as each resource is claimed, so a crashed start still leaves the owned processes and sockets recoverable.
 
 ### Phase 2: Exec (repeated)
 
@@ -70,10 +73,13 @@ Each `proofshot exec` call:
 1. Collects browser console errors and output (point-in-time snapshot)
 2. Stops video recording
 3. Closes the browser
-4. Trims video dead time using ffmpeg (5s buffer before first action, 3s after last). Adjusts all `session-log.json` timestamps by the trim offset.
-5. Scans `server.log` with multi-language regex patterns for errors
-6. Generates `SUMMARY.md` and `viewer.html`
-7. Clears `.session.json`
+4. Stops environment capture and releases every process and tmux socket the session owns, by recorded identity
+5. Trims video dead time using ffmpeg (5s buffer before first action, 3s after last). Adjusts all `session-log.json` timestamps by the trim offset.
+6. Scans `server.log` with multi-language regex patterns for errors
+7. Generates `SUMMARY.md` and `viewer.html`
+8. Clears `.session.json`
+
+Environment teardown is the one step that is not best-effort: if a resource cannot be released, `stop` fails and keeps `.session.json` so nothing is silently orphaned.
 
 ## Design principles
 

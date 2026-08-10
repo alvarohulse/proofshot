@@ -42,7 +42,7 @@ When ffmpeg is available, `proofshot stop` cuts dead time from the video — kee
 You need to run `proofshot start` first. Each session writes `.session.json` — if it's missing, there's no active session to operate on.
 
 **Server errors aren't being detected**
-Server log capture only works when ProofShot starts the server itself via `--run`. If your server was already running on the port, ProofShot skips spawning and gets no logs.
+`server.log` capture only works when ProofShot starts the server itself via `--run`. If your server was already running on the port, ProofShot skips spawning and gets no `server.log`. To capture an app you start yourself — or more than one process — declare `environment` and `logs.sources` in [the config](/docs/reference/configuration): ProofShot can attach to an existing tmux session or tail a log file. Those sources are recorded as evidence in `environment.ndjson` and `logs/`; the multi-language error scan still runs only on `server.log`.
 
 **The browser window doesn't appear**
 ProofShot runs headless by default. Use `--headed` to see the browser window: `proofshot start --headed`.
