@@ -208,14 +208,15 @@ Upload one finalized, provenance-compatible session to GitHub and post a verific
 proofshot pr              # Auto-detect PR from current branch
 proofshot pr 42           # Target a specific PR
 proofshot pr --session proofshot-2026-08-09_19-00-00
-proofshot pr --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png receipt.png
+proofshot pr --session checkout-session --session receipt-session
+proofshot pr --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png --screenshot receipt.png
 proofshot pr --dry-run    # Preview the markdown without posting
 proofshot pr --upload-provider github-web-attachments  # Use GitHub's internal attachment flow
 ```
 
 By default, ProofShot uses the official GitHub repository contents API and uploads artifacts to a dedicated `proofshot-artifacts` branch. This works with normal `gh` authentication and `GH_TOKEN`.
 
-Auto-selection succeeds only when exactly one complete `PASS` or `FAIL` session matches the PR head. Use `--session` when several choices exist. Pre-manifest sessions require both `--session` and `--legacy-session`; that opt-in cannot bypass a present or invalid finalized manifest. A partial upload never posts a PR comment.
+Auto-selection succeeds only when exactly one complete `PASS` or `FAIL` session matches the PR head. Repeat `--session` to publish several explicit compatible sessions, and repeat `--screenshot` to preserve exact artifact selection order. Pre-manifest sessions require both `--session` and `--legacy-session`; that opt-in cannot bypass a present or invalid finalized manifest. A partial upload never posts a PR comment.
 
 The `github-web-attachments` provider is still available for inline GitHub-hosted media, but it relies on GitHub's internal web upload endpoint and may reject browser-based `gh auth login` OAuth sessions.
 

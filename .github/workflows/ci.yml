@@ -39,6 +39,11 @@ jobs:
         run: |
           test -f dist/bin/proofshot.js
           test -f dist/src/index.js
+          node dist/bin/proofshot.js --help
+          npm pack --dry-run
 
       - name: Run tests
         run: npm test
+
+      - name: Run FFmpeg integration test
+        run: npm run test:ffmpeg

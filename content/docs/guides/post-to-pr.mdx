@@ -24,7 +24,7 @@ Complete a full `start` → test → `stop` cycle on a clean target commit. `sto
 proofshot pr
 ```
 
-ProofShot auto-selects only when exactly one complete `PASS` or `FAIL` session matches the PR head. It never combines sessions.
+ProofShot auto-selects only when exactly one complete `PASS` or `FAIL` session matches the PR head. Explicit repeated `--session` flags can combine compatible finalized sessions.
 
 To target a specific PR number:
 
@@ -32,11 +32,12 @@ To target a specific PR number:
 proofshot pr 42
 ```
 
-When more than one compatible session exists, choose one and optionally narrow its screenshots:
+When more than one compatible session exists, choose one or more and optionally narrow their screenshots:
 
 ```sh
 proofshot pr 42 --session proofshot-2026-08-09_19-00-00
-proofshot pr 42 --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png receipt.png
+proofshot pr 42 --session checkout-session --session receipt-session
+proofshot pr 42 --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png --screenshot receipt.png
 ```
 
 To use GitHub's internal web attachment flow instead of the default contents-based uploader:
@@ -59,7 +60,7 @@ This outputs the formatted comment to stdout so you can review it.
 ## How it works
 
 1. ProofShot resolves the exact target PR head repository, branch, and SHA
-2. One compatible finalized manifest is selected
+2. One compatible finalized manifest is auto-selected, or the repeated explicit `--session` choices are selected in order
 3. Every selected path is checked for traversal/symlinks and re-hashed before upload
 4. By default, selected screenshots and video are uploaded to a dedicated `proofshot-artifacts` branch using the official GitHub contents API
 5. A formatted comment is posted only after every requested upload succeeds

@@ -78,10 +78,17 @@ export function createCLI(): Command {
     .description('Upload session artifacts and post a ProofShot comment on a GitHub PR')
     .argument('[pr-number]', 'PR number (auto-detects from current branch if omitted)')
     .option('--dry-run', 'Generate the comment markdown without posting')
-    .option('--session <id>', 'Publish one finalized session')
+    .option(
+      '--session <id>',
+      'Publish a finalized session (repeatable)',
+      collectOption,
+      [],
+    )
     .option(
       '--screenshot <artifact...>',
-      'Publish only the named screenshot artifact(s)',
+      'Publish named screenshot artifacts (space-separated or repeatable)',
+      collectOption,
+      [],
     )
     .option(
       '--legacy-session',
@@ -132,4 +139,8 @@ export function createCLI(): Command {
     });
 
   return program;
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }

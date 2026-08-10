@@ -161,8 +161,8 @@ proofshot pr [number] [options]
 |-----------------|-------------|
 | `[number]` | PR number. If omitted, auto-detected from current branch |
 | `--dry-run` | Print the markdown comment without posting |
-| `--session <id>` | Select one finalized session explicitly |
-| `--screenshot <artifact...>` | Publish only the selected screenshot IDs, paths, or unique basenames |
+| `--session <id>` | Select a finalized session explicitly. Repeat to publish multiple sessions |
+| `--screenshot <artifact...>` | Publish only selected screenshot IDs, paths, or unique basenames. Use a space-separated list or repeat the flag |
 | `--legacy-session` | Explicitly opt into one pre-manifest session; requires `--session` |
 | `--upload-provider <provider>` | Upload backend: `repo-contents` (default) or `github-web-attachments` |
 | `--artifacts-branch <branch>` | Git branch used by the `repo-contents` provider. Default: `proofshot-artifacts` |
@@ -174,6 +174,7 @@ proofshot pr               # Auto-detect PR from branch
 proofshot pr 42            # Post to PR #42
 proofshot pr --session proofshot-2026-08-09_19-00-00
 proofshot pr --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png
+proofshot pr --session checkout-session --session settings-session
 proofshot pr --dry-run     # Preview without posting
 proofshot pr --upload-provider github-web-attachments
 ```
@@ -182,7 +183,7 @@ proofshot pr --upload-provider github-web-attachments
 
 **What happens:**
 1. Resolves the target PR repository, branch, and exact head SHA
-2. Selects exactly one complete `PASS` or `FAIL` manifest compatible with that head, or requires `--session`
+2. Selects one compatible complete `PASS` or `FAIL` manifest automatically, or the exact finalized sessions passed with repeated `--session` flags
 3. Rejects source drift, mixed commits, unsafe paths/symlinks, hash mismatches, incomplete verdicts, and ambiguous screenshot choices
 4. Uploads only the selected manifest artifacts
 5. Posts only after every requested artifact uploads successfully

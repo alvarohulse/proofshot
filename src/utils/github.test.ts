@@ -65,4 +65,38 @@ describe('formatPRComment', () => {
     expect(body).toContain('Expected checkout button was missing.');
     expect(body).not.toContain('\nhttps://example.com/session.mp4\n');
   });
+
+  it('renders recordings for every selected session', () => {
+    const body = formatPRComment({
+      description: null,
+      sessionCount: 2,
+      screenshots: new Map(),
+      video: null,
+      recordings: [
+        {
+          label: 'checkout',
+          url: 'https://example.com/checkout.mp4',
+          renderMode: 'link',
+        },
+        {
+          label: 'settings',
+          url: 'https://example.com/settings.mp4',
+          renderMode: 'link',
+        },
+      ],
+      errorCount: 0,
+      verdict: 'PASS',
+      verdictReasons: [],
+      branch: 'feature/test',
+      commitSha: 'abcdef123456',
+    });
+
+    expect(body).toContain('### Recordings');
+    expect(body).toContain(
+      '[Session recording: checkout](https://example.com/checkout.mp4)',
+    );
+    expect(body).toContain(
+      '[Session recording: settings](https://example.com/settings.mp4)',
+    );
+  });
 });

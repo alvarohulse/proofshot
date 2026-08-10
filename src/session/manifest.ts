@@ -182,11 +182,16 @@ export function validateManifestArtifacts(
 ): void {
   const root = fs.realpathSync(sessionDir);
   const ids = new Set<string>();
+  const paths = new Set<string>();
   for (const [index, artifact] of manifest.artifacts.entries()) {
     if (ids.has(artifact.id)) {
       throw new Error(`Duplicate artifact ID: ${artifact.id}`);
     }
     ids.add(artifact.id);
+    if (paths.has(artifact.path)) {
+      throw new Error(`Duplicate artifact path: ${artifact.path}`);
+    }
+    paths.add(artifact.path);
     if (artifact.order !== index) {
       throw new Error(`Artifact order is invalid for ${artifact.id}.`);
     }
@@ -196,6 +201,14 @@ export function validateManifestArtifacts(
       artifact.path.split(/[\\/]/).includes('..')
     ) {
       throw new Error(`Unsafe artifact path: ${artifact.path}`);
+    }
+    if (
+      (artifact.kind === 'screenshot' || artifact.kind === 'video') &&
+      path.dirname(artifact.path) !== '.'
+    ) {
+      throw new Error(
+        `Publishable media must be stored at the session root: ${artifact.path}`,
+      );
     }
     const artifactPath = path.resolve(sessionDir, artifact.path);
     let componentPath = sessionDir;
@@ -336,12 +349,18 @@ function listArtifactFiles(
 
 function classifyArtifact(file: string): ManifestArtifactKind | null {
   const basename = path.basename(file);
-  if (file.endsWith('.png')) return 'screenshot';
-  if (basename === 'session.webm' || basename === 'session.mp4') return 'video';
-  if (basename === 'viewer.html') return 'viewer';
-  if (basename === 'SUMMARY.md') return 'summary';
-  if (basename === 'evidence.json') return 'evidence';
-  if (basename === 'verdict.json') return 'verdict';
+  const isSessionRoot = path.dirname(file) === '.';
+  if (isSessionRoot && file.endsWith('.png')) return 'screenshot';
+  if (
+    isSessionRoot &&
+    (basename === 'session.webm' || basename === 'session.mp4')
+  ) {
+    return 'video';
+  }
+  if (isSessionRoot && basename === 'viewer.html') return 'viewer';
+  if (isSessionRoot && basename === 'SUMMARY.md') return 'summary';
+  if (isSessionRoot && basename === 'evidence.json') return 'evidence';
+  if (isSessionRoot && basename === 'verdict.json') return 'verdict';
   if (file.endsWith('.log') || file.endsWith('.ndjson')) return 'log';
   return null;
 }

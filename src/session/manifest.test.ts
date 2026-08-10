@@ -118,5 +118,15 @@ describe('finalized artifact manifests', () => {
     expect(() =>
       validateManifestArtifacts(sessionDir, manifest),
     ).not.toThrow();
+
+    const duplicatePathManifest = structuredClone(manifest);
+    const duplicate = duplicatePathManifest.artifacts[1];
+    if (!duplicate) {
+      throw new Error('Expected a second manifest artifact.');
+    }
+    duplicate.path = duplicatePathManifest.artifacts[0]?.path || '';
+    expect(() =>
+      validateManifestArtifacts(sessionDir, duplicatePathManifest),
+    ).toThrow(/Duplicate artifact path/);
   });
 });

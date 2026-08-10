@@ -3357,16 +3357,26 @@ function loadArtifactManifest(sessionDir) {
 function validateManifestArtifacts(sessionDir, manifest) {
   const root = fs16.realpathSync(sessionDir);
   const ids = /* @__PURE__ */ new Set();
+  const paths = /* @__PURE__ */ new Set();
   for (const [index, artifact] of manifest.artifacts.entries()) {
     if (ids.has(artifact.id)) {
       throw new Error(`Duplicate artifact ID: ${artifact.id}`);
     }
     ids.add(artifact.id);
+    if (paths.has(artifact.path)) {
+      throw new Error(`Duplicate artifact path: ${artifact.path}`);
+    }
+    paths.add(artifact.path);
     if (artifact.order !== index) {
       throw new Error(`Artifact order is invalid for ${artifact.id}.`);
     }
     if (!artifact.path || path12.isAbsolute(artifact.path) || artifact.path.split(/[\\/]/).includes("..")) {
       throw new Error(`Unsafe artifact path: ${artifact.path}`);
+    }
+    if ((artifact.kind === "screenshot" || artifact.kind === "video") && path12.dirname(artifact.path) !== ".") {
+      throw new Error(
+        `Publishable media must be stored at the session root: ${artifact.path}`
+      );
     }
     const artifactPath = path12.resolve(sessionDir, artifact.path);
     let componentPath = sessionDir;
@@ -3456,12 +3466,15 @@ function listArtifactFiles(root, current = root) {
 }
 function classifyArtifact(file) {
   const basename9 = path12.basename(file);
-  if (file.endsWith(".png")) return "screenshot";
-  if (basename9 === "session.webm" || basename9 === "session.mp4") return "video";
-  if (basename9 === "viewer.html") return "viewer";
-  if (basename9 === "SUMMARY.md") return "summary";
-  if (basename9 === "evidence.json") return "evidence";
-  if (basename9 === "verdict.json") return "verdict";
+  const isSessionRoot = path12.dirname(file) === ".";
+  if (isSessionRoot && file.endsWith(".png")) return "screenshot";
+  if (isSessionRoot && (basename9 === "session.webm" || basename9 === "session.mp4")) {
+    return "video";
+  }
+  if (isSessionRoot && basename9 === "viewer.html") return "viewer";
+  if (isSessionRoot && basename9 === "SUMMARY.md") return "summary";
+  if (isSessionRoot && basename9 === "evidence.json") return "evidence";
+  if (isSessionRoot && basename9 === "verdict.json") return "verdict";
   if (file.endsWith(".log") || file.endsWith(".ndjson")) return "log";
   return null;
 }
@@ -7298,18 +7311,27 @@ function formatPRComment(data) {
     md += data.verdictReasons.map((reason) => `- ${reason}`).join("\n");
     md += "\n\n";
   }
-  if (data.video) {
-    md += `### Recording
+  const recordings = data.recordings || (data.video ? [{ label: null, ...data.video }] : []);
+  if (recordings.length > 0) {
+    md += `### Recording${recordings.length === 1 ? "" : "s"}
 
 `;
-    if (data.video.renderMode === "embed") {
-      md += `${data.video.url}
+    for (const recording of recordings) {
+      if (recordings.length > 1 && recording.label) {
+        md += `**${recording.label}**
 
 `;
-    } else {
-      md += `[Session recording](${data.video.url})
+      }
+      if (recording.renderMode === "embed") {
+        md += `${recording.url}
 
 `;
+      } else {
+        const label = recording.label ? `Session recording: ${recording.label}` : "Session recording";
+        md += `[${label}](${recording.url})
+
+`;
+      }
     }
   }
   if (data.screenshots.size > 0) {
@@ -7362,6 +7384,62 @@ function formatPRComment(data) {
 // src/session/publication.ts
 import * as fs25 from "fs";
 import * as path22 from "path";
+function matchesScreenshotSelector(artifact, selector, sessionId) {
+  return artifact.id === selector || artifact.path === selector || path22.basename(artifact.path) === selector || `${sessionId}/${artifact.id}` === selector || `${sessionId}/${artifact.path}` === selector || `${sessionId}/${path22.basename(artifact.path)}` === selector;
+}
+function selectPublications(options) {
+  const sessionIds = options.sessionIds || [];
+  if (new Set(sessionIds).size !== sessionIds.length) {
+    throw new Error("A finalized session was selected more than once.");
+  }
+  const selections = sessionIds.length > 0 ? sessionIds.map(
+    (sessionId) => selectPublication({
+      ...options,
+      sessionId,
+      screenshotIds: void 0
+    })
+  ) : [
+    selectPublication({
+      ...options,
+      sessionId: void 0,
+      screenshotIds: void 0
+    })
+  ];
+  if (!options.screenshotIds?.length) {
+    return selections;
+  }
+  const selectedBySession = /* @__PURE__ */ new Map();
+  for (const selector of options.screenshotIds) {
+    const matches = selections.flatMap(
+      (selection) => selection.screenshots.filter(
+        (artifact) => matchesScreenshotSelector(
+          artifact,
+          selector,
+          selection.manifest.sessionId
+        )
+      ).map((artifact) => ({ artifact, selection }))
+    );
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0 ? `Screenshot artifact not found: ${selector}` : `Screenshot selector is ambiguous across selected sessions: ${selector}`
+      );
+    }
+    const match = matches[0];
+    if (!match) {
+      throw new Error(`Screenshot artifact not found: ${selector}`);
+    }
+    const selected = selectedBySession.get(match.selection.sessionDir) || [];
+    if (selected.some((artifact) => artifact.id === match.artifact.id)) {
+      throw new Error(`Screenshot selected more than once: ${selector}`);
+    }
+    selected.push(match.artifact);
+    selectedBySession.set(match.selection.sessionDir, selected);
+  }
+  return selections.map((selection) => ({
+    ...selection,
+    screenshots: selectedBySession.get(selection.sessionDir) || []
+  }));
+}
 function selectPublication(options) {
   const sessions = discoverFinalizedSessions(options.outputDir);
   let candidates;
@@ -7502,11 +7580,11 @@ async function prCommand(options) {
       `Target: ${target.repository} ${target.branch}@${target.headSha.slice(0, 7)}`
     )
   );
-  let selection;
+  let selections;
   try {
-    selection = selectPublication({
+    selections = selectPublications({
       outputDir,
-      sessionId: options.session,
+      sessionIds: options.session,
       screenshotIds: options.screenshot,
       ...target
     });
@@ -7514,49 +7592,90 @@ async function prCommand(options) {
     if (!options.legacySession) {
       throw error;
     }
-    selection = selectLegacyPublication({
-      outputDir,
-      sessionId: options.session,
-      screenshotIds: options.screenshot,
-      ...target
-    });
+    if (options.session?.length !== 1) {
+      throw new Error(
+        "Legacy publication requires exactly one explicit --session."
+      );
+    }
+    selections = [
+      selectLegacyPublication({
+        outputDir,
+        sessionId: options.session[0],
+        screenshotIds: options.screenshot,
+        ...target
+      })
+    ];
     console.log(
       chalk6.yellow(
         "\u26A0 Publishing an explicitly selected legacy session without a finalized provenance manifest."
       )
     );
   }
-  const metadata = loadMetadata(selection.sessionDir);
-  const description = metadata?.description || null;
-  const screenshotPaths = selection.screenshots.map(
-    (artifact) => path23.join(selection.sessionDir, artifact.path)
+  const descriptions = selections.map((selection) => loadMetadata(selection.sessionDir)?.description).filter(
+    (description2) => typeof description2 === "string" && description2.length > 0
   );
-  const videoPath = selection.video ? path23.join(selection.sessionDir, selection.video.path) : null;
-  const errorCount = readIncidentCount(selection.sessionDir, selection.manifest);
-  const verdict = readVerdictSummary(selection.sessionDir, selection.manifest);
-  const preparedAssets = prepareSelectedAssets(selection);
+  const description = descriptions.length > 0 ? [...new Set(descriptions)].join(" \xB7 ") : null;
+  const screenshotCandidates = selections.flatMap(
+    (selection) => selection.screenshots.map((artifact) => ({
+      artifact,
+      filePath: path23.join(selection.sessionDir, artifact.path),
+      label: `${selection.manifest.sessionId}/${path23.basename(artifact.path)}`,
+      sessionId: selection.manifest.sessionId
+    }))
+  );
+  const screenshots = options.screenshot?.length ? options.screenshot.map((selector) => {
+    const match = screenshotCandidates.find(
+      (candidate) => matchesScreenshotSelector(
+        candidate.artifact,
+        selector,
+        candidate.sessionId
+      )
+    );
+    if (!match) {
+      throw new Error(`Selected screenshot ordering failed: ${selector}`);
+    }
+    return match;
+  }) : screenshotCandidates;
+  const recordings = selections.flatMap(
+    (selection) => selection.video ? [
+      {
+        filePath: path23.join(selection.sessionDir, selection.video.path),
+        label: selection.manifest.sessionId
+      }
+    ] : []
+  );
+  const errorCount = selections.reduce(
+    (total, selection) => total + readIncidentCount(selection.sessionDir, selection.manifest),
+    0
+  );
+  const verdict = combineVerdicts(selections);
+  const preparedAssets = prepareSelectedAssets(selections);
   if (preparedAssets.length === 0) {
     throw new Error("The selected session has no publishable screenshots or video.");
   }
   if (options.dryRun) {
     const screenshotMap2 = /* @__PURE__ */ new Map();
-    for (const ssPath of screenshotPaths) {
-      const label = path23.basename(ssPath);
-      screenshotMap2.set(label, `https://github.com/user-attachments/assets/<${label}>`);
+    for (const screenshot of screenshots) {
+      screenshotMap2.set(
+        screenshot.label,
+        `https://github.com/user-attachments/assets/<${screenshot.label}>`
+      );
     }
     const commentData2 = {
       description,
-      sessionCount: 1,
+      sessionCount: selections.length,
       screenshots: screenshotMap2,
-      video: videoPath ? {
-        url: `https://github.com/user-attachments/assets/<${path23.basename(videoPath)}>`,
+      video: null,
+      recordings: recordings.map((recording) => ({
+        label: recording.label,
+        url: `https://github.com/user-attachments/assets/<${recording.label}>`,
         renderMode: "embed"
-      } : null,
+      })),
       errorCount,
       verdict: verdict.status,
       verdictReasons: verdict.reasons,
-      branch: selection.manifest.branch,
-      commitSha: selection.manifest.commitSha
+      branch: selections[0]?.manifest.branch || target.branch,
+      commitSha: selections[0]?.manifest.commitSha || target.headSha
     };
     console.log("");
     console.log(chalk6.yellow("--- Dry run (not posted) ---"));
@@ -7569,9 +7688,10 @@ async function prCommand(options) {
   console.log(chalk6.dim(`Target PR: #${prNumber}`));
   const token = getGitHubToken();
   const repoInfo = await getRepoInfo(token);
+  assertTargetUnchanged(prNumber, target);
   const uploadRoot = buildUploadRoot(
     prNumber,
-    selection.manifest
+    selections.map((selection) => selection.manifest)
   );
   console.log(chalk6.dim(`Upload provider: ${uploadProvider}`));
   if (uploadProvider === "repo-contents") {
@@ -7595,79 +7715,116 @@ async function prCommand(options) {
     );
   }
   const screenshotMap = /* @__PURE__ */ new Map();
-  for (const ssPath of screenshotPaths) {
-    const asset = uploaded.get(ssPath);
-    if (!asset) throw new Error(`Missing uploaded screenshot: ${ssPath}`);
-    screenshotMap.set(path23.basename(ssPath), asset.url);
+  for (const screenshot of screenshots) {
+    const asset = uploaded.get(screenshot.filePath);
+    if (!asset) {
+      throw new Error(`Missing uploaded screenshot: ${screenshot.filePath}`);
+    }
+    screenshotMap.set(screenshot.label, asset.url);
   }
-  let video = null;
-  if (videoPath) {
-    const videoAsset = uploaded.get(videoPath);
-    if (!videoAsset) throw new Error(`Missing uploaded video: ${videoPath}`);
-    video = {
+  const uploadedRecordings = recordings.map((recording) => {
+    const videoAsset = uploaded.get(recording.filePath);
+    if (!videoAsset) {
+      throw new Error(`Missing uploaded video: ${recording.filePath}`);
+    }
+    return {
+      label: recording.label,
       url: videoAsset.url,
       renderMode: uploadProvider === "repo-contents" ? "link" : "embed"
     };
-  }
+  });
   const commentData = {
     description,
-    sessionCount: 1,
+    sessionCount: selections.length,
     screenshots: screenshotMap,
-    video,
+    video: null,
+    recordings: uploadedRecordings,
     errorCount,
     verdict: verdict.status,
     verdictReasons: verdict.reasons,
-    branch: selection.manifest.branch,
-    commitSha: selection.manifest.commitSha
+    branch: selections[0]?.manifest.branch || target.branch,
+    commitSha: selections[0]?.manifest.commitSha || target.headSha
   };
   const commentBody = formatPRComment(commentData);
-  const currentTarget = getPRHeadProvenance(prNumber);
-  if (currentTarget.repository !== target.repository || currentTarget.branch !== target.branch || currentTarget.headSha !== target.headSha) {
-    throw new Error(
-      "The target PR head changed while artifacts were uploading; the PR comment was not posted."
-    );
-  }
+  assertTargetUnchanged(prNumber, target);
   console.log(chalk6.dim("Posting PR comment..."));
   postPRComment(prNumber, commentBody);
   console.log("");
   console.log(chalk6.green.bold(`\u2705 Posted ProofShot verification to PR #${prNumber}`));
   console.log(
-    chalk6.dim(`  ${screenshotMap.size} screenshot(s), ${video ? "1 video" : "no video"}`)
+    chalk6.dim(
+      `  ${screenshotMap.size} screenshot(s), ${uploadedRecordings.length} video(s)`
+    )
   );
 }
-function prepareSelectedAssets(selection) {
-  const artifacts = [
-    ...selection.screenshots,
-    ...selection.video ? [selection.video] : []
-  ];
-  return artifacts.map((artifact) => {
-    const filePath = path23.join(selection.sessionDir, artifact.path);
-    const stat = fs26.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error(`Selected artifact is not a regular file: ${artifact.path}`);
-    }
-    const content = fs26.readFileSync(filePath);
-    const hash = createHash4("sha256").update(content).digest("hex");
-    if (hash !== artifact.sha256 || content.length !== artifact.size) {
-      throw new Error(`Selected artifact changed after validation: ${artifact.path}`);
-    }
-    return {
-      key: filePath,
-      name: path23.basename(artifact.path),
-      relativeDirectory: path23.basename(selection.sessionDir),
-      content
-    };
+function assertTargetUnchanged(prNumber, expected) {
+  const current = getPRHeadProvenance(prNumber);
+  if (current.repository !== expected.repository || current.branch !== expected.branch || current.headSha !== expected.headSha) {
+    throw new Error(
+      "The target PR head changed during publication; no PR comment was posted."
+    );
+  }
+}
+function prepareSelectedAssets(selections) {
+  return selections.flatMap((selection) => {
+    const artifacts = [
+      ...selection.screenshots,
+      ...selection.video ? [selection.video] : []
+    ];
+    return artifacts.map((artifact) => {
+      const filePath = path23.join(selection.sessionDir, artifact.path);
+      const stat = fs26.lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new Error(`Selected artifact is not a regular file: ${artifact.path}`);
+      }
+      const content = fs26.readFileSync(filePath);
+      const hash = createHash4("sha256").update(content).digest("hex");
+      if (hash !== artifact.sha256 || content.length !== artifact.size) {
+        throw new Error(`Selected artifact changed after validation: ${artifact.path}`);
+      }
+      return {
+        key: filePath,
+        name: path23.basename(artifact.path),
+        relativeDirectory: path23.basename(selection.sessionDir),
+        content
+      };
+    });
   });
 }
-function buildUploadRoot(prNumber, manifest) {
-  const sessionId = manifest.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
-  const manifestHash = createHash4("sha256").update(JSON.stringify(manifest)).digest("hex").slice(0, 12);
+function buildUploadRoot(prNumber, manifests) {
+  const sessionId = manifests.length === 1 ? manifests[0]?.sessionId || "session" : `${manifests.length}-sessions`;
+  const safeSessionId = sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
+  const manifestHash = createHash4("sha256").update(JSON.stringify(manifests)).digest("hex").slice(0, 12);
   return path23.posix.join(
     "proofshot",
     `pr-${prNumber}`,
-    sessionId,
+    safeSessionId,
     manifestHash
   );
+}
+function combineVerdicts(selections) {
+  const summaries = selections.map((selection) => ({
+    sessionId: selection.manifest.sessionId,
+    ...readVerdictSummary(selection.sessionDir, selection.manifest)
+  }));
+  const verdictPriority = [
+    "BLOCKED",
+    "INCOMPLETE",
+    "FAIL",
+    "PASS"
+  ];
+  const status = verdictPriority.find(
+    (candidate) => summaries.some((summary) => summary.status === candidate)
+  );
+  if (!status) {
+    throw new Error("No finalized publication verdicts were selected.");
+  }
+  return {
+    status,
+    reasons: summaries.flatMap(
+      (summary) => summary.reasons.map((reason) => `[${summary.sessionId}] ${reason}`)
+    )
+  };
 }
 function readIncidentCount(sessionDir, manifest) {
   const evidenceArtifact = manifest.artifacts.find(
@@ -8017,9 +8174,16 @@ function createCLI() {
   program2.command("doctor").description("Inspect the local ProofShot environment and active session state").action(async () => {
     await doctorCommand();
   });
-  program2.command("pr").description("Upload session artifacts and post a ProofShot comment on a GitHub PR").argument("[pr-number]", "PR number (auto-detects from current branch if omitted)").option("--dry-run", "Generate the comment markdown without posting").option("--session <id>", "Publish one finalized session").option(
+  program2.command("pr").description("Upload session artifacts and post a ProofShot comment on a GitHub PR").argument("[pr-number]", "PR number (auto-detects from current branch if omitted)").option("--dry-run", "Generate the comment markdown without posting").option(
+    "--session <id>",
+    "Publish a finalized session (repeatable)",
+    collectOption,
+    []
+  ).option(
     "--screenshot <artifact...>",
-    "Publish only the named screenshot artifact(s)"
+    "Publish named screenshot artifacts (space-separated or repeatable)",
+    collectOption,
+    []
   ).option(
     "--legacy-session",
     "Allow one explicitly selected pre-manifest session"
@@ -8045,6 +8209,9 @@ function createCLI() {
     await sessionCleanCommand(options);
   });
   return program2;
+}
+function collectOption(value, previous) {
+  return [...previous, value];
 }
 
 // bin/proofshot.ts

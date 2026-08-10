@@ -14,6 +14,91 @@ export type PublicationSelection = {
   video: ManifestArtifact | null;
 };
 
+export function matchesScreenshotSelector(
+  artifact: ManifestArtifact,
+  selector: string,
+  sessionId: string,
+): boolean {
+  return (
+    artifact.id === selector ||
+    artifact.path === selector ||
+    path.basename(artifact.path) === selector ||
+    `${sessionId}/${artifact.id}` === selector ||
+    `${sessionId}/${artifact.path}` === selector ||
+    `${sessionId}/${path.basename(artifact.path)}` === selector
+  );
+}
+
+export function selectPublications(options: {
+  outputDir: string;
+  sessionIds?: string[];
+  screenshotIds?: string[];
+  repository: string;
+  branch: string;
+  headSha: string;
+}): PublicationSelection[] {
+  const sessionIds = options.sessionIds || [];
+  if (new Set(sessionIds).size !== sessionIds.length) {
+    throw new Error('A finalized session was selected more than once.');
+  }
+  const selections =
+    sessionIds.length > 0
+      ? sessionIds.map((sessionId) =>
+          selectPublication({
+            ...options,
+            sessionId,
+            screenshotIds: undefined,
+          }),
+        )
+      : [
+          selectPublication({
+            ...options,
+            sessionId: undefined,
+            screenshotIds: undefined,
+          }),
+        ];
+  if (!options.screenshotIds?.length) {
+    return selections;
+  }
+
+  const selectedBySession = new Map<string, ManifestArtifact[]>();
+  for (const selector of options.screenshotIds) {
+    const matches = selections.flatMap((selection) =>
+      selection.screenshots
+        .filter(
+          (artifact) =>
+            matchesScreenshotSelector(
+              artifact,
+              selector,
+              selection.manifest.sessionId,
+            ),
+        )
+        .map((artifact) => ({ artifact, selection })),
+    );
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length === 0
+          ? `Screenshot artifact not found: ${selector}`
+          : `Screenshot selector is ambiguous across selected sessions: ${selector}`,
+      );
+    }
+    const match = matches[0];
+    if (!match) {
+      throw new Error(`Screenshot artifact not found: ${selector}`);
+    }
+    const selected = selectedBySession.get(match.selection.sessionDir) || [];
+    if (selected.some((artifact) => artifact.id === match.artifact.id)) {
+      throw new Error(`Screenshot selected more than once: ${selector}`);
+    }
+    selected.push(match.artifact);
+    selectedBySession.set(match.selection.sessionDir, selected);
+  }
+  return selections.map((selection) => ({
+    ...selection,
+    screenshots: selectedBySession.get(selection.sessionDir) || [],
+  }));
+}
+
 export function selectPublication(options: {
   outputDir: string;
   sessionId?: string;

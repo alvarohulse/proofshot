@@ -30,12 +30,16 @@ export interface ProofShotConfig {
   headless: boolean;
   browser: BrowserConfig;
   environment?: EnvironmentConfig;
+  logs?: LogsConfig;
+}
+
+export interface ResolvedProofShotConfig extends ProofShotConfig {
   logs: LogsConfig;
 }
 
 const CONFIG_FILENAME = 'proofshot.config.json';
 
-const DEFAULT_CONFIG: ProofShotConfig = {
+const DEFAULT_CONFIG: ResolvedProofShotConfig = {
   devServer: {
     port: 3000,
     startupTimeout: 30000,
@@ -71,7 +75,7 @@ export function findConfigPath(startDir?: string): string | null {
 /**
  * Load config from disk, merging with defaults.
  */
-export function loadConfig(startDir?: string): ProofShotConfig {
+export function loadConfig(startDir?: string): ResolvedProofShotConfig {
   const configPath = findConfigPath(startDir);
   if (!configPath) return { ...DEFAULT_CONFIG };
 

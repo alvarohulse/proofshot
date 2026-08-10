@@ -229,12 +229,15 @@ interface ProofShotConfig {
     headless: boolean;
     browser: BrowserConfig;
     environment?: EnvironmentConfig;
+    logs?: LogsConfig;
+}
+interface ResolvedProofShotConfig extends ProofShotConfig {
     logs: LogsConfig;
 }
 /**
  * Load config from disk, merging with defaults.
  */
-declare function loadConfig(startDir?: string): ProofShotConfig;
+declare function loadConfig(startDir?: string): ResolvedProofShotConfig;
 /**
  * Write config to disk.
  */
@@ -521,6 +524,17 @@ declare function writeArtifactManifest(options: {
 declare function loadArtifactManifest(sessionDir: string): ArtifactManifest | null;
 declare function validateManifestArtifacts(sessionDir: string, manifest: ArtifactManifest): void;
 
+/**
+ * Trim dead time from the beginning and end of the session video.
+ *
+ * Prefers session log timestamps (from `proofshot exec`) when available — these
+ * give exact relative times for every action. Falls back to screenshot file
+ * birth times when there's no session log.
+ *
+ * Buffers: 5s before first action, 3s after last action.
+ */
+declare function trimVideo(videoPath: string, screenshots: string[], outputDir: string, sessionStartMs: number, sessionLog: SessionLogEntry[], mediaStartOffsetSec?: number): number;
+
 interface PRCommentData {
     description: string | null;
     sessionCount: number;
@@ -529,6 +543,11 @@ interface PRCommentData {
         url: string;
         renderMode: 'embed' | 'link';
     } | null;
+    recordings?: Array<{
+        label: string;
+        url: string;
+        renderMode: 'embed' | 'link';
+    }>;
     errorCount: number;
     verdict: 'PASS' | 'FAIL' | 'INCOMPLETE' | 'BLOCKED';
     verdictReasons: string[];
@@ -547,4 +566,4 @@ declare function startOwnedEnvironment(environment: undefined, logs: LogsConfig,
 declare function startOwnedEnvironment(environment: EnvironmentConfig | undefined, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<EnvironmentState | null>;
 declare function stopOwnedEnvironment(state: EnvironmentState | null | undefined): Promise<void>;
 
-export { type ArtifactManifest, type CanonicalEvidence, type EnvironmentConfig, type EnvironmentState, type EvidenceIncident, type EvidenceSourceSummary, type GitProvenance, type LogSourceConfig, type LogsConfig, type ManifestArtifact, type PRCommentData, type ProofShotConfig, ProofShotError, type SessionLogEntry, type SessionMetadata, type SessionState, type Verdict, type VerdictStatus, ab, captureGitProvenance, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadArtifactManifest, loadConfig, loadMetadata, loadSession, saveSession, startOwnedEnvironment, stopOwnedEnvironment, validateManifestArtifacts, waitForPort, writeArtifactManifest, writeCanonicalEvidence, writeConfig, writeMetadata, writeViewer };
+export { type ArtifactManifest, type CanonicalEvidence, type EnvironmentConfig, type EnvironmentState, type EvidenceIncident, type EvidenceSourceSummary, type GitProvenance, type LogSourceConfig, type LogsConfig, type ManifestArtifact, type PRCommentData, type ProofShotConfig, ProofShotError, type ResolvedProofShotConfig, type SessionLogEntry, type SessionMetadata, type SessionState, type Verdict, type VerdictStatus, ab, captureGitProvenance, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadArtifactManifest, loadConfig, loadMetadata, loadSession, saveSession, startOwnedEnvironment, stopOwnedEnvironment, trimVideo, validateManifestArtifacts, waitForPort, writeArtifactManifest, writeCanonicalEvidence, writeConfig, writeMetadata, writeViewer };

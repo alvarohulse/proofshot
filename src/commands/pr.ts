@@ -21,7 +21,8 @@ import {
   type ManifestArtifact,
 } from '../session/manifest.js';
 import {
-  selectPublication,
+  matchesScreenshotSelector,
+  selectPublications,
   type PublicationSelection,
 } from '../session/publication.js';
 
@@ -30,7 +31,7 @@ interface PROptions {
   dryRun?: boolean;
   uploadProvider?: GitHubUploadProvider;
   artifactsBranch?: string;
-  session?: string;
+  session?: string[];
   screenshot?: string[];
   legacySession?: boolean;
 }
@@ -62,11 +63,11 @@ export async function prCommand(options: PROptions): Promise<void> {
     ),
   );
 
-  let selection: PublicationSelection;
+  let selections: PublicationSelection[];
   try {
-    selection = selectPublication({
+    selections = selectPublications({
       outputDir,
-      sessionId: options.session,
+      sessionIds: options.session,
       screenshotIds: options.screenshot,
       ...target,
     });
@@ -74,12 +75,19 @@ export async function prCommand(options: PROptions): Promise<void> {
     if (!options.legacySession) {
       throw error;
     }
-    selection = selectLegacyPublication({
-      outputDir,
-      sessionId: options.session,
-      screenshotIds: options.screenshot,
-      ...target,
-    });
+    if (options.session?.length !== 1) {
+      throw new Error(
+        'Legacy publication requires exactly one explicit --session.',
+      );
+    }
+    selections = [
+      selectLegacyPublication({
+        outputDir,
+        sessionId: options.session[0],
+        screenshotIds: options.screenshot,
+        ...target,
+      }),
+    ];
     console.log(
       chalk.yellow(
         '⚠ Publishing an explicitly selected legacy session without a finalized provenance manifest.',
@@ -87,17 +95,56 @@ export async function prCommand(options: PROptions): Promise<void> {
     );
   }
 
-  const metadata = loadMetadata(selection.sessionDir);
-  const description = metadata?.description || null;
-  const screenshotPaths = selection.screenshots.map((artifact) =>
-    path.join(selection.sessionDir, artifact.path),
-  );
-  const videoPath = selection.video
-    ? path.join(selection.sessionDir, selection.video.path)
+  const descriptions = selections
+    .map((selection) => loadMetadata(selection.sessionDir)?.description)
+    .filter(
+      (description): description is string =>
+        typeof description === 'string' && description.length > 0,
+    );
+  const description = descriptions.length > 0
+    ? [...new Set(descriptions)].join(' · ')
     : null;
-  const errorCount = readIncidentCount(selection.sessionDir, selection.manifest);
-  const verdict = readVerdictSummary(selection.sessionDir, selection.manifest);
-  const preparedAssets = prepareSelectedAssets(selection);
+  const screenshotCandidates = selections.flatMap((selection) =>
+    selection.screenshots.map((artifact) => ({
+      artifact,
+      filePath: path.join(selection.sessionDir, artifact.path),
+      label: `${selection.manifest.sessionId}/${path.basename(artifact.path)}`,
+      sessionId: selection.manifest.sessionId,
+    })),
+  );
+  const screenshots = options.screenshot?.length
+    ? options.screenshot.map((selector) => {
+        const match = screenshotCandidates.find(
+          (candidate) =>
+            matchesScreenshotSelector(
+              candidate.artifact,
+              selector,
+              candidate.sessionId,
+            ),
+        );
+        if (!match) {
+          throw new Error(`Selected screenshot ordering failed: ${selector}`);
+        }
+        return match;
+      })
+    : screenshotCandidates;
+  const recordings = selections.flatMap((selection) =>
+    selection.video
+      ? [
+          {
+            filePath: path.join(selection.sessionDir, selection.video.path),
+            label: selection.manifest.sessionId,
+          },
+        ]
+      : [],
+  );
+  const errorCount = selections.reduce(
+    (total, selection) =>
+      total + readIncidentCount(selection.sessionDir, selection.manifest),
+    0,
+  );
+  const verdict = combineVerdicts(selections);
+  const preparedAssets = prepareSelectedAssets(selections);
   if (preparedAssets.length === 0) {
     throw new Error('The selected session has no publishable screenshots or video.');
   }
@@ -105,26 +152,28 @@ export async function prCommand(options: PROptions): Promise<void> {
   // For --dry-run, generate markdown with placeholder URLs (no GitHub dependency).
   if (options.dryRun) {
     const screenshotMap = new Map<string, string>();
-    for (const ssPath of screenshotPaths) {
-      const label = path.basename(ssPath);
-      screenshotMap.set(label, `https://github.com/user-attachments/assets/<${label}>`);
+    for (const screenshot of screenshots) {
+      screenshotMap.set(
+        screenshot.label,
+        `https://github.com/user-attachments/assets/<${screenshot.label}>`,
+      );
     }
 
     const commentData: PRCommentData = {
       description,
-      sessionCount: 1,
+      sessionCount: selections.length,
       screenshots: screenshotMap,
-      video: videoPath
-        ? {
-            url: `https://github.com/user-attachments/assets/<${path.basename(videoPath)}>`,
+      video: null,
+      recordings: recordings.map((recording) => ({
+            label: recording.label,
+            url: `https://github.com/user-attachments/assets/<${recording.label}>`,
             renderMode: 'embed',
-          }
-        : null,
+          })),
       errorCount,
       verdict: verdict.status,
       verdictReasons: verdict.reasons,
-      branch: selection.manifest.branch,
-      commitSha: selection.manifest.commitSha,
+      branch: selections[0]?.manifest.branch || target.branch,
+      commitSha: selections[0]?.manifest.commitSha || target.headSha,
     };
 
     console.log('');
@@ -140,10 +189,11 @@ export async function prCommand(options: PROptions): Promise<void> {
 
   const token = getGitHubToken();
   const repoInfo = await getRepoInfo(token);
+  assertTargetUnchanged(prNumber, target);
 
   const uploadRoot = buildUploadRoot(
     prNumber,
-    selection.manifest,
+    selections.map((selection) => selection.manifest),
   );
 
   console.log(chalk.dim(`Upload provider: ${uploadProvider}`));
@@ -171,102 +221,155 @@ export async function prCommand(options: PROptions): Promise<void> {
   }
 
   const screenshotMap = new Map<string, string>();
-  for (const ssPath of screenshotPaths) {
-    const asset = uploaded.get(ssPath);
-    if (!asset) throw new Error(`Missing uploaded screenshot: ${ssPath}`);
-    screenshotMap.set(path.basename(ssPath), asset.url);
+  for (const screenshot of screenshots) {
+    const asset = uploaded.get(screenshot.filePath);
+    if (!asset) {
+      throw new Error(`Missing uploaded screenshot: ${screenshot.filePath}`);
+    }
+    screenshotMap.set(screenshot.label, asset.url);
   }
 
-  // Get video URL
-  let video: { url: string; renderMode: 'embed' | 'link' } | null = null;
-  if (videoPath) {
-    const videoAsset = uploaded.get(videoPath);
-    if (!videoAsset) throw new Error(`Missing uploaded video: ${videoPath}`);
-    video = {
+  const uploadedRecordings = recordings.map((recording) => {
+    const videoAsset = uploaded.get(recording.filePath);
+    if (!videoAsset) {
+      throw new Error(`Missing uploaded video: ${recording.filePath}`);
+    }
+    return {
+      label: recording.label,
       url: videoAsset.url,
-      renderMode: uploadProvider === 'repo-contents' ? 'link' : 'embed',
+      renderMode:
+        uploadProvider === 'repo-contents'
+          ? ('link' as const)
+          : ('embed' as const),
     };
-  }
+  });
 
   const commentData: PRCommentData = {
     description,
-    sessionCount: 1,
+    sessionCount: selections.length,
     screenshots: screenshotMap,
-    video,
+    video: null,
+    recordings: uploadedRecordings,
     errorCount,
     verdict: verdict.status,
     verdictReasons: verdict.reasons,
-    branch: selection.manifest.branch,
-    commitSha: selection.manifest.commitSha,
+    branch: selections[0]?.manifest.branch || target.branch,
+    commitSha: selections[0]?.manifest.commitSha || target.headSha,
   };
 
   const commentBody = formatPRComment(commentData);
 
-  const currentTarget = getPRHeadProvenance(prNumber);
-  if (
-    currentTarget.repository !== target.repository ||
-    currentTarget.branch !== target.branch ||
-    currentTarget.headSha !== target.headSha
-  ) {
-    throw new Error(
-      'The target PR head changed while artifacts were uploading; the PR comment was not posted.',
-    );
-  }
+  assertTargetUnchanged(prNumber, target);
   console.log(chalk.dim('Posting PR comment...'));
   postPRComment(prNumber, commentBody);
 
   console.log('');
   console.log(chalk.green.bold(`✅ Posted ProofShot verification to PR #${prNumber}`));
   console.log(
-    chalk.dim(`  ${screenshotMap.size} screenshot(s), ${video ? '1 video' : 'no video'}`),
+    chalk.dim(
+      `  ${screenshotMap.size} screenshot(s), ${uploadedRecordings.length} video(s)`,
+    ),
   );
 }
 
+function assertTargetUnchanged(
+  prNumber: number,
+  expected: {
+    repository: string;
+    branch: string;
+    headSha: string;
+  },
+): void {
+  const current = getPRHeadProvenance(prNumber);
+  if (
+    current.repository !== expected.repository ||
+    current.branch !== expected.branch ||
+    current.headSha !== expected.headSha
+  ) {
+    throw new Error(
+      'The target PR head changed during publication; no PR comment was posted.',
+    );
+  }
+}
+
 function prepareSelectedAssets(
-  selection: PublicationSelection,
+  selections: PublicationSelection[],
 ): PreparedUploadAsset[] {
-  const artifacts = [
-    ...selection.screenshots,
-    ...(selection.video ? [selection.video] : []),
-  ];
-  return artifacts.map((artifact) => {
-    const filePath = path.join(selection.sessionDir, artifact.path);
-    const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error(`Selected artifact is not a regular file: ${artifact.path}`);
-    }
-    const content = fs.readFileSync(filePath);
-    const hash = createHash('sha256').update(content).digest('hex');
-    if (hash !== artifact.sha256 || content.length !== artifact.size) {
-      throw new Error(`Selected artifact changed after validation: ${artifact.path}`);
-    }
-    return {
-      key: filePath,
-      name: path.basename(artifact.path),
-      relativeDirectory: path.basename(selection.sessionDir),
-      content,
-    };
+  return selections.flatMap((selection) => {
+    const artifacts = [
+      ...selection.screenshots,
+      ...(selection.video ? [selection.video] : []),
+    ];
+    return artifacts.map((artifact) => {
+      const filePath = path.join(selection.sessionDir, artifact.path);
+      const stat = fs.lstatSync(filePath);
+      if (!stat.isFile() || stat.isSymbolicLink()) {
+        throw new Error(`Selected artifact is not a regular file: ${artifact.path}`);
+      }
+      const content = fs.readFileSync(filePath);
+      const hash = createHash('sha256').update(content).digest('hex');
+      if (hash !== artifact.sha256 || content.length !== artifact.size) {
+        throw new Error(`Selected artifact changed after validation: ${artifact.path}`);
+      }
+      return {
+        key: filePath,
+        name: path.basename(artifact.path),
+        relativeDirectory: path.basename(selection.sessionDir),
+        content,
+      };
+    });
   });
 }
 
 function buildUploadRoot(
   prNumber: number,
-  manifest: ArtifactManifest,
+  manifests: ArtifactManifest[],
 ): string {
-  const sessionId =
-    manifest.sessionId
+  const sessionId = manifests.length === 1
+    ? manifests[0]?.sessionId || 'session'
+    : `${manifests.length}-sessions`;
+  const safeSessionId =
+    sessionId
       .replace(/[^a-zA-Z0-9._-]+/g, '-')
       .replace(/^-+|-+$/g, '') || 'session';
   const manifestHash = createHash('sha256')
-    .update(JSON.stringify(manifest))
+    .update(JSON.stringify(manifests))
     .digest('hex')
     .slice(0, 12);
   return path.posix.join(
     'proofshot',
     `pr-${prNumber}`,
-    sessionId,
+    safeSessionId,
     manifestHash,
   );
+}
+
+function combineVerdicts(selections: PublicationSelection[]): {
+  status: ArtifactManifest['verdict'];
+  reasons: string[];
+} {
+  const summaries = selections.map((selection) => ({
+    sessionId: selection.manifest.sessionId,
+    ...readVerdictSummary(selection.sessionDir, selection.manifest),
+  }));
+  const verdictPriority: ArtifactManifest['verdict'][] = [
+    'BLOCKED',
+    'INCOMPLETE',
+    'FAIL',
+    'PASS',
+  ];
+  const status = verdictPriority.find((candidate) =>
+    summaries.some((summary) => summary.status === candidate),
+  );
+  if (!status) {
+    throw new Error('No finalized publication verdicts were selected.');
+  }
+  return {
+    status,
+    reasons: summaries.flatMap((summary) =>
+      summary.reasons.map((reason) => `[${summary.sessionId}] ${reason}`),
+    ),
+  };
 }
 
 function readIncidentCount(
