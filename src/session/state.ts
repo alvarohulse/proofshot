@@ -8,6 +8,8 @@ const SESSION_FILENAME = '.session.json';
 export interface SessionState {
   startedAt: string;
   startDirectory?: string;
+  lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
+  cleanupError?: string | null;
   description: string | null;
   outputDir: string;
   sessionDir: string;
@@ -18,6 +20,7 @@ export interface SessionState {
   serverCommand: string | null;
   serverAlreadyRunning: boolean;
   recordingActive: boolean;
+  browserLaunchAttempted?: boolean;
   bundleComplete?: boolean;
   browserRetained?: boolean;
   videoTrimComplete?: boolean;

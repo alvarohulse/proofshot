@@ -12,12 +12,14 @@ import {
   clearSession,
   resolveSessionControlDir,
   saveSession,
+  type SessionState,
 } from '../session/state.js';
 import {
   canAddressOwnedBrowserSession,
   stopOwnedBrowser,
   stopOwnedServer,
 } from '../session/lifecycle.js';
+import { registerSession, unregisterSession } from '../session/registry.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { loadSessionLog, type SessionLogEntry } from './exec.js';
@@ -87,7 +89,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       const browserSessionAddressable = canAddressOwnedBrowserSession(session);
       await stopOwnedBrowser(session);
       session.browserRetained = false;
-      clearSession(controlDir);
+      clearOwnedSession(session, controlDir);
       if (browserSessionAddressable) {
         console.log(chalk.green('✓') + ' Retained browser closed; proof artifacts were already bundled.');
       } else {
@@ -101,12 +103,15 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         chalk.dim('Proof artifacts are already bundled; the owned browser remains intentionally open.'),
       );
     } else {
-      clearSession(controlDir);
+      clearOwnedSession(session, controlDir);
       console.log(chalk.dim('Proof artifacts are already bundled and all owned processes are stopped.'));
     }
     return;
   }
 
+  session.lifecycleStatus = 'stopping';
+  session.cleanupError = null;
+  persistOwnedSession(session, controlDir);
   const retryingStoppedSession = !session.recordingActive;
   const recordingWasActive = session.recordingActive;
   const startTime = new Date(session.startedAt).getTime();
@@ -164,7 +169,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         : 0;
     // Persist evidence before any cleanup step can fail. A retry must not turn
     // successfully collected browser facts into an "unavailable" claim.
-    saveSession(session, controlDir);
+    persistOwnedSession(session, controlDir);
   } else if (priorConsoleEvidenceAvailable) {
     if (fs.existsSync(consoleErrorsPath)) {
       consoleErrors = fs.readFileSync(consoleErrorsPath, 'utf-8');
@@ -188,7 +193,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     stopRecording(session.sessionName);
   }
   session.recordingActive = false;
-  saveSession(session, controlDir);
+  persistOwnedSession(session, controlDir);
 
   // Step 3: Close browser (unless --no-close)
   let cleanupError: unknown;
@@ -210,7 +215,13 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       cleanupError ||= error;
     }
   }
-  if (cleanupError) throw cleanupError;
+  if (cleanupError) {
+    session.lifecycleStatus = 'recovery';
+    session.cleanupError =
+      cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    persistOwnedSession(session, controlDir);
+    throw cleanupError;
+  }
 
   // Step 4: Read server log (with timestamp parsing)
   let serverLog = '';
@@ -245,7 +256,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     }
     session.videoTrimComplete = true;
     session.trimOffsetSec = trimOffsetSec;
-    saveSession(session, controlDir);
+    persistOwnedSession(session, controlDir);
   }
 
   // Step 6: Count errors
@@ -264,7 +275,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   if (browserSessionAvailable) {
     session.consoleEvidenceAvailable = true;
     session.consoleErrorCount = consoleErrorCount;
-    saveSession(session, controlDir);
+    persistOwnedSession(session, controlDir);
   }
 
   // Extract errors from server log using multi-language patterns
@@ -315,7 +326,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
   if (!session.sessionLogAdjusted) {
     session.sessionLogAdjusted = true;
-    saveSession(session, controlDir);
+    persistOwnedSession(session, controlDir);
   }
 
   // Apply trimOffsetSec to log entries (same adjustment as session log)
@@ -347,9 +358,10 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   session.bundleComplete = true;
   session.browserRetained = Boolean(options.noClose);
   if (session.browserRetained) {
-    saveSession(session, controlDir);
+    session.lifecycleStatus = 'active';
+    persistOwnedSession(session, controlDir);
   } else {
-    clearSession(controlDir);
+    clearOwnedSession(session, controlDir);
   }
 
   // Step 9: Print results
@@ -419,6 +431,16 @@ function writeTextFileAtomically(filePath: string, contents: string): void {
   } finally {
     if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
   }
+}
+
+function persistOwnedSession(session: SessionState, controlDir: string): void {
+  saveSession(session, controlDir);
+  registerSession(session);
+}
+
+function clearOwnedSession(session: SessionState, controlDir: string): void {
+  clearSession(controlDir);
+  unregisterSession(session.sessionName);
 }
 
 export interface SummaryData {

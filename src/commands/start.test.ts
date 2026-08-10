@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   prepareAgentBrowserSocketDir: vi.fn(),
   captureAgentBrowserProcessIdentity: vi.fn(),
   cleanupFailedStart: vi.fn(),
+  registerSession: vi.fn(),
+  unregisterSession: vi.fn(),
   execSync: vi.fn(),
 }));
 
@@ -69,6 +71,11 @@ vi.mock('../session/state.js', () => ({
 
 vi.mock('../session/lifecycle.js', () => ({
   cleanupFailedStart: mocks.cleanupFailedStart,
+}));
+
+vi.mock('../session/registry.js', () => ({
+  registerSession: mocks.registerSession,
+  unregisterSession: mocks.unregisterSession,
 }));
 
 vi.mock('../session/metadata.js', () => ({
@@ -138,7 +145,9 @@ describe('startCommand', () => {
     expect(mocks.startRecording).toHaveBeenCalledTimes(3);
     expect(mocks.cleanupFailedStart).toHaveBeenCalledTimes(1);
     expect(mocks.saveSession).toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenCalled();
     expect(mocks.clearSession).toHaveBeenCalledWith('/project/proofshot-artifacts');
+    expect(mocks.unregisterSession).toHaveBeenCalledWith('ps-2026-04-deadbeef1234');
   });
 
   it('clears discoverable control state when recording never starts', async () => {
@@ -186,8 +195,61 @@ describe('startCommand', () => {
       outputDir: '/audit/custom-evidence',
       targetUrl: 'http://127.0.0.1:43171/getting-started',
       recordingActive: true,
+      lifecycleStatus: 'active',
       agentBrowserSocketDir: '/run/user/1000/proofshot',
     });
     expect(mocks.saveSession.mock.calls.every((call) => call[1] === '/project/proofshot-artifacts')).toBe(true);
+  });
+
+  it('persists server ownership before waiting for readiness', async () => {
+    const serverProcess = {
+      pid: 5001,
+      processGroupId: 5001,
+      sessionId: 5001,
+      startTime: 'server-start',
+    };
+    mocks.ensureDevServer.mockImplementation(
+      async (
+        _command: string,
+        _port: number,
+        _timeout: number,
+        _logPath: string,
+        onStarted: (result: unknown) => void,
+      ) => {
+        onStarted({ alreadyRunning: false, port: 3000, process: serverProcess });
+        throw new Error('readiness timed out');
+      },
+    );
+
+    const commandPromise = startCommand({ run: 'npm run dev' }).catch((error) => error);
+    await vi.runAllTimersAsync();
+    await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
+
+    expect(mocks.saveSession).toHaveBeenCalledWith(
+      expect.objectContaining({ serverProcess }),
+      '/project/proofshot-artifacts',
+    );
+    expect(mocks.cleanupFailedStart).toHaveBeenCalledWith(
+      expect.objectContaining({ serverProcess }),
+    );
+  });
+
+  it('retains recovery inventory when failed-start cleanup is incomplete', async () => {
+    mocks.openBrowser.mockImplementation(() => {
+      throw new Error('browser launch timed out');
+    });
+    mocks.cleanupFailedStart.mockRejectedValue(new Error('daemon identity unavailable'));
+
+    const commandPromise = startCommand({}).catch((error) => error);
+    await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
+
+    expect(mocks.clearSession).not.toHaveBeenCalled();
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        lifecycleStatus: 'recovery',
+        cleanupError: 'daemon identity unavailable',
+      }),
+    );
   });
 });

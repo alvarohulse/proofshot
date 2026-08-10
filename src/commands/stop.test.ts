@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   stopOwnedBrowser: vi.fn(),
   stopOwnedServer: vi.fn(),
   canAddressOwnedBrowserSession: vi.fn(),
+  registerSession: vi.fn(),
+  unregisterSession: vi.fn(),
   writeViewer: vi.fn(),
   extractServerErrors: vi.fn(),
   loadSessionLog: vi.fn(),
@@ -40,6 +42,10 @@ vi.mock('../session/lifecycle.js', () => ({
   canAddressOwnedBrowserSession: mocks.canAddressOwnedBrowserSession,
   stopOwnedBrowser: mocks.stopOwnedBrowser,
   stopOwnedServer: mocks.stopOwnedServer,
+}));
+vi.mock('../session/registry.js', () => ({
+  registerSession: mocks.registerSession,
+  unregisterSession: mocks.unregisterSession,
 }));
 vi.mock('../artifacts/viewer.js', () => ({ writeViewer: mocks.writeViewer }));
 vi.mock('../utils/error-patterns.js', () => ({ extractServerErrors: mocks.extractServerErrors }));

@@ -66,6 +66,7 @@ export async function ensureDevServer(
   port: number,
   startupTimeout: number,
   logPath: string,
+  onStarted?: (result: ServerStartResult) => void,
 ): Promise<ServerStartResult> {
   // Port ownership is not session ownership. Never kill an unrelated listener.
   if (await isPortOpen(port)) {
@@ -105,6 +106,13 @@ export async function ensureDevServer(
     }
     throw new Error('ProofShot could not record an exact identity for the dev server process.');
   }
+  const result = { alreadyRunning: false, port, process: processIdentity };
+  try {
+    onStarted?.(result);
+  } catch (error) {
+    await terminateOwnedProcessTree(processIdentity);
+    throw error;
+  }
 
   try {
     await waitForPort(port, startupTimeout);
@@ -121,5 +129,5 @@ export async function ensureDevServer(
   // Small delay for stability
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  return { alreadyRunning: false, port, process: processIdentity };
+  return result;
 }

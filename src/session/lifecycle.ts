@@ -1,6 +1,7 @@
 import { stopRecording } from '../browser/capture.js';
 import {
   captureAgentBrowserProcessIdentity,
+  waitForAgentBrowserProcessIdentity,
 } from '../browser/runtime.js';
 import { closeBrowser } from '../browser/session.js';
 import {
@@ -57,17 +58,35 @@ export async function stopOwnedServer(session: SessionState): Promise<void> {
 }
 
 export async function cleanupFailedStart(session: SessionState): Promise<void> {
+  let cleanupError: unknown;
+  if (
+    !session.browserProcess &&
+    session.browserLaunchAttempted &&
+    session.agentBrowserSocketDir
+  ) {
+    session.browserProcess = await waitForAgentBrowserProcessIdentity(
+      session.agentBrowserSocketDir,
+      session.sessionName,
+    );
+  }
+  if (session.browserLaunchAttempted && !session.browserProcess) {
+    cleanupError = new Error(
+      `Could not recover exact browser ownership for ${session.sessionName}; cleanup state was retained.`,
+    );
+  }
+
   // Recording may have started even when its CLI call returned an error. Both
   // operations are session-scoped and best effort. Never address a session
   // name unless its daemon still has the identity captured by this start.
   if (canAddressOwnedBrowserSession(session)) {
     stopRecording(session.sessionName);
   }
-  let cleanupError: unknown;
-  try {
-    await stopOwnedBrowser(session);
-  } catch (error) {
-    cleanupError = error;
+  if (session.browserProcess || !session.browserLaunchAttempted) {
+    try {
+      await stopOwnedBrowser(session);
+    } catch (error) {
+      cleanupError ||= error;
+    }
   }
   try {
     await stopOwnedServer(session);

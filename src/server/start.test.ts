@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isPortOpen } from '../utils/port.js';
 import {
   isDetachedProcessIdentity,
@@ -78,15 +78,18 @@ describe('ensureDevServer', () => {
     const port = address.port;
     await new Promise<void>((resolve) => probe.close(() => resolve()));
 
+    const onStarted = vi.fn();
     const result = await ensureDevServer(
       `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${port}`,
       port,
       3000,
       logPath,
+      onStarted,
     );
     ownedProcesses.push(result.process);
 
     expect(isDetachedProcessIdentity(result.process)).toBe(true);
+    expect(onStarted).toHaveBeenCalledWith(result);
     expect(fs.readFileSync(logPath, 'utf-8')).toMatch(/^\d{13}\tserver-ready$/m);
 
     await terminateOwnedProcessTree(result.process, { graceMs: 300 });

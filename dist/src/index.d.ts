@@ -34,7 +34,7 @@ interface ServerStartResult {
  * Only called when the agent provides a --run command.
  * Pipes stdout/stderr to logPath for server error capture.
  */
-declare function ensureDevServer(command: string, port: number, startupTimeout: number, logPath: string): Promise<ServerStartResult>;
+declare function ensureDevServer(command: string, port: number, startupTimeout: number, logPath: string, onStarted?: (result: ServerStartResult) => void): Promise<ServerStartResult>;
 
 interface DevServerConfig {
     port: number;
@@ -96,6 +96,8 @@ declare function waitForPort(port: number, timeoutMs?: number, intervalMs?: numb
 interface SessionState {
     startedAt: string;
     startDirectory?: string;
+    lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
+    cleanupError?: string | null;
     description: string | null;
     outputDir: string;
     sessionDir: string;
@@ -106,6 +108,7 @@ interface SessionState {
     serverCommand: string | null;
     serverAlreadyRunning: boolean;
     recordingActive: boolean;
+    browserLaunchAttempted?: boolean;
     bundleComplete?: boolean;
     browserRetained?: boolean;
     videoTrimComplete?: boolean;

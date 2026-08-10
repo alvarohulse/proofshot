@@ -15,6 +15,7 @@ import {
   type SessionState,
 } from '../session/state.js';
 import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
+import { registerSession } from '../session/registry.js';
 
 const SESSION_LOG_FILENAME = 'session-log.json';
 
@@ -287,6 +288,7 @@ export async function execCommand(args: string[]): Promise<void> {
       const vp = JSON.parse(vpJson);
       session.viewport = { width: vp.width, height: vp.height };
       saveSession(session, controlDir);
+      registerSession(session);
     } catch {
       // Non-critical — viewport cache stays stale
     }

@@ -7,6 +7,7 @@ import { cleanCommand } from './commands/clean.js';
 import { prCommand } from './commands/pr.js';
 import { execCommand } from './commands/exec.js';
 import { doctorCommand } from './commands/doctor.js';
+import { sessionCleanCommand, sessionListCommand } from './commands/session.js';
 import { PROOFSHOT_VERSION } from './version.js';
 
 export function createCLI(): Command {
@@ -98,6 +99,27 @@ export function createCLI(): Command {
     .allowUnknownOption()
     .action(async (args) => {
       await execCommand(args);
+    });
+
+  const session = program
+    .command('session')
+    .description('List and recover registered ProofShot sessions');
+
+  session
+    .command('list')
+    .description('List all registered ProofShot sessions')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (options) => {
+      await sessionListCommand(options);
+    });
+
+  session
+    .command('clean')
+    .description('Retry exact cleanup for recoverable ProofShot sessions')
+    .option('--session <id>', 'Clean one exact registered session')
+    .option('--all', 'Clean every registered session')
+    .action(async (options) => {
+      await sessionCleanCommand(options);
     });
 
   return program;

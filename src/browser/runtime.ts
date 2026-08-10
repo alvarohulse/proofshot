@@ -88,3 +88,21 @@ export function captureAgentBrowserProcessIdentity(
     return null;
   }
 }
+
+export async function waitForAgentBrowserProcessIdentity(
+  socketDir: string,
+  sessionName: string,
+  timeoutMs = 2000,
+  pollIntervalMs = 25,
+): Promise<ProcessIdentity | null> {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const identity = captureAgentBrowserProcessIdentity(socketDir, sessionName);
+    if (identity) {
+      return identity;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  } while (Date.now() < deadline);
+
+  return captureAgentBrowserProcessIdentity(socketDir, sessionName);
+}

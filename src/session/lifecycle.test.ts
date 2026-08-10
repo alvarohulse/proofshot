@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   captureAgentBrowserProcessIdentity: vi.fn(),
+  waitForAgentBrowserProcessIdentity: vi.fn(),
   closeBrowser: vi.fn(),
   stopRecording: vi.fn(),
   ownedProcessTreeIsAlive: vi.fn(),
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../browser/runtime.js', () => ({
   captureAgentBrowserProcessIdentity: mocks.captureAgentBrowserProcessIdentity,
+  waitForAgentBrowserProcessIdentity: mocks.waitForAgentBrowserProcessIdentity,
 }));
 vi.mock('../browser/session.js', () => ({ closeBrowser: mocks.closeBrowser }));
 vi.mock('../browser/capture.js', () => ({ stopRecording: mocks.stopRecording }));
@@ -47,6 +49,7 @@ beforeEach(() => {
   mocks.processIdentityMatches.mockReturnValue(true);
   mocks.ownedProcessTreeIsAlive.mockReturnValue(false);
   mocks.terminateOwnedProcessTree.mockResolvedValue(true);
+  mocks.waitForAgentBrowserProcessIdentity.mockResolvedValue(null);
 });
 
 describe('owned browser lifecycle', () => {
@@ -81,5 +84,30 @@ describe('owned browser lifecycle', () => {
     expect(mocks.closeBrowser).toHaveBeenNthCalledWith(2, 'ps-owned-session');
     expect(mocks.terminateOwnedProcessTree).toHaveBeenNthCalledWith(1, persistedIdentity);
     expect(mocks.terminateOwnedProcessTree).toHaveBeenNthCalledWith(2, legacyIdentity);
+  });
+
+  it('recovers a delayed daemon identity after a timed-out browser launch', async () => {
+    const state = {
+      ...session(null),
+      browserLaunchAttempted: true,
+    };
+    mocks.waitForAgentBrowserProcessIdentity.mockResolvedValue(persistedIdentity);
+
+    await cleanupFailedStart(state);
+
+    expect(state.browserProcess).toEqual(persistedIdentity);
+    expect(mocks.closeBrowser).toHaveBeenCalledWith('ps-owned-session');
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(persistedIdentity);
+  });
+
+  it('retains a cleanup error when exact browser identity cannot be recovered', async () => {
+    const state = {
+      ...session(null),
+      browserLaunchAttempted: true,
+    };
+
+    await expect(cleanupFailedStart(state)).rejects.toThrow(/cleanup state was retained/);
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledTimes(1);
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
   });
 });

@@ -22,6 +22,7 @@ import {
   type SessionState,
 } from '../session/state.js';
 import { cleanupFailedStart } from '../session/lifecycle.js';
+import { registerSession, unregisterSession } from '../session/registry.js';
 import { writeMetadata } from '../session/metadata.js';
 
 interface StartOptions {
@@ -48,6 +49,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
           socketDir: existingSession.agentBrowserSocketDir,
         });
         await cleanupFailedStart(existingSession);
+        unregisterSession(existingSession.sessionName);
       }
       clearSession(controlDir);
       console.log(chalk.yellow('⚠') + chalk.dim(' Cleaned up the previous session'));
@@ -130,6 +132,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const session: SessionState = {
     startedAt: new Date().toISOString(),
     startDirectory: process.cwd(),
+    lifecycleStatus: 'starting',
+    cleanupError: null,
     description: options.description || null,
     outputDir,
     sessionDir,
@@ -140,6 +144,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     serverCommand: options.run || null,
     serverAlreadyRunning: !options.run,
     recordingActive: false,
+    browserLaunchAttempted: false,
     bundleComplete: false,
     browserRetained: false,
     videoTrimComplete: false,
@@ -155,7 +160,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
     browserProcess: null,
     viewport: { width: config.viewport.width, height: config.viewport.height },
   };
-  saveSession(session, controlDir);
+  persistOwnedSession(session, controlDir);
+  const signalHandlers = installStartSignalHandlers(session, controlDir);
 
   let failureContext = 'start the session';
   try {
@@ -167,10 +173,15 @@ export async function startCommand(options: StartOptions): Promise<void> {
         config.devServer.port,
         config.devServer.startupTimeout,
         serverErrorLog,
+        (startedServer) => {
+          session.serverAlreadyRunning = false;
+          session.serverProcess = startedServer.process;
+          persistOwnedSession(session, controlDir);
+        },
       );
       session.serverAlreadyRunning = false;
       session.serverProcess = server.process;
-      saveSession(session, controlDir);
+      persistOwnedSession(session, controlDir);
       console.log(chalk.green('✓') + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk.dim(`  Server logs → ${serverErrorLog}`));
     } else {
@@ -179,6 +190,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
     failureContext = 'open browser';
     console.log(chalk.dim('Opening browser...'));
+    session.browserLaunchAttempted = true;
+    persistOwnedSession(session, controlDir);
     openBrowser(openUrl, config.viewport, config.headless, sessionName, config.browser);
     session.browserProcess = captureAgentBrowserProcessIdentity(socketDir, sessionName);
     if (!session.browserProcess) {
@@ -186,7 +199,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         `Could not record the exact agent-browser daemon identity for session ${sessionName}.`,
       );
     }
-    saveSession(session, controlDir);
+    persistOwnedSession(session, controlDir);
     console.log(chalk.green('✓') + ' Browser ready');
 
     failureContext = 'initialize recording';
@@ -219,19 +232,45 @@ export async function startCommand(options: StartOptions): Promise<void> {
       );
     }
   } catch (error: any) {
-    await cleanupFailedStart(session);
-    clearSession(controlDir);
-    console.error(
-      chalk.red('✗') +
-        ` Failed to ${failureContext}: ${error.message}\n` +
-        chalk.dim('All processes started by this ProofShot attempt were cleaned up.'),
+    if (signalHandlers.isHandling()) {
+      return;
+    }
+    signalHandlers.remove();
+    const interruptionSignal = getTerminationSignal(error);
+    try {
+      await cleanupFailedStart(session);
+      clearOwnedSession(session, controlDir);
+      console.error(
+        chalk.red('✗') +
+          ` Failed to ${failureContext}: ${error.message}\n` +
+          chalk.dim('All processes started by this ProofShot attempt were cleaned up.'),
+      );
+    } catch (cleanupError) {
+      session.lifecycleStatus = 'recovery';
+      session.cleanupError =
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      persistOwnedSession(session, controlDir);
+      console.error(
+        chalk.red('✗') +
+          ` Failed to ${failureContext}: ${error.message}\n` +
+          chalk.yellow(`Cleanup is incomplete: ${session.cleanupError}\n`) +
+          chalk.dim(`Run "proofshot session clean --session ${session.sessionName}" to retry.`),
+      );
+    }
+    process.exit(
+      interruptionSignal === 'SIGINT'
+        ? 130
+        : interruptionSignal === 'SIGTERM'
+          ? 143
+          : 1,
     );
-    process.exit(1);
     return;
   }
 
   session.recordingActive = true;
-  saveSession(session, controlDir);
+  session.lifecycleStatus = 'active';
+  persistOwnedSession(session, controlDir);
+  signalHandlers.remove();
 
   console.log('');
   console.log(chalk.green.bold('✅ ProofShot session started'));
@@ -255,4 +294,68 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log(chalk.dim('  proofshot exec screenshot step.png    # Capture a moment'));
   console.log('');
   console.log(`When done, run: ${chalk.white('proofshot stop')}`);
+}
+
+function persistOwnedSession(session: SessionState, controlDir: string): void {
+  saveSession(session, controlDir);
+  registerSession(session);
+}
+
+function clearOwnedSession(session: SessionState, controlDir: string): void {
+  clearSession(controlDir);
+  unregisterSession(session.sessionName);
+}
+
+function installStartSignalHandlers(
+  session: SessionState,
+  controlDir: string,
+): { isHandling: () => boolean; remove: () => void } {
+  let handlingSignal = false;
+  const handlers = new Map<NodeJS.Signals, () => void>();
+
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    const handler = (): void => {
+      if (handlingSignal) {
+        return;
+      }
+      handlingSignal = true;
+      void cleanupFailedStart(session)
+        .then(() => {
+          clearOwnedSession(session, controlDir);
+          process.exit(signal === 'SIGINT' ? 130 : 143);
+        })
+        .catch((error) => {
+          session.lifecycleStatus = 'recovery';
+          session.cleanupError = error instanceof Error ? error.message : String(error);
+          persistOwnedSession(session, controlDir);
+          process.exit(1);
+        });
+    };
+    handlers.set(signal, handler);
+    process.once(signal, handler);
+  }
+
+  return {
+    isHandling: (): boolean => handlingSignal,
+    remove: (): void => {
+      for (const [signal, handler] of handlers) {
+        process.removeListener(signal, handler);
+      }
+    },
+  };
+}
+
+function getTerminationSignal(error: unknown): NodeJS.Signals | null {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== 'object' || current === null) {
+      return null;
+    }
+    const candidate = current as { cause?: unknown; signal?: unknown };
+    if (candidate.signal === 'SIGINT' || candidate.signal === 'SIGTERM') {
+      return candidate.signal;
+    }
+    current = candidate.cause;
+  }
+  return null;
 }

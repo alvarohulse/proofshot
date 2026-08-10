@@ -3,6 +3,7 @@ import { PROOFSHOT_VERSION } from '../version.js';
 import { findConfigPath, loadConfig } from '../utils/config.js';
 import { findExecutablePath, readCommandVersion } from '../utils/process.js';
 import { loadSession, resolveSessionControlDir } from '../session/state.js';
+import { listRegisteredSessions } from '../session/registry.js';
 
 function statusLabel(ok: boolean, text: string): string {
   return ok ? `${chalk.green('✓')} ${text}` : `${chalk.yellow('⚠')} ${text}`;
@@ -17,6 +18,7 @@ export async function doctorCommand(): Promise<void> {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
   const session = loadSession(controlDir);
+  const registeredSessions = listRegisteredSessions();
 
   const agentBrowserPath = findExecutablePath('agent-browser');
   const ffmpegPath = findExecutablePath('ffmpeg');
@@ -45,6 +47,7 @@ export async function doctorCommand(): Promise<void> {
   console.log('');
 
   console.log(statusLabel(Boolean(session), 'active session'));
+  printLine('Sessions', String(registeredSessions.length));
   if (session) {
     printLine('Session dir', session.sessionDir);
     printLine('Recording', session.recordingActive ? 'active' : 'stopped');

@@ -469,7 +469,7 @@ async function installCommand(options) {
 }
 
 // src/commands/start.ts
-import * as path8 from "path";
+import * as path9 from "path";
 import chalk2 from "chalk";
 import { execSync as execSync4 } from "child_process";
 
@@ -903,7 +903,7 @@ child.on('close', (code) => {
   process.exit(code == null ? 1 : code);
 });
 `;
-async function ensureDevServer(command, port, startupTimeout, logPath) {
+async function ensureDevServer(command, port, startupTimeout, logPath, onStarted) {
   if (await isPortOpen(port)) {
     throw new Error(
       `Port ${port} is already in use by a process ProofShot did not start.
@@ -936,6 +936,13 @@ Choose another port or stop that process explicitly, then retry.`
     }
     throw new Error("ProofShot could not record an exact identity for the dev server process.");
   }
+  const result = { alreadyRunning: false, port, process: processIdentity };
+  try {
+    onStarted?.(result);
+  } catch (error) {
+    await terminateOwnedProcessTree(processIdentity);
+    throw error;
+  }
   try {
     await waitForPort(port, startupTimeout);
   } catch (error) {
@@ -947,7 +954,7 @@ Original error: ${error instanceof Error ? error.message : error}`
     );
   }
   await new Promise((resolve10) => setTimeout(resolve10, 1e3));
-  return { alreadyRunning: false, port, process: processIdentity };
+  return result;
 }
 
 // src/browser/session.ts
@@ -1182,6 +1189,17 @@ function captureAgentBrowserProcessIdentity(socketDir, sessionName) {
     return null;
   }
 }
+async function waitForAgentBrowserProcessIdentity(socketDir, sessionName, timeoutMs = 2e3, pollIntervalMs = 25) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const identity = captureAgentBrowserProcessIdentity(socketDir, sessionName);
+    if (identity) {
+      return identity;
+    }
+    await new Promise((resolve10) => setTimeout(resolve10, pollIntervalMs));
+  } while (Date.now() < deadline);
+  return captureAgentBrowserProcessIdentity(socketDir, sessionName);
+}
 
 // src/artifacts/bundle.ts
 import * as fs8 from "fs";
@@ -1266,14 +1284,27 @@ async function stopOwnedServer(session) {
   }
 }
 async function cleanupFailedStart(session) {
+  let cleanupError;
+  if (!session.browserProcess && session.browserLaunchAttempted && session.agentBrowserSocketDir) {
+    session.browserProcess = await waitForAgentBrowserProcessIdentity(
+      session.agentBrowserSocketDir,
+      session.sessionName
+    );
+  }
+  if (session.browserLaunchAttempted && !session.browserProcess) {
+    cleanupError = new Error(
+      `Could not recover exact browser ownership for ${session.sessionName}; cleanup state was retained.`
+    );
+  }
   if (canAddressOwnedBrowserSession(session)) {
     stopRecording(session.sessionName);
   }
-  let cleanupError;
-  try {
-    await stopOwnedBrowser(session);
-  } catch (error) {
-    cleanupError = error;
+  if (session.browserProcess || !session.browserLaunchAttempted) {
+    try {
+      await stopOwnedBrowser(session);
+    } catch (error) {
+      cleanupError ||= error;
+    }
   }
   try {
     await stopOwnedServer(session);
@@ -1283,30 +1314,132 @@ async function cleanupFailedStart(session) {
   if (cleanupError) throw cleanupError;
 }
 
-// src/session/metadata.ts
+// src/session/registry.ts
 import * as fs10 from "fs";
+import * as os4 from "os";
 import * as path7 from "path";
+import { randomUUID as randomUUID2 } from "crypto";
+var SESSION_REGISTRY_DIRECTORY = "sessions";
+function getSessionRegistryDir(env = process.env, homeDir = os4.homedir()) {
+  const stateHome = env.XDG_STATE_HOME || path7.join(homeDir, ".local", "state");
+  return path7.join(stateHome, "proofshot", SESSION_REGISTRY_DIRECTORY);
+}
+function registerSession(session, registryDir = getSessionRegistryDir()) {
+  validateSessionName(session.sessionName);
+  prepareRegistryDirectory(registryDir);
+  const registryPath = getRegistryPath(session.sessionName, registryDir);
+  const temporaryPath = `${registryPath}.${process.pid}.${randomUUID2()}.tmp`;
+  try {
+    fs10.writeFileSync(temporaryPath, JSON.stringify(session, null, 2) + "\n", {
+      mode: 384
+    });
+    fs10.renameSync(temporaryPath, registryPath);
+  } finally {
+    if (fs10.existsSync(temporaryPath)) {
+      fs10.unlinkSync(temporaryPath);
+    }
+  }
+}
+function unregisterSession(sessionName, registryDir = getSessionRegistryDir()) {
+  validateSessionName(sessionName);
+  const registryPath = getRegistryPath(sessionName, registryDir);
+  if (fs10.existsSync(registryPath)) {
+    fs10.unlinkSync(registryPath);
+  }
+}
+function listRegisteredSessions(registryDir = getSessionRegistryDir()) {
+  if (!fs10.existsSync(registryDir)) {
+    return [];
+  }
+  assertOwnedDirectory2(registryDir);
+  return fs10.readdirSync(registryDir).filter((fileName) => fileName.endsWith(".json")).map((fileName) => readRegisteredSession(path7.join(registryDir, fileName))).filter((session) => session !== null).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+}
+function getRegisteredSession(sessionName, registryDir = getSessionRegistryDir()) {
+  validateSessionName(sessionName);
+  return readRegisteredSession(getRegistryPath(sessionName, registryDir));
+}
+function prepareRegistryDirectory(registryDir) {
+  fs10.mkdirSync(registryDir, { recursive: true, mode: 448 });
+  assertOwnedDirectory2(registryDir);
+}
+function assertOwnedDirectory2(directory) {
+  const stat = fs10.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`ProofShot session registry is not a real directory: ${directory}`);
+  }
+  const uid = process.getuid?.();
+  if (uid !== void 0 && stat.uid !== uid) {
+    throw new Error(
+      `ProofShot session registry is owned by uid ${stat.uid}, expected ${uid}: ${directory}`
+    );
+  }
+  fs10.accessSync(directory, fs10.constants.R_OK | fs10.constants.W_OK | fs10.constants.X_OK);
+  if (uid !== void 0) {
+    fs10.chmodSync(directory, 448);
+  }
+}
+function getRegistryPath(sessionName, registryDir) {
+  return path7.join(registryDir, `${sessionName}.json`);
+}
+function validateSessionName(sessionName) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(sessionName)) {
+    throw new Error(`Invalid ProofShot session name: ${sessionName}`);
+  }
+}
+function readRegisteredSession(registryPath) {
+  try {
+    const stat = fs10.lstatSync(registryPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      return null;
+    }
+    const parsed = JSON.parse(fs10.readFileSync(registryPath, "utf-8"));
+    return isSessionState(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+function isSessionState(value) {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const session = value;
+  return typeof session.startedAt === "string" && (typeof session.description === "string" || session.description === null) && typeof session.outputDir === "string" && typeof session.sessionDir === "string" && typeof session.sessionName === "string" && typeof session.videoPath === "string" && typeof session.serverErrorLog === "string" && typeof session.port === "number" && (typeof session.serverCommand === "string" || session.serverCommand === null) && typeof session.serverAlreadyRunning === "boolean" && typeof session.recordingActive === "boolean" && isOptionalProcessIdentity(session.serverProcess) && isOptionalProcessIdentity(session.browserProcess);
+}
+function isOptionalProcessIdentity(value) {
+  if (value === void 0 || value === null) {
+    return true;
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  const identity = value;
+  return Number.isInteger(identity.pid) && Number.isInteger(identity.processGroupId) && Number.isInteger(identity.sessionId) && typeof identity.startTime === "string";
+}
+
+// src/session/metadata.ts
+import * as fs11 from "fs";
+import * as path8 from "path";
 var METADATA_FILENAME = "metadata.json";
 function writeMetadata(sessionDir, metadata) {
-  const metadataPath = path7.join(sessionDir, METADATA_FILENAME);
-  fs10.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + "\n");
+  const metadataPath = path8.join(sessionDir, METADATA_FILENAME);
+  fs11.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + "\n");
 }
 function loadMetadata(sessionDir) {
-  const metadataPath = path7.join(sessionDir, METADATA_FILENAME);
-  if (!fs10.existsSync(metadataPath)) return null;
+  const metadataPath = path8.join(sessionDir, METADATA_FILENAME);
+  if (!fs11.existsSync(metadataPath)) return null;
   try {
-    return JSON.parse(fs10.readFileSync(metadataPath, "utf-8"));
+    return JSON.parse(fs11.readFileSync(metadataPath, "utf-8"));
   } catch {
     return null;
   }
 }
 function findSessionsForBranch(outputDir, branch) {
-  if (!fs10.existsSync(outputDir)) return [];
-  const entries = fs10.readdirSync(outputDir, { withFileTypes: true });
+  if (!fs11.existsSync(outputDir)) return [];
+  const entries = fs11.readdirSync(outputDir, { withFileTypes: true });
   const matches = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const sessionDir = path7.join(outputDir, entry.name);
+    const sessionDir = path8.join(outputDir, entry.name);
     const metadata = loadMetadata(sessionDir);
     if (metadata && metadata.branch === branch) {
       matches.push({ dir: sessionDir, startedAt: metadata.startedAt });
@@ -1329,6 +1462,7 @@ async function startCommand(options) {
           socketDir: existingSession.agentBrowserSocketDir
         });
         await cleanupFailedStart(existingSession);
+        unregisterSession(existingSession.sessionName);
       }
       clearSession(controlDir);
       console.log(chalk2.yellow("\u26A0") + chalk2.dim(" Cleaned up the previous session"));
@@ -1342,10 +1476,10 @@ async function startCommand(options) {
   if (options.port) config.devServer.port = options.port;
   if (options.output) config.output = options.output;
   if (options.headed !== void 0) config.headless = !options.headed;
-  const outputDir = path8.resolve(config.output);
+  const outputDir = path9.resolve(config.output);
   const timestamp = generateTimestamp();
   const sessionDirName = generateSessionDirName(timestamp, options.description || null);
-  const sessionDir = path8.join(outputDir, sessionDirName);
+  const sessionDir = path9.join(outputDir, sessionDirName);
   const sessionName = generateAgentBrowserSessionName(timestamp);
   let socketDir;
   let browserExecutable;
@@ -1366,8 +1500,8 @@ async function startCommand(options) {
   setAgentBrowserDefaults({ configPath: config.browser.configPath, socketDir });
   ensureOutputDir(outputDir);
   ensureOutputDir(sessionDir);
-  const videoPath = path8.join(sessionDir, "session.webm");
-  const serverErrorLog = path8.join(sessionDir, "server.log");
+  const videoPath = path9.join(sessionDir, "session.webm");
+  const serverErrorLog = path9.join(sessionDir, "server.log");
   let branch = "";
   let commitSha = "";
   try {
@@ -1395,6 +1529,8 @@ async function startCommand(options) {
   const session = {
     startedAt: (/* @__PURE__ */ new Date()).toISOString(),
     startDirectory: process.cwd(),
+    lifecycleStatus: "starting",
+    cleanupError: null,
     description: options.description || null,
     outputDir,
     sessionDir,
@@ -1405,6 +1541,7 @@ async function startCommand(options) {
     serverCommand: options.run || null,
     serverAlreadyRunning: !options.run,
     recordingActive: false,
+    browserLaunchAttempted: false,
     bundleComplete: false,
     browserRetained: false,
     videoTrimComplete: false,
@@ -1420,7 +1557,8 @@ async function startCommand(options) {
     browserProcess: null,
     viewport: { width: config.viewport.width, height: config.viewport.height }
   };
-  saveSession(session, controlDir);
+  persistOwnedSession(session, controlDir);
+  const signalHandlers = installStartSignalHandlers(session, controlDir);
   let failureContext = "start the session";
   try {
     if (options.run) {
@@ -1430,11 +1568,16 @@ async function startCommand(options) {
         options.run,
         config.devServer.port,
         config.devServer.startupTimeout,
-        serverErrorLog
+        serverErrorLog,
+        (startedServer) => {
+          session.serverAlreadyRunning = false;
+          session.serverProcess = startedServer.process;
+          persistOwnedSession(session, controlDir);
+        }
       );
       session.serverAlreadyRunning = false;
       session.serverProcess = server.process;
-      saveSession(session, controlDir);
+      persistOwnedSession(session, controlDir);
       console.log(chalk2.green("\u2713") + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk2.dim(`  Server logs \u2192 ${serverErrorLog}`));
     } else {
@@ -1442,6 +1585,8 @@ async function startCommand(options) {
     }
     failureContext = "open browser";
     console.log(chalk2.dim("Opening browser..."));
+    session.browserLaunchAttempted = true;
+    persistOwnedSession(session, controlDir);
     openBrowser(openUrl, config.viewport, config.headless, sessionName, config.browser);
     session.browserProcess = captureAgentBrowserProcessIdentity(socketDir, sessionName);
     if (!session.browserProcess) {
@@ -1449,7 +1594,7 @@ async function startCommand(options) {
         `Could not record the exact agent-browser daemon identity for session ${sessionName}.`
       );
     }
-    saveSession(session, controlDir);
+    persistOwnedSession(session, controlDir);
     console.log(chalk2.green("\u2713") + " Browser ready");
     failureContext = "initialize recording";
     const RECORDING_RETRIES = 3;
@@ -1478,17 +1623,37 @@ async function startCommand(options) {
       );
     }
   } catch (error) {
-    await cleanupFailedStart(session);
-    clearSession(controlDir);
-    console.error(
-      chalk2.red("\u2717") + ` Failed to ${failureContext}: ${error.message}
+    if (signalHandlers.isHandling()) {
+      return;
+    }
+    signalHandlers.remove();
+    const interruptionSignal = getTerminationSignal(error);
+    try {
+      await cleanupFailedStart(session);
+      clearOwnedSession(session, controlDir);
+      console.error(
+        chalk2.red("\u2717") + ` Failed to ${failureContext}: ${error.message}
 ` + chalk2.dim("All processes started by this ProofShot attempt were cleaned up.")
+      );
+    } catch (cleanupError) {
+      session.lifecycleStatus = "recovery";
+      session.cleanupError = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      persistOwnedSession(session, controlDir);
+      console.error(
+        chalk2.red("\u2717") + ` Failed to ${failureContext}: ${error.message}
+` + chalk2.yellow(`Cleanup is incomplete: ${session.cleanupError}
+`) + chalk2.dim(`Run "proofshot session clean --session ${session.sessionName}" to retry.`)
+      );
+    }
+    process.exit(
+      interruptionSignal === "SIGINT" ? 130 : interruptionSignal === "SIGTERM" ? 143 : 1
     );
-    process.exit(1);
     return;
   }
   session.recordingActive = true;
-  saveSession(session, controlDir);
+  session.lifecycleStatus = "active";
+  persistOwnedSession(session, controlDir);
+  signalHandlers.remove();
   console.log("");
   console.log(chalk2.green.bold("\u2705 ProofShot session started"));
   console.log("");
@@ -1510,17 +1675,70 @@ async function startCommand(options) {
   console.log("");
   console.log(`When done, run: ${chalk2.white("proofshot stop")}`);
 }
+function persistOwnedSession(session, controlDir) {
+  saveSession(session, controlDir);
+  registerSession(session);
+}
+function clearOwnedSession(session, controlDir) {
+  clearSession(controlDir);
+  unregisterSession(session.sessionName);
+}
+function installStartSignalHandlers(session, controlDir) {
+  let handlingSignal = false;
+  const handlers = /* @__PURE__ */ new Map();
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const handler = () => {
+      if (handlingSignal) {
+        return;
+      }
+      handlingSignal = true;
+      void cleanupFailedStart(session).then(() => {
+        clearOwnedSession(session, controlDir);
+        process.exit(signal === "SIGINT" ? 130 : 143);
+      }).catch((error) => {
+        session.lifecycleStatus = "recovery";
+        session.cleanupError = error instanceof Error ? error.message : String(error);
+        persistOwnedSession(session, controlDir);
+        process.exit(1);
+      });
+    };
+    handlers.set(signal, handler);
+    process.once(signal, handler);
+  }
+  return {
+    isHandling: () => handlingSignal,
+    remove: () => {
+      for (const [signal, handler] of handlers) {
+        process.removeListener(signal, handler);
+      }
+    }
+  };
+}
+function getTerminationSignal(error) {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== "object" || current === null) {
+      return null;
+    }
+    const candidate = current;
+    if (candidate.signal === "SIGINT" || candidate.signal === "SIGTERM") {
+      return candidate.signal;
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
 
 // src/commands/stop.ts
-import * as fs14 from "fs";
-import * as path12 from "path";
-import { randomUUID as randomUUID2 } from "crypto";
+import * as fs15 from "fs";
+import * as path13 from "path";
+import { randomUUID as randomUUID3 } from "crypto";
 import { execFileSync as execFileSync2 } from "child_process";
 import chalk3 from "chalk";
 
 // src/artifacts/viewer.ts
-import * as fs11 from "fs";
-import * as path9 from "path";
+import * as fs12 from "fs";
+import * as path10 from "path";
 var MAX_LOG_BYTES = 50 * 1024;
 function truncateLog(log, maxBytes) {
   if (log.length <= maxBytes) return { text: log, truncated: false };
@@ -2875,18 +3093,18 @@ ${stepsHtml}
 function writeViewer(outputDir, data) {
   let entries = data.entries;
   if (!entries) {
-    const logPath = path9.join(outputDir, "session-log.json");
-    if (!fs11.existsSync(logPath)) return null;
+    const logPath = path10.join(outputDir, "session-log.json");
+    if (!fs12.existsSync(logPath)) return null;
     try {
-      entries = JSON.parse(fs11.readFileSync(logPath, "utf-8"));
+      entries = JSON.parse(fs12.readFileSync(logPath, "utf-8"));
     } catch {
       return null;
     }
   }
   if (!entries || entries.length === 0) return null;
   const html = generateViewer({ ...data, entries });
-  const viewerPath = path9.join(outputDir, "viewer.html");
-  fs11.writeFileSync(viewerPath, html);
+  const viewerPath = path10.join(outputDir, "viewer.html");
+  fs12.writeFileSync(viewerPath, html);
   return viewerPath;
 }
 
@@ -3012,15 +3230,15 @@ function extractServerErrors(log) {
 }
 
 // src/commands/exec.ts
-import * as fs12 from "fs";
-import * as path10 from "path";
+import * as fs13 from "fs";
+import * as path11 from "path";
 import { execSync as execSync5 } from "child_process";
 var SESSION_LOG_FILENAME = "session-log.json";
 function loadSessionLog(sessionDir) {
-  const logPath = path10.join(sessionDir, SESSION_LOG_FILENAME);
-  if (!fs12.existsSync(logPath)) return [];
+  const logPath = path11.join(sessionDir, SESSION_LOG_FILENAME);
+  if (!fs13.existsSync(logPath)) return [];
   try {
-    return JSON.parse(fs12.readFileSync(logPath, "utf-8"));
+    return JSON.parse(fs13.readFileSync(logPath, "utf-8"));
   } catch {
     return [];
   }
@@ -3028,8 +3246,8 @@ function loadSessionLog(sessionDir) {
 function resolveScreenshotPath(args, sessionDir) {
   if (args[0] !== "screenshot" || args.length < 2) return args;
   const screenshotPath = args[args.length - 1];
-  if (path10.isAbsolute(screenshotPath)) return args;
-  const resolved = path10.join(sessionDir, screenshotPath);
+  if (path11.isAbsolute(screenshotPath)) return args;
+  const resolved = path11.join(sessionDir, screenshotPath);
   return [...args.slice(0, -1), resolved];
 }
 function buildShellCommand(args, sessionName) {
@@ -3169,10 +3387,10 @@ async function execCommand(args) {
     if (elementData) {
       entry.element = elementData;
     }
-    const logPath = path10.join(session.sessionDir, SESSION_LOG_FILENAME);
+    const logPath = path11.join(session.sessionDir, SESSION_LOG_FILENAME);
     const entries = loadSessionLog(session.sessionDir);
     entries.push(entry);
-    fs12.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+    fs13.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
   }
   const shellCmd = buildShellCommand(resolvedArgs, session?.sessionName);
   try {
@@ -3203,27 +3421,28 @@ async function execCommand(args) {
       const vp = JSON.parse(vpJson);
       session.viewport = { width: vp.width, height: vp.height };
       saveSession(session, controlDir);
+      registerSession(session);
     } catch {
     }
   }
 }
 
 // src/utils/token-usage.ts
-import * as fs13 from "fs";
-import * as path11 from "path";
-import * as os4 from "os";
+import * as fs14 from "fs";
+import * as path12 from "path";
+import * as os5 from "os";
 function estimateTokenUsage(sessionDir, startTimeMs, endTimeMs) {
   const claudeUsage = tryClaudeCodeLogs(startTimeMs, endTimeMs);
   if (claudeUsage) return claudeUsage;
   return estimateFromContent(sessionDir);
 }
 function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
-  const claudeDir = path11.join(os4.homedir(), ".claude", "sessions");
-  if (!fs13.existsSync(claudeDir)) return null;
+  const claudeDir = path12.join(os5.homedir(), ".claude", "sessions");
+  if (!fs14.existsSync(claudeDir)) return null;
   try {
-    const files = fs13.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
+    const files = fs14.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
-      const data = JSON.parse(fs13.readFileSync(path11.join(claudeDir, file), "utf-8"));
+      const data = JSON.parse(fs14.readFileSync(path12.join(claudeDir, file), "utf-8"));
       const sessionStart = new Date(data.startedAt).getTime();
       if (sessionStart >= startTimeMs - 6e4 && sessionStart <= endTimeMs + 6e4) {
         if (data.totalInputTokens != null || data.totalOutputTokens != null || data.usage) {
@@ -3245,10 +3464,10 @@ function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
   return null;
 }
 function estimateFromContent(sessionDir) {
-  const logPath = path11.join(sessionDir, "session-log.json");
-  if (!fs13.existsSync(logPath)) return null;
+  const logPath = path12.join(sessionDir, "session-log.json");
+  if (!fs14.existsSync(logPath)) return null;
   try {
-    const entries = JSON.parse(fs13.readFileSync(logPath, "utf-8"));
+    const entries = JSON.parse(fs14.readFileSync(logPath, "utf-8"));
     if (!Array.isArray(entries) || entries.length === 0) return null;
     const actionCount = entries.length;
     const inputTokens = actionCount * 500;
@@ -3333,7 +3552,7 @@ async function stopCommand(options) {
       const browserSessionAddressable = canAddressOwnedBrowserSession(session);
       await stopOwnedBrowser(session);
       session.browserRetained = false;
-      clearSession(controlDir);
+      clearOwnedSession2(session, controlDir);
       if (browserSessionAddressable) {
         console.log(chalk3.green("\u2713") + " Retained browser closed; proof artifacts were already bundled.");
       } else {
@@ -3346,11 +3565,14 @@ async function stopCommand(options) {
         chalk3.dim("Proof artifacts are already bundled; the owned browser remains intentionally open.")
       );
     } else {
-      clearSession(controlDir);
+      clearOwnedSession2(session, controlDir);
       console.log(chalk3.dim("Proof artifacts are already bundled and all owned processes are stopped."));
     }
     return;
   }
+  session.lifecycleStatus = "stopping";
+  session.cleanupError = null;
+  persistOwnedSession2(session, controlDir);
   const retryingStoppedSession = !session.recordingActive;
   const recordingWasActive = session.recordingActive;
   const startTime = new Date(session.startedAt).getTime();
@@ -3371,9 +3593,9 @@ async function stopCommand(options) {
   let consoleErrors = "";
   let consoleOutput = "";
   let consoleEntries = [];
-  const consoleErrorsPath = path12.join(session.sessionDir, "console-errors.log");
-  const consoleOutputPath = path12.join(session.sessionDir, "console-output.log");
-  const consoleEntriesPath = path12.join(session.sessionDir, "console-entries.json");
+  const consoleErrorsPath = path13.join(session.sessionDir, "console-errors.log");
+  const consoleOutputPath = path13.join(session.sessionDir, "console-output.log");
+  const consoleEntriesPath = path13.join(session.sessionDir, "console-entries.json");
   if (browserSessionAvailable) {
     try {
       consoleErrors = getConsoleErrors(session.sessionName);
@@ -3394,17 +3616,17 @@ async function stopCommand(options) {
     const capturedErrorLines = consoleErrors.split("\n").filter((line) => line.trim() && line.trim() !== "No errors");
     session.consoleEvidenceAvailable = true;
     session.consoleErrorCount = capturedErrorLines.length > 0 && consoleErrors.trim() !== "" ? capturedErrorLines.length : 0;
-    saveSession(session, controlDir);
+    persistOwnedSession2(session, controlDir);
   } else if (priorConsoleEvidenceAvailable) {
-    if (fs14.existsSync(consoleErrorsPath)) {
-      consoleErrors = fs14.readFileSync(consoleErrorsPath, "utf-8");
+    if (fs15.existsSync(consoleErrorsPath)) {
+      consoleErrors = fs15.readFileSync(consoleErrorsPath, "utf-8");
     }
-    if (fs14.existsSync(consoleOutputPath)) {
-      consoleOutput = fs14.readFileSync(consoleOutputPath, "utf-8");
+    if (fs15.existsSync(consoleOutputPath)) {
+      consoleOutput = fs15.readFileSync(consoleOutputPath, "utf-8");
     }
-    if (fs14.existsSync(consoleEntriesPath)) {
+    if (fs15.existsSync(consoleEntriesPath)) {
       try {
-        const savedEntries = JSON.parse(fs14.readFileSync(consoleEntriesPath, "utf-8"));
+        const savedEntries = JSON.parse(fs15.readFileSync(consoleEntriesPath, "utf-8"));
         if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
       } catch {
       }
@@ -3415,7 +3637,7 @@ async function stopCommand(options) {
     stopRecording(session.sessionName);
   }
   session.recordingActive = false;
-  saveSession(session, controlDir);
+  persistOwnedSession2(session, controlDir);
   let cleanupError;
   if (!options.noClose) {
     console.log(chalk3.dim("Closing browser..."));
@@ -3433,21 +3655,26 @@ async function stopCommand(options) {
       cleanupError ||= error;
     }
   }
-  if (cleanupError) throw cleanupError;
+  if (cleanupError) {
+    session.lifecycleStatus = "recovery";
+    session.cleanupError = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    persistOwnedSession2(session, controlDir);
+    throw cleanupError;
+  }
   let serverLog = "";
   let serverEntries = [];
-  if (fs14.existsSync(session.serverErrorLog)) {
-    const rawServerLog = fs14.readFileSync(session.serverErrorLog, "utf-8");
+  if (fs15.existsSync(session.serverErrorLog)) {
+    const rawServerLog = fs15.readFileSync(session.serverErrorLog, "utf-8");
     const parsed = parseTimestampedServerLog(rawServerLog, startTime);
     serverLog = parsed.cleanText;
     serverEntries = parsed.entries;
   }
   const sessionDir = session.sessionDir;
-  const screenshots = fs14.existsSync(sessionDir) ? fs14.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
+  const screenshots = fs15.existsSync(sessionDir) ? fs15.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
   const sessionLog = loadSessionLog(sessionDir);
   let trimOffsetSec = session.trimOffsetSec ?? 0;
   if (!session.videoTrimComplete) {
-    if (fs14.existsSync(session.videoPath)) {
+    if (fs15.existsSync(session.videoPath)) {
       trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
     } else if (recordingWasActive) {
       console.log(
@@ -3456,7 +3683,7 @@ async function stopCommand(options) {
     }
     session.videoTrimComplete = true;
     session.trimOffsetSec = trimOffsetSec;
-    saveSession(session, controlDir);
+    persistOwnedSession2(session, controlDir);
   }
   const consoleErrorLines = consoleErrors.split("\n").filter((l) => l.trim() && l.trim() !== "No errors");
   const observedConsoleErrorCount = consoleErrorLines.length > 0 && consoleErrors.trim() !== "" ? consoleErrorLines.length : 0;
@@ -3465,12 +3692,12 @@ async function stopCommand(options) {
   if (browserSessionAvailable) {
     session.consoleEvidenceAvailable = true;
     session.consoleErrorCount = consoleErrorCount;
-    saveSession(session, controlDir);
+    persistOwnedSession2(session, controlDir);
   }
   const serverErrorLines = extractServerErrors(serverLog);
   const serverErrorCount = serverErrorLines.length;
   const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
-  const summaryPath = path12.join(sessionDir, "SUMMARY.md");
+  const summaryPath = path13.join(sessionDir, "SUMMARY.md");
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),
     description: session.description,
@@ -3489,7 +3716,7 @@ async function stopCommand(options) {
     durationSec,
     outputDir: sessionDir
   });
-  if (!retryingStoppedSession || !fs14.existsSync(summaryPath)) {
+  if (!retryingStoppedSession || !fs15.existsSync(summaryPath)) {
     writeTextFileAtomically(summaryPath, summary);
   }
   let viewerEntries = sessionLog;
@@ -3500,12 +3727,12 @@ async function stopCommand(options) {
     }));
   }
   if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
-    const logPath = path12.join(sessionDir, "session-log.json");
+    const logPath = path13.join(sessionDir, "session-log.json");
     writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + "\n");
   }
   if (!session.sessionLogAdjusted) {
     session.sessionLogAdjusted = true;
-    saveSession(session, controlDir);
+    persistOwnedSession2(session, controlDir);
   }
   const adjustTime = (e) => trimOffsetSec > 0 ? { ...e, relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1)) } : e;
   const viewerConsoleEntries = consoleEntries.map(adjustTime);
@@ -3514,7 +3741,7 @@ async function stopCommand(options) {
     description: session.description,
     serverCommand: session.serverCommand,
     durationSec,
-    videoFilename: fs14.existsSync(session.videoPath) ? path12.basename(session.videoPath) : null,
+    videoFilename: fs15.existsSync(session.videoPath) ? path13.basename(session.videoPath) : null,
     consoleErrorCount,
     consoleEvidenceAvailable,
     serverErrorCount,
@@ -3528,14 +3755,15 @@ async function stopCommand(options) {
   session.bundleComplete = true;
   session.browserRetained = Boolean(options.noClose);
   if (session.browserRetained) {
-    saveSession(session, controlDir);
+    session.lifecycleStatus = "active";
+    persistOwnedSession2(session, controlDir);
   } else {
-    clearSession(controlDir);
+    clearOwnedSession2(session, controlDir);
   }
   console.log("");
   console.log(chalk3.green.bold("\u2705 ProofShot verification complete"));
   console.log("");
-  if (fs14.existsSync(session.videoPath)) {
+  if (fs15.existsSync(session.videoPath)) {
     console.log(`\u{1F4F9} Video:         ${chalk3.dim(session.videoPath)} (${durationSec}s)`);
   }
   console.log(`\u{1F4F8} Screenshots:   ${screenshots.length} captured`);
@@ -3580,17 +3808,25 @@ async function stopCommand(options) {
   }
 }
 function writeTextFileAtomically(filePath, contents) {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID2()}.tmp`;
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID3()}.tmp`;
   try {
-    fs14.writeFileSync(temporaryPath, contents);
-    fs14.renameSync(temporaryPath, filePath);
+    fs15.writeFileSync(temporaryPath, contents);
+    fs15.renameSync(temporaryPath, filePath);
   } finally {
-    if (fs14.existsSync(temporaryPath)) fs14.unlinkSync(temporaryPath);
+    if (fs15.existsSync(temporaryPath)) fs15.unlinkSync(temporaryPath);
   }
+}
+function persistOwnedSession2(session, controlDir) {
+  saveSession(session, controlDir);
+  registerSession(session);
+}
+function clearOwnedSession2(session, controlDir) {
+  clearSession(controlDir);
+  unregisterSession(session.sessionName);
 }
 function generateProofSummary(data) {
   const date = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").slice(0, 19);
-  const projectName = path12.basename(data.projectDirectory);
+  const projectName = path13.basename(data.projectDirectory);
   let md = `# ProofShot Verification Report
 
 **Date:** ${date}
@@ -3605,7 +3841,7 @@ ${data.description}
 
 `;
   }
-  const relativeVideo = path12.basename(data.videoPath);
+  const relativeVideo = path13.basename(data.videoPath);
   md += `## Video Recording
 
 Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationSec}s)
@@ -3685,7 +3921,7 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
   } else if (screenshots.length > 0) {
     const timestamps = screenshots.map((f) => {
       try {
-        return fs14.statSync(path12.join(outputDir, f)).birthtimeMs;
+        return fs15.statSync(path13.join(outputDir, f)).birthtimeMs;
       } catch {
         return null;
       }
@@ -3706,12 +3942,12 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
     console.log(chalk3.dim("Tip: Install ffmpeg to auto-trim dead time from videos."));
     return 0;
   }
-  const dir = path12.dirname(videoPath);
-  const ext = path12.extname(videoPath);
-  const base = path12.basename(videoPath, ext);
-  const rawPath = path12.join(dir, `${base}-raw${ext}`);
+  const dir = path13.dirname(videoPath);
+  const ext = path13.extname(videoPath);
+  const base = path13.basename(videoPath, ext);
+  const rawPath = path13.join(dir, `${base}-raw${ext}`);
   try {
-    fs14.renameSync(videoPath, rawPath);
+    fs15.renameSync(videoPath, rawPath);
     execFileSync2(
       "ffmpeg",
       [
@@ -3731,23 +3967,23 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
       { stdio: "pipe", timeout: 6e4 }
     );
     validateTrimmedVideo(videoPath);
-    fs14.unlinkSync(rawPath);
+    fs15.unlinkSync(rawPath);
     const trimmedDuration = Math.round(trimEndSec - trimStartSec);
     console.log(chalk3.dim(`Trimmed video to ${trimmedDuration}s (removed dead time)`));
     return trimStartSec;
   } catch {
-    if (fs14.existsSync(videoPath)) {
-      fs14.unlinkSync(videoPath);
+    if (fs15.existsSync(videoPath)) {
+      fs15.unlinkSync(videoPath);
     }
-    if (fs14.existsSync(rawPath)) {
-      fs14.renameSync(rawPath, videoPath);
+    if (fs15.existsSync(rawPath)) {
+      fs15.renameSync(rawPath, videoPath);
     }
     console.log(chalk3.dim("Video trimming failed, keeping original"));
     return 0;
   }
 }
 function validateTrimmedVideo(videoPath) {
-  if (!fs14.existsSync(videoPath) || fs14.statSync(videoPath).size === 0) {
+  if (!fs15.existsSync(videoPath) || fs15.statSync(videoPath).size === 0) {
     throw new Error("FFmpeg produced an empty video");
   }
   execFileSync2(
@@ -3758,39 +3994,39 @@ function validateTrimmedVideo(videoPath) {
 }
 
 // src/commands/diff.ts
-import * as fs15 from "fs";
-import * as path13 from "path";
+import * as fs16 from "fs";
+import * as path14 from "path";
 import chalk4 from "chalk";
 async function diffCommand(options) {
   const config = loadConfig();
-  const currentDir = path13.resolve(config.output);
-  const baselineDir = path13.resolve(options.baseline);
-  if (!fs15.existsSync(baselineDir)) {
+  const currentDir = path14.resolve(config.output);
+  const baselineDir = path14.resolve(options.baseline);
+  if (!fs16.existsSync(baselineDir)) {
     console.error(chalk4.red("\u2717") + ` Baseline directory not found: ${baselineDir}`);
     process.exit(1);
   }
-  if (!fs15.existsSync(currentDir)) {
+  if (!fs16.existsSync(currentDir)) {
     console.error(
       chalk4.red("\u2717") + ` Current artifacts not found: ${currentDir}
 ` + chalk4.dim('Run "proofshot verify" first to generate screenshots.')
     );
     process.exit(1);
   }
-  const baselineFiles = fs15.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
-  const currentFiles = fs15.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const baselineFiles = fs16.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const currentFiles = fs16.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
   if (baselineFiles.length === 0) {
     console.error(chalk4.red("\u2717") + " No baseline screenshots found (looking for page-*.png)");
     process.exit(1);
   }
-  const diffDir = path13.join(currentDir, "diffs");
-  fs15.mkdirSync(diffDir, { recursive: true });
+  const diffDir = path14.join(currentDir, "diffs");
+  fs16.mkdirSync(diffDir, { recursive: true });
   console.log(chalk4.dim("Comparing screenshots...\n"));
   let hasChanges = false;
   for (const file of baselineFiles) {
-    const baselinePath = path13.join(baselineDir, file);
-    const currentPath = path13.join(currentDir, file);
-    const diffPath = path13.join(diffDir, `diff-${file}`);
-    if (!fs15.existsSync(currentPath)) {
+    const baselinePath = path14.join(baselineDir, file);
+    const currentPath = path14.join(currentDir, file);
+    const diffPath = path14.join(diffDir, `diff-${file}`);
+    if (!fs16.existsSync(currentPath)) {
       console.log(chalk4.yellow("\u26A0") + ` ${file}: no matching current screenshot (page removed?)`);
       continue;
     }
@@ -3821,13 +4057,13 @@ async function diffCommand(options) {
 }
 
 // src/commands/clean.ts
-import * as fs16 from "fs";
-import * as path14 from "path";
+import * as fs17 from "fs";
+import * as path15 from "path";
 import chalk5 from "chalk";
 async function cleanCommand() {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
-  const outputDir = path14.resolve(config.output);
+  const outputDir = path15.resolve(config.output);
   if (hasActiveSession(controlDir)) {
     console.error(
       chalk5.red("\u2717") + " Cannot clean while a ProofShot session owns browser or server processes.\n" + chalk5.dim('Run "proofshot stop" first so exact cleanup metadata is preserved.')
@@ -3835,23 +4071,23 @@ async function cleanCommand() {
     process.exit(1);
     return;
   }
-  if (!fs16.existsSync(outputDir)) {
+  if (!fs17.existsSync(outputDir)) {
     console.log(chalk5.dim("Nothing to clean \u2014 no artifacts directory found."));
     return;
   }
-  fs16.rmSync(outputDir, { recursive: true, force: true });
+  fs17.rmSync(outputDir, { recursive: true, force: true });
   console.log(chalk5.green("\u2713") + ` Removed ${chalk5.dim(outputDir)}`);
 }
 
 // src/commands/pr.ts
-import * as fs18 from "fs";
-import * as path16 from "path";
+import * as fs19 from "fs";
+import * as path17 from "path";
 import { execSync as execSync7 } from "child_process";
 import chalk6 from "chalk";
 
 // src/utils/github.ts
-import * as fs17 from "fs";
-import * as path15 from "path";
+import * as fs18 from "fs";
+import * as path16 from "path";
 import { execSync as execSync6 } from "child_process";
 var GITHUB_API_VERSION = "2022-11-28";
 var DEFAULT_ARTIFACTS_BRANCH = "proofshot-artifacts";
@@ -3922,7 +4158,7 @@ function getPRNumber(explicitPR) {
   }
 }
 function getContentType(filePath) {
-  const ext = path15.extname(filePath).toLowerCase();
+  const ext = path16.extname(filePath).toLowerCase();
   switch (ext) {
     case ".png":
       return "image/png";
@@ -3942,8 +4178,8 @@ function getContentType(filePath) {
   }
 }
 async function uploadAsset(filePath, token, repoId) {
-  const fileName = path15.basename(filePath);
-  const fileSize = fs17.statSync(filePath).size;
+  const fileName = path16.basename(filePath);
+  const fileSize = fs18.statSync(filePath).size;
   const contentType = getContentType(filePath);
   const policyResponse = await fetch("https://github.com/upload/policies/assets", {
     method: "POST",
@@ -3977,7 +4213,7 @@ GitHub response: ${body}`
     );
   }
   const policy = await policyResponse.json();
-  const fileBuffer = fs17.readFileSync(filePath);
+  const fileBuffer = fs18.readFileSync(filePath);
   const formData = new FormData();
   for (const [key, value] of Object.entries(policy.form)) {
     formData.append(key, value);
@@ -4009,7 +4245,7 @@ async function uploadAssetsToWebAttachments(options) {
   const { filePaths, token, repo, onProgress } = options;
   for (let i = 0; i < filePaths.length; i += 1) {
     const filePath = filePaths[i];
-    const fileName = path15.basename(filePath);
+    const fileName = path16.basename(filePath);
     onProgress?.(i + 1, filePaths.length, fileName);
     try {
       const asset = await uploadAsset(filePath, token, repo.id);
@@ -4026,13 +4262,13 @@ async function uploadAssetsToRepoContents(options) {
   await ensureArtifactsBranch(options.repo, artifactsBranch, options.token);
   for (let i = 0; i < options.filePaths.length; i += 1) {
     const filePath = options.filePaths[i];
-    const fileName = path15.basename(filePath);
+    const fileName = path16.basename(filePath);
     options.onProgress?.(i + 1, options.filePaths.length, fileName);
     try {
-      const content = fs17.readFileSync(filePath, "base64");
-      const uploadPath = path15.posix.join(
+      const content = fs18.readFileSync(filePath, "base64");
+      const uploadPath = path16.posix.join(
         options.uploadRoot,
-        path15.basename(path15.dirname(filePath)),
+        path16.basename(path16.dirname(filePath)),
         fileName
       );
       await githubApi(
@@ -4200,7 +4436,7 @@ function formatPRComment(data) {
 // src/commands/pr.ts
 async function prCommand(options) {
   const config = loadConfig();
-  const outputDir = path16.resolve(config.output);
+  const outputDir = path17.resolve(config.output);
   const uploadProvider = normalizeUploadProvider(options.uploadProvider);
   const artifactsBranch = options.artifactsBranch || "proofshot-artifacts";
   let branch;
@@ -4238,23 +4474,23 @@ async function prCommand(options) {
       if (!description && metadata.description) description = metadata.description;
       if (metadata.commitSha) latestCommitSha = metadata.commitSha;
     }
-    const files = fs18.readdirSync(sessionDir);
+    const files = fs19.readdirSync(sessionDir);
     for (const f of files) {
       if (f.endsWith(".png")) {
-        screenshotPaths.push(path16.join(sessionDir, f));
+        screenshotPaths.push(path17.join(sessionDir, f));
       }
     }
     if (!videoPath) {
       for (const f of files) {
         if (f === "session.webm" || f === "session.mp4") {
-          videoPath = path16.join(sessionDir, f);
+          videoPath = path17.join(sessionDir, f);
           break;
         }
       }
     }
-    const summaryPath = path16.join(sessionDir, "SUMMARY.md");
-    if (fs18.existsSync(summaryPath)) {
-      const summary = fs18.readFileSync(summaryPath, "utf-8");
+    const summaryPath = path17.join(sessionDir, "SUMMARY.md");
+    if (fs19.existsSync(summaryPath)) {
+      const summary = fs19.readFileSync(summaryPath, "utf-8");
       const errorMatch = summary.match(/(\d+)\s+error/gi);
       if (errorMatch) {
         for (const m of errorMatch) {
@@ -4266,7 +4502,7 @@ async function prCommand(options) {
   }
   if (videoPath && videoPath.endsWith(".webm")) {
     const mp4Path = videoPath.replace(/\.webm$/, ".mp4");
-    if (fs18.existsSync(mp4Path)) {
+    if (fs19.existsSync(mp4Path)) {
       videoPath = mp4Path;
     } else {
       try {
@@ -4294,7 +4530,7 @@ async function prCommand(options) {
       sessionCount: sessionDirs.length,
       screenshots: screenshotMap2,
       video: videoPath ? {
-        url: `https://github.com/user-attachments/assets/<${path16.basename(videoPath)}>`,
+        url: `https://github.com/user-attachments/assets/<${path17.basename(videoPath)}>`,
         renderMode: "embed"
       } : null,
       errorCount,
@@ -4379,15 +4615,15 @@ async function prCommand(options) {
   );
 }
 function screenshotLabel(ssPath) {
-  const sessionDir = path16.basename(path16.dirname(ssPath));
-  const fileName = path16.basename(ssPath);
+  const sessionDir = path17.basename(path17.dirname(ssPath));
+  const fileName = path17.basename(ssPath);
   return `${sessionDir}/${fileName}`;
 }
 function buildUploadRoot(branch, prNumber, commitSha) {
   const sanitizedBranch = branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
   const sha = commitSha ? commitSha.slice(0, 7) : "unknown-sha";
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  return path16.posix.join("proofshot", `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
+  return path17.posix.join("proofshot", `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
 }
 function normalizeUploadProvider(provider) {
   if (!provider || provider === "repo-contents" || provider === "github-web-attachments") {
@@ -4417,6 +4653,7 @@ async function doctorCommand() {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
   const session = loadSession(controlDir);
+  const registeredSessions = listRegisteredSessions();
   const agentBrowserPath = findExecutablePath("agent-browser");
   const ffmpegPath = findExecutablePath("ffmpeg");
   const agentBrowserVersion = readCommandVersion("agent-browser");
@@ -4439,6 +4676,7 @@ async function doctorCommand() {
   printLine("Version", ffmpegVersion || chalk7.dim("not available"));
   console.log("");
   console.log(statusLabel(Boolean(session), "active session"));
+  printLine("Sessions", String(registeredSessions.length));
   if (session) {
     printLine("Session dir", session.sessionDir);
     printLine("Recording", session.recordingActive ? "active" : "stopped");
@@ -4446,6 +4684,112 @@ async function doctorCommand() {
     if (session.targetUrl) printLine("Target", session.targetUrl);
   } else {
     printLine("Session dir", chalk7.dim("none"));
+  }
+}
+
+// src/commands/session.ts
+import chalk8 from "chalk";
+async function sessionListCommand(options) {
+  const entries = listRegisteredSessions().map(buildSessionListEntry);
+  if (options.json) {
+    console.log(JSON.stringify({ sessions: entries }, null, 2));
+    return;
+  }
+  if (entries.length === 0) {
+    console.log("No registered ProofShot sessions.");
+    return;
+  }
+  console.log(chalk8.bold("ProofShot Sessions"));
+  console.log("");
+  for (const entry of entries) {
+    console.log(`${entry.id}  ${formatStatus(entry.status)}`);
+    console.log(chalk8.dim(`  Started: ${entry.startedAt}`));
+    console.log(chalk8.dim(`  From:    ${entry.startDirectory || "unknown"}`));
+    console.log(chalk8.dim(`  Output:  ${entry.outputDir}`));
+    if (entry.cleanupError) {
+      console.log(chalk8.yellow(`  Cleanup: ${entry.cleanupError}`));
+    }
+  }
+}
+async function sessionCleanCommand(options) {
+  const sessions = selectSessionsToClean(options);
+  if (sessions.length === 0) {
+    console.log("No recoverable ProofShot sessions.");
+    return;
+  }
+  let failures = 0;
+  for (const session of sessions) {
+    try {
+      await cleanupFailedStart(session);
+      clearSession(session.outputDir);
+      unregisterSession(session.sessionName);
+      console.log(`${chalk8.green("\u2713")} Cleaned ${session.sessionName}`);
+    } catch (error) {
+      failures += 1;
+      session.lifecycleStatus = "recovery";
+      session.cleanupError = error instanceof Error ? error.message : String(error);
+      saveSession(session, session.outputDir);
+      registerSession(session);
+      console.error(`${chalk8.red("\u2717")} Kept ${session.sessionName}: ${session.cleanupError}`);
+    }
+  }
+  if (failures > 0) {
+    process.exitCode = 1;
+  }
+}
+function selectSessionsToClean(options) {
+  if (options.session) {
+    const session = getRegisteredSession(options.session);
+    if (!session) {
+      throw new Error(`No registered ProofShot session named "${options.session}".`);
+    }
+    return [session];
+  }
+  const sessions = listRegisteredSessions();
+  if (options.all) {
+    return sessions;
+  }
+  return sessions.filter((session) => {
+    const status = getSessionStatus(session);
+    return status === "recovery" || status === "stale";
+  });
+}
+function buildSessionListEntry(session) {
+  return {
+    id: session.sessionName,
+    status: getSessionStatus(session),
+    startedAt: session.startedAt,
+    startDirectory: session.startDirectory || null,
+    outputDir: session.outputDir,
+    cleanupError: session.cleanupError || null
+  };
+}
+function getSessionStatus(session) {
+  if (session.lifecycleStatus === "recovery") {
+    return "recovery";
+  }
+  if (session.lifecycleStatus === "starting") {
+    return "starting";
+  }
+  if (session.browserProcess && ownedProcessTreeIsAlive(session.browserProcess) || session.serverProcess && ownedProcessTreeIsAlive(session.serverProcess)) {
+    return "active";
+  }
+  return "stale";
+}
+function formatStatus(status) {
+  switch (status) {
+    case "active":
+      return chalk8.green(status);
+    case "starting":
+      return chalk8.cyan(status);
+    case "recovery":
+      return chalk8.yellow(status);
+    case "stale":
+      return chalk8.dim(status);
+    default: {
+      const exhaustiveStatus = status;
+      return exhaustiveStatus;
+    }
   }
 }
 
@@ -4484,6 +4828,13 @@ function createCLI() {
   });
   program.command("exec").description("Run an agent-browser command with logging (use instead of agent-browser directly)").argument("<args...>", "agent-browser command and arguments").allowUnknownOption().action(async (args) => {
     await execCommand(args);
+  });
+  const session = program.command("session").description("List and recover registered ProofShot sessions");
+  session.command("list").description("List all registered ProofShot sessions").option("--json", "Output machine-readable JSON").action(async (options) => {
+    await sessionListCommand(options);
+  });
+  session.command("clean").description("Retry exact cleanup for recoverable ProofShot sessions").option("--session <id>", "Clean one exact registered session").option("--all", "Clean every registered session").action(async (options) => {
+    await sessionCleanCommand(options);
   });
   return program;
 }

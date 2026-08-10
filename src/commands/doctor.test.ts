@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { findConfigPathMock, loadConfigMock, loadSessionMock, resolveSessionControlDirMock, findExecutablePathMock, readCommandVersionMock } =
+const { findConfigPathMock, loadConfigMock, loadSessionMock, listRegisteredSessionsMock, resolveSessionControlDirMock, findExecutablePathMock, readCommandVersionMock } =
   vi.hoisted(() => ({
     findConfigPathMock: vi.fn(),
     loadConfigMock: vi.fn(),
     loadSessionMock: vi.fn(),
+    listRegisteredSessionsMock: vi.fn(),
     resolveSessionControlDirMock: vi.fn(),
     findExecutablePathMock: vi.fn(),
     readCommandVersionMock: vi.fn(),
@@ -18,6 +19,9 @@ vi.mock('../utils/config.js', () => ({
 vi.mock('../session/state.js', () => ({
   loadSession: loadSessionMock,
   resolveSessionControlDir: resolveSessionControlDirMock,
+}));
+vi.mock('../session/registry.js', () => ({
+  listRegisteredSessions: listRegisteredSessionsMock,
 }));
 
 vi.mock('../utils/process.js', () => ({
@@ -39,6 +43,7 @@ describe('doctorCommand', () => {
       defaultPages: ['/'],
     });
     loadSessionMock.mockReturnValue(null);
+    listRegisteredSessionsMock.mockReturnValue([]);
     resolveSessionControlDirMock.mockReturnValue('/workspace/proofshot-artifacts');
     findExecutablePathMock.mockImplementation((name: string) =>
       name === 'agent-browser' ? '/usr/local/bin/agent-browser' : '/opt/homebrew/bin/ffmpeg',

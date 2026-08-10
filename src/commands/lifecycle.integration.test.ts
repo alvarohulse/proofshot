@@ -61,6 +61,29 @@ async function waitForProcessExit(pid: number, timeoutMs = 5000): Promise<void> 
   throw new Error(`process ${pid} did not exit`);
 }
 
+async function waitForLatestDaemon(
+  browserLog: string,
+  timeoutMs = 5000,
+): Promise<{ daemonPid: number; session: string }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(browserLog)) {
+      const entries = fs
+        .readFileSync(browserLog, 'utf-8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      const daemon = [...entries].reverse().find((entry) => entry.command === 'daemon');
+      if (daemon) {
+        return daemon;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('agent-browser daemon was not recorded');
+}
+
 function writeFixtureTools(base: string): {
   binDir: string;
   browserPath: string;
@@ -76,7 +99,7 @@ function writeFixtureTools(base: string): {
     `#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 let args = process.argv.slice(2);
 let session = 'default';
 const sessionIndex = args.indexOf('--session');
@@ -126,7 +149,13 @@ if (command === 'open') {
     process.stderr.write('simulated browser open failure\\n');
     process.exit(9);
   }
-  process.exit(0);
+  if (process.env.FAKE_AGENT_BROWSER_HANG_OPEN === '1') {
+    spawnSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+  } else {
+    process.exit(0);
+  }
 }
 if (command === 'get' && detail[0] === 'url') {
   const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
@@ -491,5 +520,111 @@ describe('isolated CLI lifecycle', () => {
     expect(fs.readFileSync(summaryPath, 'utf-8')).toBe(summaryBefore);
     expect(fs.statSync(summaryPath).mtimeMs).toBe(summaryMtimeBefore);
     cleanupProcesses.splice(cleanupProcesses.indexOf(initialState.browserProcess), 1);
+  }, 30000);
+
+  it('does not accumulate owned daemons across ten start-stop cycles', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    unrelated.unref();
+    const unrelatedIdentity = captureProcessIdentity(unrelated.pid!);
+    if (!unrelatedIdentity) {
+      throw new Error('failed to capture unrelated process');
+    }
+    cleanupProcesses.push(unrelatedIdentity);
+
+    for (let cycle = 0; cycle < 10; cycle += 1) {
+      const start = runCli(audit, env, [
+        'start',
+        '--url',
+        `https://example.invalid/cycle-${cycle}`,
+        '--browser-executable',
+        tools.browserPath,
+      ]);
+      expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+      const controlPath = path.join(audit, 'proofshot-artifacts', '.session.json');
+      const state = JSON.parse(fs.readFileSync(controlPath, 'utf-8'));
+
+      const stop = runCli(audit, env, ['stop']);
+      expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+      await waitForProcessExit(state.browserProcess.pid);
+      expect(fs.existsSync(controlPath)).toBe(false);
+      expect(processIsAlive(unrelated.pid!)).toBe(true);
+    }
+
+    const registryDir = path.join(env.HOME!, '.local', 'state', 'proofshot', 'sessions');
+    expect(fs.existsSync(registryDir) ? fs.readdirSync(registryDir) : []).toEqual([]);
+  }, 60000);
+
+  it('cleans exact ownership when startup is interrupted', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools, {
+      FAKE_AGENT_BROWSER_HANG_OPEN: '1',
+    });
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = spawn(
+      process.execPath,
+      [
+        cliPath,
+        'start',
+        '--url',
+        'https://example.invalid/interrupted',
+        '--browser-executable',
+        tools.browserPath,
+      ],
+      {
+        cwd: audit,
+        env,
+        detached: true,
+        stdio: 'pipe',
+      },
+    );
+    let startOutput = '';
+    start.stdout?.on('data', (chunk) => {
+      startOutput += chunk.toString();
+    });
+    start.stderr?.on('data', (chunk) => {
+      startOutput += chunk.toString();
+    });
+    const daemon = await waitForLatestDaemon(tools.browserLog);
+    const daemonIdentity = captureProcessIdentity(daemon.daemonPid);
+    if (daemonIdentity) {
+      cleanupProcesses.push(daemonIdentity);
+    }
+
+    process.kill(-start.pid!, 'SIGTERM');
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('interrupted start did not exit')), 10000);
+      start.once('close', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+
+    expect(exitCode, startOutput).toBe(143);
+    await waitForProcessExit(daemon.daemonPid);
+    const controlPath = path.join(audit, 'proofshot-artifacts', '.session.json');
+    expect(fs.existsSync(controlPath)).toBe(false);
+    const registryDir = path.join(env.HOME!, '.local', 'state', 'proofshot', 'sessions');
+    expect(fs.existsSync(registryDir) ? fs.readdirSync(registryDir) : []).toEqual([]);
+    if (daemonIdentity) {
+      cleanupProcesses.splice(cleanupProcesses.indexOf(daemonIdentity), 1);
+    }
   }, 30000);
 });
