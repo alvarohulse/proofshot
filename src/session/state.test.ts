@@ -1,16 +1,45 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { generateAgentBrowserSessionName } from './state.js';
+import {
+  generateAgentBrowserSessionName,
+  loadSession,
+} from './state.js';
 
 describe('generateAgentBrowserSessionName', () => {
-  it('prefixes ProofShot session names consistently', () => {
-    expect(generateAgentBrowserSessionName('2026-04-07_22-30-00')).toBe(
-      'proofshot-2026-04-07_22-30-00',
+  it('creates a short, deterministic name when a nonce is supplied', () => {
+    const name = generateAgentBrowserSessionName('2026-04-07_22-30-00', 'test-nonce');
+    expect(name).toMatch(/^ps-2026-04-[a-f0-9]{12}$/);
+    expect(name).toBe(
+      generateAgentBrowserSessionName('2026-04-07_22-30-00', 'test-nonce'),
+    );
+    expect(name.length).toBeLessThanOrEqual(24);
+  });
+
+  it('normalizes unsafe characters and keeps concurrent runs collision-safe', () => {
+    const first = generateAgentBrowserSessionName("April 7 review / O'Connor", 'one');
+    const second = generateAgentBrowserSessionName("April 7 review / O'Connor", 'two');
+    expect(first).toMatch(/^ps-april-7-[a-f0-9]{12}$/);
+    expect(second).not.toBe(first);
+    expect(first).not.toMatch(/[^a-z0-9_-]/);
+  });
+
+  it('does not expose a long seed in the socket-facing name', () => {
+    expect(
+      generateAgentBrowserSessionName('x'.repeat(500), 'bounded'),
+    ).toMatch(
+      /^ps-x{8}-[a-f0-9]{12}$/,
     );
   });
 
-  it('normalizes unsafe characters', () => {
-    expect(generateAgentBrowserSessionName("April 7 review / O'Connor")).toBe(
-      'proofshot-april-7-review-o-connor',
-    );
+  it('reports corrupt control state instead of treating it as absence', () => {
+    const controlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-state-test-'));
+    try {
+      fs.writeFileSync(path.join(controlDir, '.session.json'), '{not-json');
+      expect(() => loadSession(controlDir)).toThrow(/session state is corrupt/i);
+    } finally {
+      fs.rmSync(controlDir, { recursive: true, force: true });
+    }
   });
 });

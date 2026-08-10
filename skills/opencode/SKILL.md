@@ -27,12 +27,13 @@ Use ProofShot after:
 proofshot start --run "your-dev-command" --port PORT --description "what you are about to verify"
 ```
 
-This opens a browser and begins recording. If the port is already in use, proofshot will kill the existing process automatically.
+This opens a browser and begins recording. If the port is already in use, ProofShot leaves that unowned listener alone and asks you to choose another port or stop it explicitly.
 
 **Always use `--run`** to let proofshot start and capture your dev server output (server logs appear in the proof report).
 Only omit `--run` if the server was explicitly started by the user or another process - without it, no server logs are captured.
 
 If a previous session was not stopped cleanly, add `--force` to override it.
+For configured multi-service projects, let `environment` start the declared tmux panes or direct processes; do not launch duplicate services separately. Use `proofshot doctor` when browser, FFmpeg, or recovery state is unclear.
 
 ### Step 2: Drive the browser and test
 
@@ -43,11 +44,12 @@ proofshot exec snapshot -i                                    # See interactive 
 proofshot exec open http://localhost:PORT/page                # Navigate to a page
 proofshot exec click @e3                                      # Click a button
 proofshot exec fill @e2 "test@example.com"                    # Fill a form field
+proofshot exec assert-visible "#expected-result"              # Record an explicit assertion
 proofshot exec screenshot step-NAME.png                       # Capture key moments
 ```
 
 Take screenshots at important moments - these become the visual proof.
-Verify what you expect to see by reading the snapshot output.
+Verify expected outcomes with assertion commands before taking screenshots. A screenshot alone is not a passing assertion.
 
 ### Step 3: Stop and bundle the proof
 
@@ -57,12 +59,14 @@ proofshot stop
 
 This stops recording, collects console + server errors, and generates
 a SUMMARY.md with video, screenshots, and error report.
+Treat `FAIL`, `INCOMPLETE`, and `BLOCKED` verdicts as unsuccessful verification. If cleanup was interrupted, inspect `proofshot session list` and retry only the exact session with `proofshot session clean --session ID`.
 
 ### Step 4 (optional): Post proof to the PR
 
 ```bash
 proofshot pr              # Auto-detect PR from current branch
 proofshot pr 42           # Target a specific PR number
+proofshot pr 42 --session SESSION_ID --screenshot ARTIFACT_ID
 ```
 
 This uploads screenshots and video to GitHub and posts a formatted comment on the PR. By default it uses the official GitHub contents API on a `proofshot-artifacts` branch. Use `--upload-provider github-web-attachments` if you specifically want GitHub attachment URLs.

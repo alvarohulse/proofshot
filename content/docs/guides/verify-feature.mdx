@@ -39,7 +39,7 @@ ProofShot opens a headless Chromium browser, starts video recording, and begins 
 ### Take a snapshot to see the page
 
 ```sh
-agent-browser snapshot -i
+proofshot exec snapshot -i
 ```
 
 This returns a list of interactive elements with stable references:
@@ -59,30 +59,30 @@ Use these `@eN` references to target elements in subsequent commands.
 Fill forms, click buttons, navigate:
 
 ```sh
-agent-browser fill @e2 "buyer@example.com"
-agent-browser fill @e3 "secure-password"
-agent-browser click @e4
+proofshot exec fill @e2 "buyer@example.com"
+proofshot exec fill @e3 "secure-password"
+proofshot exec click @e4
 ```
 
 Navigate to a different page:
 
 ```sh
-agent-browser open http://localhost:3000/dashboard
+proofshot exec open http://localhost:3000/dashboard
 ```
 
 Scroll, type, or press keys:
 
 ```sh
-agent-browser scroll down
-agent-browser press Enter
-agent-browser type "Search query"
+proofshot exec scroll down
+proofshot exec press Enter
+proofshot exec type "Search query"
 ```
 
 ### Capture screenshots at key moments
 
 ```sh
-agent-browser screenshot step-login.png
-agent-browser screenshot step-dashboard.png
+proofshot exec screenshot step-login.png
+proofshot exec screenshot step-dashboard.png
 ```
 
 Screenshots are saved in your session's artifact folder automatically. Each one appears in the final report and viewer.

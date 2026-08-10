@@ -10,13 +10,13 @@ import { Callout, Steps } from 'nextra/components'
 After a verification session, upload screenshots and video to GitHub and post a formatted comment on your pull request with embedded proof artifacts.
 
 <Callout type="info">
-**Prerequisites:** [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated, or `GH_TOKEN` / `GITHUB_TOKEN` set. At least one completed ProofShot session on the current branch.
+**Prerequisites:** [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated, or `GH_TOKEN` / `GITHUB_TOKEN` set. At least one finalized ProofShot session recorded from the target PR head.
 </Callout>
 
 <Steps>
 ### Run a verification session
 
-Complete a full `start` → test → `stop` cycle on your feature branch. ProofShot records the branch name and commit SHA in each session's `metadata.json`.
+Complete a full `start` → test → `stop` cycle on a clean target commit. `stop` writes an `artifact-manifest.json` containing the repository, branch, commit/tree provenance, verdict, and ordered artifact hashes.
 
 ### Post to the PR
 
@@ -24,12 +24,20 @@ Complete a full `start` → test → `stop` cycle on your feature branch. ProofS
 proofshot pr
 ```
 
-ProofShot finds all sessions recorded on the current branch, uploads screenshots and video to GitHub, and posts a formatted comment on the PR.
+ProofShot auto-selects only when exactly one complete `PASS` or `FAIL` session matches the PR head. Explicit repeated `--session` flags can combine compatible finalized sessions.
 
 To target a specific PR number:
 
 ```sh
 proofshot pr 42
+```
+
+When more than one compatible session exists, choose one or more and optionally narrow their screenshots:
+
+```sh
+proofshot pr 42 --session proofshot-2026-08-09_19-00-00
+proofshot pr 42 --session checkout-session --session receipt-session
+proofshot pr 42 --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png --screenshot receipt.png
 ```
 
 To use GitHub's internal web attachment flow instead of the default contents-based uploader:
@@ -51,17 +59,25 @@ This outputs the formatted comment to stdout so you can review it.
 
 ## How it works
 
-1. ProofShot reads `metadata.json` from each session folder in `proofshot-artifacts/`
-2. Sessions matching the current git branch are selected
-3. By default, screenshots and video are uploaded to a dedicated `proofshot-artifacts` branch using the official GitHub contents API
-4. If ffmpeg is available, `.webm` video is converted to `.mp4` for better browser compatibility
-5. A formatted markdown comment is posted on the PR with embedded screenshots and a recording link
+1. ProofShot resolves the exact target PR head repository, branch, and SHA
+2. One compatible finalized manifest is auto-selected, or the repeated explicit `--session` choices are selected in order
+3. Every selected path is checked for traversal/symlinks and re-hashed before upload
+4. By default, selected screenshots and video are uploaded to a dedicated `proofshot-artifacts` branch using the official GitHub contents API
+5. A formatted comment is posted only after every requested upload succeeds
 6. Optional: `--upload-provider github-web-attachments` uses GitHub's internal attachment endpoint for inline-hosted media
 
 ## Troubleshooting
 
-**"No sessions found for current branch"**
-Make sure you ran `proofshot start` and `proofshot stop` on the same branch you're posting from. The `metadata.json` file persists after `stop` — check that it exists in your session folders.
+**"No complete finalized session matches the target PR head"**
+Run a new `start` → test → `stop` cycle on the current clean PR head. `INCOMPLETE`, `BLOCKED`, dirty, drifted, mixed-commit, or hash-mismatched sessions cannot publish.
+
+Pre-manifest sessions are available only through explicit opt-in:
+
+```sh
+proofshot pr 42 --session exact-folder-name --legacy-session
+```
+
+This flag cannot bypass a present or malformed finalized manifest.
 
 **"gh: command not found"**
 Install the [GitHub CLI](https://cli.github.com/) and authenticate with `gh auth login`.
@@ -80,8 +96,8 @@ export GH_TOKEN=YOUR_TOKEN
 proofshot pr --upload-provider github-web-attachments
 ```
 
-**Video not showing in the PR comment**
-GitHub doesn't support `.webm` in markdown comments. Install ffmpeg so ProofShot can convert the video to `.mp4` before uploading. With the default `repo-contents` provider, recordings are linked rather than rendered as GitHub attachment embeds.
+**Video not showing inline in the PR comment**
+With the default `repo-contents` provider, recordings are linked. Use `github-web-attachments` when supported by your GitHub authentication if inline attachment rendering is required.
 
 ## What's next?
 

@@ -1,10 +1,34 @@
+import * as fs from 'fs';
+import { spawn } from 'child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  captureProcessIdentity,
   findExecutablePath,
   getShellExecutable,
+  isDetachedProcessIdentity,
+  parseLinuxProcStat,
+  parseUnixProcessIdentity,
   parseWindowsNetstatOutput,
   readCommandVersion,
+  terminateOwnedProcess,
+  terminateOwnedProcessTree,
 } from './process.js';
+
+function waitForExit(pid: number, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      if (!captureProcessIdentity(pid)) {
+        resolve();
+      } else if (Date.now() >= deadline) {
+        reject(new Error(`process ${pid} did not exit`));
+      } else {
+        setTimeout(poll, 25);
+      }
+    };
+    poll();
+  });
+}
 
 describe('getShellExecutable', () => {
   it('uses cmd.exe on Windows when ComSpec is missing', () => {
@@ -60,5 +84,95 @@ describe('readCommandVersion', () => {
 
     expect(readCommandVersion('ffmpeg', ['--version'], execSpy as never)).toBe('ffmpeg version 7.0');
     expect(execSpy).toHaveBeenCalledWith('ffmpeg --version', expect.any(Object));
+  });
+});
+
+describe('process ownership', () => {
+  it('parses immutable Linux ownership fields', () => {
+    if (process.platform !== 'linux') return;
+    const stat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf-8');
+    const identity = parseLinuxProcStat(stat);
+    expect(identity).toMatchObject({ pid: process.pid });
+    expect(identity?.processGroupId).toBeGreaterThan(0);
+    expect(identity?.sessionId).toBeGreaterThan(0);
+    expect(identity?.startTime).toMatch(/^\d+$/);
+  });
+
+  it('parses macOS process ownership fields', () => {
+    expect(
+      parseUnixProcessIdentity(
+        321,
+        '  321     0 Sun Aug  9 19:35:36 2026    \n',
+      ),
+    ).toEqual({
+      pid: 321,
+      processGroupId: 321,
+      sessionId: 0,
+      startTime: 'Sun Aug  9 19:35:36 2026',
+    });
+  });
+
+  it('terminates only the exact detached process session it owns', async () => {
+    if (process.platform === 'win32') return;
+    const owned = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    owned.unref();
+    unrelated.unref();
+
+    const ownedIdentity = captureProcessIdentity(owned.pid!);
+    const unrelatedIdentity = captureProcessIdentity(unrelated.pid!);
+    expect(ownedIdentity && isDetachedProcessIdentity(ownedIdentity)).toBe(true);
+    expect(unrelatedIdentity && isDetachedProcessIdentity(unrelatedIdentity)).toBe(true);
+
+    try {
+      await expect(
+        terminateOwnedProcessTree(ownedIdentity, { graceMs: 200 }),
+      ).resolves.toBe(true);
+      await waitForExit(owned.pid!);
+      expect(captureProcessIdentity(unrelated.pid!)).not.toBeNull();
+
+      await expect(
+        terminateOwnedProcessTree(
+          ownedIdentity && { ...ownedIdentity, startTime: `${ownedIdentity.startTime}-reused` },
+          { graceMs: 20 },
+        ),
+      ).resolves.toBe(false);
+      expect(captureProcessIdentity(unrelated.pid!)).not.toBeNull();
+    } finally {
+      await terminateOwnedProcessTree(unrelatedIdentity, { graceMs: 200 });
+      await waitForExit(unrelated.pid!);
+    }
+  });
+
+  it('terminates an exact helper without widening to its process group', async () => {
+    const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    const helperIdentity = captureProcessIdentity(helper.pid!);
+    const unrelatedIdentity = captureProcessIdentity(unrelated.pid!);
+    expect(helperIdentity).not.toBeNull();
+    expect(unrelatedIdentity).not.toBeNull();
+
+    try {
+      await expect(
+        terminateOwnedProcess(helperIdentity, { graceMs: 200 }),
+      ).resolves.toBe(true);
+      await waitForExit(helper.pid!);
+      expect(captureProcessIdentity(unrelated.pid!)).not.toBeNull();
+    } finally {
+      if (unrelatedIdentity) {
+        process.kill(unrelatedIdentity.pid, 'SIGKILL');
+        await waitForExit(unrelatedIdentity.pid);
+      }
+    }
   });
 });

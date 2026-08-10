@@ -25,7 +25,43 @@ ProofShot searches for `proofshot.config.json` starting from your current direct
     "width": 1280,
     "height": 720
   },
-  "headless": true
+  "headless": true,
+  "environment": {
+    "kind": "tmux",
+    "launch": {
+      "kind": "panes",
+      "panes": [
+        {
+          "id": "vite",
+          "title": "Vite",
+          "group": "frontend",
+          "command": "npm run dev"
+        },
+        {
+          "id": "api",
+          "title": "API",
+          "group": "backend",
+          "command": "npm run api"
+        }
+      ]
+    },
+    "readiness": [
+      { "kind": "http", "url": "http://127.0.0.1:3000/health" }
+    ]
+  },
+  "logs": {
+    "stripAnsi": true,
+    "maxBytesPerSource": 5242880,
+    "sources": [
+      {
+        "id": "vite",
+        "group": "frontend",
+        "kind": "tmux-pane",
+        "match": { "connectionKey": "vite" },
+        "exclude": ["GET /health"]
+      }
+    ]
+  }
 }
 ```
 
@@ -70,6 +106,45 @@ The viewport size affects video recording resolution and screenshot dimensions.
 | `boolean` | `true` |
 
 When `true`, the browser runs without a visible window. Set to `false` (or use `--headed` CLI flag) to see the browser during testing — useful for debugging.
+
+### `environment`
+
+`environment.kind` is either:
+
+- `tmux`: ProofShot owns a dedicated tmux socket/session or connects to an external launcher on the launcher-reported socket.
+- `processes`: ProofShot starts multiple direct commands and preserves separate `stdout` and `stderr` streams.
+
+For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, env }` entries. `launch.kind: "external-command"` runs one launcher and reads either structured JSON or a `tmux -L <socket> attach -t <session>` command from stdout. Set `connection.ownership` to `attach` when the launcher only reports an existing session. Launchers that create resources must provide a stable `connection.socket` hint or `launch.stopCommand`; they also support `launch.timeoutMs`. Structured JSON is preferred:
+
+```json
+{
+  "tmux": {
+    "socket": "/tmp/dev.sock",
+    "session": "dev",
+    "panes": [
+      { "key": "vite", "paneId": "%12", "title": "Vite", "group": "frontend" }
+    ]
+  }
+}
+```
+
+ProofShot snapshots a hinted tmux socket before launch and owns only server/session identities created by that start. Attach-only launchers are never killed. Shared launchers that create a session must provide `stopCommand`. ProofShot never runs `tmux kill-server` against the default or an unowned socket.
+
+`readiness` accepts HTTP checks (`url`) and TCP checks (`host`, `port`), each with an optional `timeoutMs`.
+
+### `logs`
+
+Every source requires a stable `id`; optional `group` values organize viewer tabs. Supported source kinds:
+
+- `tmux-pane`: match by launcher `connectionKey`, stable `@proofshot-source` `tag`, or exact `session:window.pane` `target`.
+- `process`: select a direct environment command by `processId`.
+- `file`: capture an existing file, including `--url` attach workflows.
+
+Pane titles resolve in this order: launcher mapping title, non-empty tmux pane title, then `Pane <index>`. Duplicate display titles gain a pane-number suffix without changing source identity.
+
+Tmux panes are one PTY byte stream and are always recorded as `stream: "pty"`; stdout and stderr cannot be recovered after tmux multiplexes them. ProofShot installs `pipe-pane` before backfilling retained scrollback. Canonical evidence keeps untimed `history` and timestamped `live` segments plus their overlap/capture-gap boundary.
+
+`include` and `exclude` filters affect viewer presentation only. Canonical evidence and incident detection retain every bounded event. `maxBytesPerSource` records truncation instead of silently discarding integrity state.
 
 ## CLI flag precedence
 

@@ -7,6 +7,7 @@ import { cleanCommand } from './commands/clean.js';
 import { prCommand } from './commands/pr.js';
 import { execCommand } from './commands/exec.js';
 import { doctorCommand } from './commands/doctor.js';
+import { sessionCleanCommand, sessionListCommand } from './commands/session.js';
 import { PROOFSHOT_VERSION } from './version.js';
 
 export function createCLI(): Command {
@@ -36,6 +37,7 @@ export function createCLI(): Command {
     .option('--headed', 'Show browser window for debugging')
     .option('--output <dir>', 'Custom output directory')
     .option('--url <url>', 'Open this URL instead of the root')
+    .option('--browser-executable <path>', 'Use this Chrome/Chromium executable')
     .option('--force', 'Override a stale session without running stop first')
     .action(async (options) => {
       await startCommand(options);
@@ -46,7 +48,7 @@ export function createCLI(): Command {
     .description('Stop session: stop recording, collect errors, bundle proof artifacts')
     .option('--no-close', 'Don\'t close the browser (keep it open for further use)')
     .action(async (options) => {
-      await stopCommand(options);
+      await stopCommand({ noClose: options.close === false });
     });
 
   program
@@ -77,6 +79,22 @@ export function createCLI(): Command {
     .argument('[pr-number]', 'PR number (auto-detects from current branch if omitted)')
     .option('--dry-run', 'Generate the comment markdown without posting')
     .option(
+      '--session <id>',
+      'Publish a finalized session (repeatable)',
+      collectOption,
+      [],
+    )
+    .option(
+      '--screenshot <artifact...>',
+      'Publish named screenshot artifacts (space-separated or repeatable)',
+      collectOption,
+      [],
+    )
+    .option(
+      '--legacy-session',
+      'Allow one explicitly selected pre-manifest session',
+    )
+    .option(
       '--upload-provider <provider>',
       'Artifact upload backend: repo-contents or github-web-attachments',
       'repo-contents',
@@ -99,5 +117,30 @@ export function createCLI(): Command {
       await execCommand(args);
     });
 
+  const session = program
+    .command('session')
+    .description('List and recover registered ProofShot sessions');
+
+  session
+    .command('list')
+    .description('List all registered ProofShot sessions')
+    .option('--json', 'Output machine-readable JSON')
+    .action(async (options) => {
+      await sessionListCommand(options);
+    });
+
+  session
+    .command('clean')
+    .description('Retry exact cleanup for recoverable ProofShot sessions')
+    .option('--session <id>', 'Clean one exact registered session')
+    .option('--all', 'Clean every registered session')
+    .action(async (options) => {
+      await sessionCleanCommand(options);
+    });
+
   return program;
+}
+
+function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }

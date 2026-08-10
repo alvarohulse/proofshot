@@ -2,15 +2,34 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { loadConfig } from '../utils/config.js';
-import { ab, buildAgentBrowserCommand, setAgentBrowserDefaults } from '../utils/exec.js';
-import { loadSession, saveSession, type SessionState } from '../session/state.js';
+import {
+  ab,
+  buildAgentBrowserCommand,
+  getAgentBrowserEnvironment,
+  setAgentBrowserDefaults,
+} from '../utils/exec.js';
+import {
+  loadSession,
+  resolveSessionControlDir,
+  saveSession,
+  type SessionState,
+} from '../session/state.js';
+import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
+import { getPageUrl } from '../browser/session.js';
+import { registerSession } from '../session/registry.js';
 
 const SESSION_LOG_FILENAME = 'session-log.json';
+const SESSION_LOG_LOCK_TIMEOUT_MS = 5000;
+const SESSION_LOG_STALE_LOCK_MS = 120000;
 
 export interface SessionLogEntry {
   action: string;
   relativeTimeSec: number;
   timestamp: string;
+  outcome?: 'passed' | 'failed';
+  expectedSelector?: string;
+  error?: string;
+  pageUrl?: string;
   element?: {
     label: string;
     bbox: { x: number; y: number; width: number; height: number };
@@ -25,9 +44,14 @@ export function loadSessionLog(sessionDir: string): SessionLogEntry[] {
   const logPath = path.join(sessionDir, SESSION_LOG_FILENAME);
   if (!fs.existsSync(logPath)) return [];
   try {
-    return JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-  } catch {
-    return [];
+    const parsed: unknown = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+    if (!Array.isArray(parsed)) {
+      throw new Error('session log root must be an array');
+    }
+    return parsed as SessionLogEntry[];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`ProofShot session action log is corrupt: ${logPath}\n${message}`);
   }
 }
 
@@ -39,11 +63,12 @@ function resolveScreenshotPath(args: string[], sessionDir: string): string[] {
   if (args[0] !== 'screenshot' || args.length < 2) return args;
 
   const screenshotPath = args[args.length - 1];
-  // If it's already absolute, leave it alone
-  if (path.isAbsolute(screenshotPath)) return args;
-
-  // Resolve relative to session dir
-  const resolved = path.join(sessionDir, screenshotPath);
+  const resolved = path.resolve(sessionDir, screenshotPath);
+  if (path.dirname(resolved) !== path.resolve(sessionDir)) {
+    throw new Error(
+      'ProofShot screenshots must use a filename directly inside the active session.',
+    );
+  }
   return [...args.slice(0, -1), resolved];
 }
 
@@ -69,6 +94,19 @@ export function buildShellCommand(args: string[], sessionName?: string): string 
     return arg;
   });
   return buildAgentBrowserCommand(quotedArgs.join(' '), { session: sessionName });
+}
+
+export function translateProofShotExecArgs(args: string[]): {
+  agentBrowserArgs: string[];
+  expectedSelector?: string;
+} {
+  if (args[0] === 'assert-visible' && args.length > 1) {
+    return {
+      agentBrowserArgs: ['is', 'visible', ...args.slice(1)],
+      expectedSelector: args.slice(1).join(' '),
+    };
+  }
+  return { agentBrowserArgs: args };
 }
 
 /**
@@ -177,12 +215,18 @@ function isRefTargetedAction(args: string[]): boolean {
  */
 export async function execCommand(args: string[]): Promise<void> {
   const action = args.join(' ');
+  const translated = translateProofShotExecArgs(args);
+  let loggedEntry: SessionLogEntry | null = null;
+  let sessionLogPath: string | null = null;
 
   // Load session state
   const config = loadConfig();
-  setAgentBrowserDefaults({ configPath: config.browser.configPath });
-  const outputDir = path.resolve(config.output);
-  const session = loadSession(outputDir);
+  const controlDir = resolveSessionControlDir(config.output);
+  const session = loadSession(controlDir);
+  setAgentBrowserDefaults({
+    configPath: session?.agentBrowserConfigPath || config.browser.configPath,
+    socketDir: session?.agentBrowserSocketDir,
+  });
 
   if (session && !session.recordingActive) {
     console.error(
@@ -192,10 +236,22 @@ export async function execCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  if (session && !canAddressOwnedBrowserSession(session)) {
+    console.error(
+      'Error: Browser ownership no longer matches this ProofShot session.\n' +
+        'Refusing to address a possibly reused agent-browser session name.',
+    );
+    process.exit(1);
+    return;
+  }
+
   // Resolve args (screenshot path rewriting)
-  let resolvedArgs = args;
+  let resolvedArgs = translated.agentBrowserArgs;
   if (session) {
-    resolvedArgs = resolveScreenshotPath(args, session.sessionDir);
+    resolvedArgs = resolveScreenshotPath(
+      translated.agentBrowserArgs,
+      session.sessionDir,
+    );
   }
 
   // Capture element data BEFORE execution (element may be gone after click navigation)
@@ -217,15 +273,18 @@ export async function execCommand(args: string[]): Promise<void> {
       action,
       relativeTimeSec,
       timestamp: now.toISOString(),
+      expectedSelector: translated.expectedSelector,
     };
     if (elementData) {
       entry.element = elementData;
     }
 
     const logPath = path.join(session.sessionDir, SESSION_LOG_FILENAME);
-    const entries = loadSessionLog(session.sessionDir);
-    entries.push(entry);
-    fs.writeFileSync(logPath, JSON.stringify(entries, null, 2) + '\n');
+    updateSessionLog(logPath, (entries) => {
+      entries.push(entry);
+    });
+    loggedEntry = entry;
+    sessionLogPath = logPath;
   }
 
   // Build shell command with proper quoting
@@ -237,7 +296,18 @@ export async function execCommand(args: string[]): Promise<void> {
       encoding: 'utf-8',
       timeout: 60000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: getAgentBrowserEnvironment(),
     });
+    if (
+      translated.expectedSelector &&
+      result.trim().toLowerCase() !== 'true'
+    ) {
+      const assertionError = new Error(
+        `Expected selector to be visible: ${translated.expectedSelector}`,
+      ) as Error & { status: number };
+      assertionError.status = 1;
+      throw assertionError;
+    }
     if (result.trim()) {
       process.stdout.write(result);
       // Ensure trailing newline
@@ -245,12 +315,23 @@ export async function execCommand(args: string[]): Promise<void> {
         process.stdout.write('\n');
       }
     }
+    const pageUrl = session ? getPageUrl(session.sessionName) || undefined : undefined;
+    persistActionOutcome(loggedEntry, sessionLogPath, 'passed', undefined, pageUrl);
   } catch (error: any) {
     // Print stderr and exit with the same code
     const stderr = error?.stderr?.toString?.() || '';
     const stdout = error?.stdout?.toString?.() || '';
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
+    if (!stdout && !stderr && error?.message) {
+      process.stderr.write(`${error.message}\n`);
+    }
+    persistActionOutcome(
+      loggedEntry,
+      sessionLogPath,
+      'failed',
+      stderr.trim() || stdout.trim() || error?.message,
+    );
     process.exit(error?.status || 1);
   }
 
@@ -262,9 +343,93 @@ export async function execCommand(args: string[]): Promise<void> {
       });
       const vp = JSON.parse(vpJson);
       session.viewport = { width: vp.width, height: vp.height };
-      saveSession(session);
+      saveSession(session, controlDir);
+      registerSession(session);
     } catch {
       // Non-critical — viewport cache stays stale
+    }
+  }
+}
+
+function persistActionOutcome(
+  entry: SessionLogEntry | null,
+  logPath: string | null,
+  outcome: 'passed' | 'failed',
+  error?: string,
+  pageUrl?: string,
+): void {
+  if (!entry || !logPath) {
+    return;
+  }
+  entry.outcome = outcome;
+  if (error) {
+    entry.error = error;
+  }
+  if (pageUrl) {
+    entry.pageUrl = pageUrl;
+  }
+  updateSessionLog(logPath, (entries) => {
+    const matchingEntry = [...entries]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.timestamp === entry.timestamp &&
+          candidate.action === entry.action,
+      );
+    if (matchingEntry) {
+      matchingEntry.outcome = outcome;
+      if (error) {
+        matchingEntry.error = error;
+      }
+      if (pageUrl) {
+        matchingEntry.pageUrl = pageUrl;
+      }
+    }
+  });
+}
+
+function updateSessionLog(
+  logPath: string,
+  update: (entries: SessionLogEntry[]) => void,
+): void {
+  const lockPath = `${logPath}.lock`;
+  const deadline = Date.now() + SESSION_LOG_LOCK_TIMEOUT_MS;
+  let lockFd: number | null = null;
+  while (lockFd === null) {
+    try {
+      lockFd = fs.openSync(lockPath, 'wx', 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - fs.statSync(lockPath).mtimeMs > SESSION_LOG_STALE_LOCK_MS) {
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw statError;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for session log lock: ${lockPath}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+
+  try {
+    const entries = loadSessionLog(path.dirname(logPath));
+    update(entries);
+    const temporaryPath = `${logPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temporaryPath, JSON.stringify(entries, null, 2) + '\n', {
+      mode: 0o600,
+    });
+    fs.renameSync(temporaryPath, logPath);
+  } finally {
+    fs.closeSync(lockFd);
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
 }

@@ -1,4 +1,8 @@
-import { ab, ProofShotError } from '../utils/exec.js';
+import {
+  ab,
+  ProofShotError,
+  quoteShellArgument,
+} from '../utils/exec.js';
 import type { BrowserConfig, ViewportConfig } from '../utils/config.js';
 
 export function buildOpenBrowserCommand(
@@ -13,7 +17,7 @@ export function buildOpenBrowserCommand(
   if (browserConfig?.executablePath) flags.push(`--executable-path "${browserConfig.executablePath.replace(/"/g, '\\"')}"`);
 
   const suffix = flags.length > 0 ? ` ${flags.join(' ')}` : '';
-  return `open ${url}${suffix}`;
+  return `open ${quoteShellArgument(url)}${suffix}`;
 }
 
 /**
@@ -27,19 +31,43 @@ export function openBrowser(
   sessionName?: string,
   browserConfig?: BrowserConfig,
 ): void {
-  ab(buildOpenBrowserCommand(url, headless, browserConfig), { timeoutMs: 60000, session: sessionName });
+  try {
+    ab(buildOpenBrowserCommand(url, headless, browserConfig), {
+      timeoutMs: 60000,
+      session: sessionName,
+    });
+  } catch (error) {
+    const currentUrl = getPageUrl(sessionName);
+    if (!isNavigationTimeout(error) || !urlsMatch(currentUrl, url)) {
+      throw error;
+    }
+    console.warn(
+      'Browser reached the target URL before its load event timed out; continuing with the active page.',
+    );
+  }
   ab(`set viewport ${viewport.width} ${viewport.height}`, { session: sessionName });
+}
+
+function isNavigationTimeout(error: unknown): boolean {
+  return (
+    error instanceof ProofShotError &&
+    error.message.toLowerCase().includes('operation timed out')
+  );
+}
+
+function urlsMatch(actual: string, expected: string): boolean {
+  try {
+    return new URL(actual).href === new URL(expected).href;
+  } catch {
+    return actual === expected;
+  }
 }
 
 /**
  * Close the browser session.
  */
 export function closeBrowser(sessionName?: string): void {
-  try {
-    ab('close', { session: sessionName });
-  } catch {
-    // Browser may already be closed — that's fine
-  }
+  ab('close', { session: sessionName });
 }
 
 /**
@@ -58,22 +86,14 @@ export function checkAgentBrowser(): boolean {
  * Get any console errors from the current page.
  */
 export function getConsoleErrors(sessionName?: string): string {
-  try {
-    return ab('errors', { session: sessionName });
-  } catch {
-    return '';
-  }
+  return ab('errors', { session: sessionName });
 }
 
 /**
  * Get console output from the current page.
  */
 export function getConsoleOutput(sessionName?: string): string {
-  try {
-    return ab('console', { session: sessionName });
-  } catch {
-    return '';
-  }
+  return ab('console', { session: sessionName });
 }
 
 export interface ConsoleMessage {
@@ -86,15 +106,14 @@ export interface ConsoleMessage {
  * Get console output as structured JSON with per-message timestamps.
  */
 export function getConsoleOutputJson(sessionName?: string): ConsoleMessage[] {
-  try {
-    const raw = ab('console --json', { session: sessionName });
-    const parsed = JSON.parse(raw);
-    // agent-browser wraps JSON output: {success, data: {messages: [...]}, error}
-    const messages = parsed?.data?.messages ?? parsed;
-    return Array.isArray(messages) ? messages : [];
-  } catch {
-    return [];
+  const raw = ab('console --json', { session: sessionName });
+  const parsed = JSON.parse(raw);
+  // agent-browser wraps JSON output: {success, data: {messages: [...]}, error}
+  const messages = parsed?.data?.messages ?? parsed;
+  if (!Array.isArray(messages)) {
+    throw new Error('agent-browser returned malformed console JSON.');
   }
+  return messages;
 }
 
 /**

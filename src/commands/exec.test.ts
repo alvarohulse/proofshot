@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildShellCommand } from './exec.js';
+import {
+  buildShellCommand,
+  translateProofShotExecArgs,
+} from './exec.js';
 
 describe('buildShellCommand', () => {
   it('routes regular commands through the active ProofShot session', () => {
@@ -18,5 +21,14 @@ describe('buildShellCommand', () => {
     expect(buildShellCommand(['screenshot', 'step (1).png'], 'proofshot-dev')).toBe(
       "agent-browser --session 'proofshot-dev' screenshot 'step (1).png'",
     );
+  });
+
+  it('translates visible-selector assertions into an evidence-bearing browser query', () => {
+    expect(
+      translateProofShotExecArgs(['assert-visible', '#ready']),
+    ).toEqual({
+      agentBrowserArgs: ['is', 'visible', '#ready'],
+      expectedSelector: '#ready',
+    });
   });
 });

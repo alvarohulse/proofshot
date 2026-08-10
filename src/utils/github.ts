@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { ProofShotError } from './exec.js';
 
 // ─── Types ───
@@ -24,8 +24,16 @@ export interface UploadedVideoAsset extends UploadedAsset {
 
 export type GitHubUploadProvider = 'repo-contents' | 'github-web-attachments';
 
+export interface PreparedUploadAsset {
+  key: string;
+  name: string;
+  relativeDirectory: string;
+  content: Buffer;
+}
+
 export interface UploadAssetsOptions {
-  filePaths: string[];
+  filePaths?: string[];
+  preparedAssets?: PreparedUploadAsset[];
   token: string;
   repo: GitHubRepo;
   uploadProvider: GitHubUploadProvider;
@@ -36,6 +44,16 @@ export interface UploadAssetsOptions {
 
 const GITHUB_API_VERSION = '2022-11-28';
 const DEFAULT_ARTIFACTS_BRANCH = 'proofshot-artifacts';
+
+class GitHubApiError extends ProofShotError {
+  constructor(
+    public readonly status: number,
+    body: string,
+  ) {
+    super(`GitHub API request failed (${status}): ${body}`);
+    this.name = 'GitHubApiError';
+  }
+}
 
 // ─── Authentication ───
 
@@ -66,21 +84,36 @@ export function getGitHubToken(): string {
 /**
  * Get the current repo's owner, name, and numeric ID.
  */
-export async function getRepoInfo(token: string): Promise<GitHubRepo> {
+export async function getRepoInfo(
+  token: string,
+  repository?: string,
+): Promise<GitHubRepo> {
   let nwo: string;
-  try {
-    nwo = execSync('gh repo view --json nameWithOwner -q .nameWithOwner', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    throw new ProofShotError(
-      'Could not determine GitHub repository. Are you in a git repo with a GitHub remote?',
-      error,
-    );
+  if (repository) {
+    nwo = repository
+      .replace(/^https?:\/\/github\.com\//, '')
+      .replace(/^github\.com\//, '')
+      .replace(/\.git$/, '');
+  } else {
+    try {
+      nwo = execSync('gh repo view --json nameWithOwner -q .nameWithOwner', {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch (error) {
+      throw new ProofShotError(
+        'Could not determine GitHub repository. Are you in a git repo with a GitHub remote?',
+        error,
+      );
+    }
   }
 
   const [owner, repo] = nwo.split('/');
+  if (!owner || !repo || nwo.split('/').length !== 2) {
+    throw new ProofShotError(
+      `Could not parse GitHub repository: ${repository || nwo}`,
+    );
+  }
 
   const repoResponse = await githubApi<{
     id: number;
@@ -134,6 +167,44 @@ export function getPRNumber(explicitPR?: string): number {
   }
 }
 
+export function getPRHeadProvenance(prNumber: number): {
+  repository: string;
+  branch: string;
+  headSha: string;
+} {
+  try {
+    const raw = execFileSync(
+      'gh',
+      [
+        'pr',
+        'view',
+        String(prNumber),
+        '--json',
+        'headRefOid,headRefName,headRepository',
+      ],
+      {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    const parsed = JSON.parse(raw) as {
+      headRefOid: string;
+      headRefName: string;
+      headRepository: { nameWithOwner: string };
+    };
+    return {
+      repository: `github.com/${parsed.headRepository.nameWithOwner}`,
+      branch: parsed.headRefName,
+      headSha: parsed.headRefOid,
+    };
+  } catch (error) {
+    throw new ProofShotError(
+      `Could not resolve the head provenance for PR #${prNumber}.`,
+      error,
+    );
+  }
+}
+
 // ─── File Upload (GitHub User Attachments) ───
 
 function getContentType(filePath: string): string {
@@ -172,9 +243,26 @@ export async function uploadAsset(
   repoId: number,
 ): Promise<UploadedAsset> {
   const fileName = path.basename(filePath);
-  const fileSize = fs.statSync(filePath).size;
-  const contentType = getContentType(filePath);
+  return uploadPreparedAsset(
+    {
+      key: filePath,
+      name: fileName,
+      relativeDirectory: path.basename(path.dirname(filePath)),
+      content: fs.readFileSync(filePath),
+    },
+    token,
+    repoId,
+  );
+}
 
+async function uploadPreparedAsset(
+  assetToUpload: PreparedUploadAsset,
+  token: string,
+  repoId: number,
+): Promise<UploadedAsset> {
+  const fileName = assetToUpload.name;
+  const fileSize = assetToUpload.content.length;
+  const contentType = getContentType(fileName);
   // Step 1: Request upload policy
   const policyResponse = await fetch('https://github.com/upload/policies/assets', {
     method: 'POST',
@@ -218,7 +306,6 @@ export async function uploadAsset(
   };
 
   // Step 2: Upload file to S3 using the form fields
-  const fileBuffer = fs.readFileSync(filePath);
   const formData = new FormData();
 
   for (const [key, value] of Object.entries(policy.form)) {
@@ -226,7 +313,7 @@ export async function uploadAsset(
   }
 
   // File must be the last field
-  const blob = new Blob([fileBuffer], { type: contentType });
+  const blob = new Blob([assetToUpload.content], { type: contentType });
   formData.append('file', blob, fileName);
 
   const uploadResponse = await fetch(policy.upload_url, {
@@ -265,18 +352,18 @@ async function uploadAssetsToWebAttachments(
   options: UploadAssetsOptions,
 ): Promise<Map<string, UploadedAsset>> {
   const results = new Map<string, UploadedAsset>();
-  const { filePaths, token, repo, onProgress } = options;
+  const assets = prepareUploadAssets(options);
+  const { token, repo, onProgress } = options;
 
-  for (let i = 0; i < filePaths.length; i += 1) {
-    const filePath = filePaths[i];
-    const fileName = path.basename(filePath);
-    onProgress?.(i + 1, filePaths.length, fileName);
+  for (let i = 0; i < assets.length; i += 1) {
+    const prepared = assets[i];
+    onProgress?.(i + 1, assets.length, prepared.name);
 
     try {
-      const asset = await uploadAsset(filePath, token, repo.id);
-      results.set(filePath, asset);
+      const asset = await uploadPreparedAsset(prepared, token, repo.id);
+      results.set(prepared.key, asset);
     } catch (error) {
-      console.error(`  Failed to upload ${fileName}: ${(error as Error).message}`);
+      console.error(`  Failed to upload ${prepared.name}: ${(error as Error).message}`);
     }
   }
 
@@ -288,23 +375,36 @@ async function uploadAssetsToRepoContents(
 ): Promise<Map<string, UploadedAsset>> {
   const results = new Map<string, UploadedAsset>();
   const artifactsBranch = options.artifactsBranch || DEFAULT_ARTIFACTS_BRANCH;
+  const assets = prepareUploadAssets(options);
 
   await ensureArtifactsBranch(options.repo, artifactsBranch, options.token);
 
-  for (let i = 0; i < options.filePaths.length; i += 1) {
-    const filePath = options.filePaths[i];
-    const fileName = path.basename(filePath);
-    options.onProgress?.(i + 1, options.filePaths.length, fileName);
+  for (let i = 0; i < assets.length; i += 1) {
+    const prepared = assets[i];
+    const fileName = prepared.name;
+    options.onProgress?.(i + 1, assets.length, fileName);
 
     try {
-      const content = fs.readFileSync(filePath, 'base64');
+      const content = prepared.content.toString('base64');
       const uploadPath = path.posix.join(
         options.uploadRoot,
-        path.basename(path.dirname(filePath)),
+        prepared.relativeDirectory,
         fileName,
       );
 
-      await githubApi(
+      let existingSha: string | undefined;
+      try {
+        const existing = await githubApi<{ sha: string }>(
+          `repos/${options.repo.owner}/${options.repo.repo}/contents/${encodePath(uploadPath)}?ref=${encodeURIComponent(artifactsBranch)}`,
+          options.token,
+        );
+        existingSha = existing.sha;
+      } catch (error) {
+        if (!(error instanceof GitHubApiError) || error.status !== 404) {
+          throw error;
+        }
+      }
+      const result = await githubApi<{ commit: { sha: string } }>(
         `repos/${options.repo.owner}/${options.repo.repo}/contents/${encodePath(uploadPath)}`,
         options.token,
         {
@@ -313,12 +413,13 @@ async function uploadAssetsToRepoContents(
             message: `proofshot: add ${uploadPath}`,
             content,
             branch: artifactsBranch,
+            ...(existingSha ? { sha: existingSha } : {}),
           }),
         },
       );
 
-      results.set(filePath, {
-        url: buildBlobUrl(options.repo, artifactsBranch, uploadPath),
+      results.set(prepared.key, {
+        url: buildBlobUrl(options.repo, result.commit.sha, uploadPath),
         name: fileName,
       });
     } catch (error) {
@@ -327,6 +428,18 @@ async function uploadAssetsToRepoContents(
   }
 
   return results;
+}
+
+function prepareUploadAssets(options: UploadAssetsOptions): PreparedUploadAsset[] {
+  if (options.preparedAssets) {
+    return options.preparedAssets;
+  }
+  return (options.filePaths || []).map((filePath) => ({
+    key: filePath,
+    name: path.basename(filePath),
+    relativeDirectory: path.basename(path.dirname(filePath)),
+    content: fs.readFileSync(filePath),
+  }));
 }
 
 async function ensureArtifactsBranch(
@@ -341,8 +454,7 @@ async function ensureArtifactsBranch(
     );
     return;
   } catch (error) {
-    const message = (error as Error).message;
-    if (!message.includes('(404)')) throw error;
+    if (!(error instanceof GitHubApiError) || error.status !== 404) throw error;
   }
 
   const baseRef = await githubApi<{ object: { sha: string } }>(
@@ -390,7 +502,7 @@ async function githubApi<T>(
 
   if (!response.ok) {
     const body = await response.text();
-    throw new ProofShotError(`GitHub API request failed (${response.status}): ${body}`);
+    throw new GitHubApiError(response.status, body);
   }
 
   if (response.status === 204) {

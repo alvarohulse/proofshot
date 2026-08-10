@@ -14,18 +14,31 @@ export class ProofShotError extends Error {
 export interface AgentBrowserCommandOptions {
   configPath?: string;
   session?: string;
+  socketDir?: string;
   timeoutMs?: number;
 }
 
-let defaultAgentBrowserOptions: Pick<AgentBrowserCommandOptions, 'configPath'> = {};
+let defaultAgentBrowserOptions: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'> = {};
 
 export function setAgentBrowserDefaults(
-  options: Pick<AgentBrowserCommandOptions, 'configPath'>,
+  options: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'>,
 ): void {
   defaultAgentBrowserOptions = { ...options };
 }
 
-function shellQuote(value: string): string {
+export function getAgentBrowserEnvironment(
+  options: Pick<AgentBrowserCommandOptions, 'socketDir'> = {},
+): NodeJS.ProcessEnv {
+  const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
+  return {
+    ...process.env,
+    AGENT_BROWSER_IDLE_TIMEOUT_MS:
+      process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || '1800000',
+    ...(socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}),
+  };
+}
+
+export function quoteShellArgument(value: string): string {
   const escaped = value.replace(/'/g, "'\\''");
   return `'${escaped}'`;
 }
@@ -38,8 +51,12 @@ export function buildAgentBrowserCommand(
     ...defaultAgentBrowserOptions,
     ...options,
   };
-  const configFlag = mergedOptions.configPath ? ` --config ${shellQuote(mergedOptions.configPath)}` : '';
-  const sessionFlag = mergedOptions.session ? ` --session ${shellQuote(mergedOptions.session)}` : '';
+  const configFlag = mergedOptions.configPath
+    ? ` --config ${quoteShellArgument(mergedOptions.configPath)}`
+    : '';
+  const sessionFlag = mergedOptions.session
+    ? ` --session ${quoteShellArgument(mergedOptions.session)}`
+    : '';
   return `agent-browser${configFlag}${sessionFlag} ${command}`;
 }
 
@@ -62,6 +79,7 @@ export function ab(
       encoding: 'utf-8',
       timeout: options.timeoutMs ?? 30000,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: getAgentBrowserEnvironment(options),
     }).trim();
   } catch (error: any) {
     const stderr = error?.stderr?.toString?.() || '';

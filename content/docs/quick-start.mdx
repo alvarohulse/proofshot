@@ -77,12 +77,13 @@ This starts your dev server, opens a headless browser, and begins recording vide
 Your agent drives the browser using `agent-browser` commands:
 
 ```sh
-agent-browser snapshot -i          # See interactive elements (@e1, @e2, ...)
-agent-browser open http://localhost:3000/login
-agent-browser fill @e2 "user@example.com"
-agent-browser fill @e3 "password123"
-agent-browser click @e5             # Submit button
-agent-browser screenshot step-login.png
+proofshot exec snapshot -i         # See interactive elements (@e1, @e2, ...)
+proofshot exec open http://localhost:3000/login
+proofshot exec fill @e2 "user@example.com"
+proofshot exec fill @e3 "password123"
+proofshot exec click @e5             # Submit button
+proofshot exec assert-visible "#account-home"
+proofshot exec screenshot step-login.png
 ```
 
 Each action is logged with timestamps and element data for the interactive viewer.
@@ -93,7 +94,7 @@ Each action is logged with timestamps and element data for the interactive viewe
 proofshot stop
 ```
 
-ProofShot stops recording, collects console and server errors, trims the video, and generates your proof artifacts.
+ProofShot stops recording, finalizes canonical browser/environment evidence, trims the video, and generates the viewer, verdict, and provenance manifest.
 
 ### Review the artifacts
 

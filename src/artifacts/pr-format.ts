@@ -66,7 +66,14 @@ export interface PRCommentData {
   sessionCount: number;
   screenshots: Map<string, string>; // filename → GitHub asset URL
   video: { url: string; renderMode: 'embed' | 'link' } | null;
+  recordings?: Array<{
+    label: string;
+    url: string;
+    renderMode: 'embed' | 'link';
+  }>;
   errorCount: number;
+  verdict: 'PASS' | 'FAIL' | 'INCOMPLETE' | 'BLOCKED';
+  verdictReasons: string[];
   branch: string;
   commitSha: string;
 }
@@ -83,19 +90,54 @@ export function formatPRComment(data: PRCommentData): string {
   }
 
   // Status
-  const status =
-    data.errorCount === 0
-      ? '✅ No errors detected'
-      : `⚠️ ${data.errorCount} error(s) detected`;
-  md += `${status}\n\n`;
+  const status = (() => {
+    switch (data.verdict) {
+      case 'PASS':
+        return '✅ Verification passed';
+      case 'FAIL':
+        return '❌ Verification failed';
+      case 'INCOMPLETE':
+        return '⚠️ Verification incomplete';
+      case 'BLOCKED':
+        return '⛔ Verification blocked';
+      default: {
+        const exhaustiveVerdict: never = data.verdict;
+        return exhaustiveVerdict;
+      }
+    }
+  })();
+  md += `${status}`;
+  if (data.errorCount > 0) {
+    md += ` · ${data.errorCount} incident(s)`;
+  }
+  md += '\n\n';
+  if (data.verdictReasons.length > 0) {
+    md += data.verdictReasons.map((reason) => `- ${reason}`).join('\n');
+    md += '\n\n';
+  }
 
-  // Video (GitHub renders video URLs as playable embeds)
-  if (data.video) {
-    md += `### Recording\n\n`;
-    if (data.video.renderMode === 'embed') {
-      md += `${data.video.url}\n\n`;
-    } else {
-      md += `[Session recording](${data.video.url})\n\n`;
+  const recordings: Array<{
+    label: string | null;
+    url: string;
+    renderMode: 'embed' | 'link';
+  }> =
+    data.recordings ||
+    (data.video ? [{ label: null, ...data.video }] : []);
+  // GitHub renders uploaded video URLs as playable embeds.
+  if (recordings.length > 0) {
+    md += `### Recording${recordings.length === 1 ? '' : 's'}\n\n`;
+    for (const recording of recordings) {
+      if (recordings.length > 1 && recording.label) {
+        md += `**${recording.label}**\n\n`;
+      }
+      if (recording.renderMode === 'embed') {
+        md += `${recording.url}\n\n`;
+      } else {
+        const label = recording.label
+          ? `Session recording: ${recording.label}`
+          : 'Session recording';
+        md += `[${label}](${recording.url})\n\n`;
+      }
     }
   }
 
