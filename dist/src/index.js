@@ -874,7 +874,7 @@ function getAgentBrowserEnvironment(options = {}) {
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
   return socketDir ? { ...process.env, AGENT_BROWSER_SOCKET_DIR: socketDir } : { ...process.env };
 }
-function shellQuote(value) {
+function quoteShellArgument(value) {
   const escaped = value.replace(/'/g, "'\\''");
   return `'${escaped}'`;
 }
@@ -883,8 +883,8 @@ function buildAgentBrowserCommand(command, options = {}) {
     ...defaultAgentBrowserOptions,
     ...options
   };
-  const configFlag = mergedOptions.configPath ? ` --config ${shellQuote(mergedOptions.configPath)}` : "";
-  const sessionFlag = mergedOptions.session ? ` --session ${shellQuote(mergedOptions.session)}` : "";
+  const configFlag = mergedOptions.configPath ? ` --config ${quoteShellArgument(mergedOptions.configPath)}` : "";
+  const sessionFlag = mergedOptions.session ? ` --session ${quoteShellArgument(mergedOptions.session)}` : "";
   return `agent-browser${configFlag}${sessionFlag} ${command}`;
 }
 function ab(command, timeoutOrOptions = 3e4) {
@@ -1051,7 +1051,7 @@ function buildOpenBrowserCommand(url, headless = true, browserConfig) {
   if (browserConfig?.ignoreHttpsErrors) flags.push("--ignore-https-errors");
   if (browserConfig?.executablePath) flags.push(`--executable-path "${browserConfig.executablePath.replace(/"/g, '\\"')}"`);
   const suffix = flags.length > 0 ? ` ${flags.join(" ")}` : "";
-  return `open ${url}${suffix}`;
+  return `open ${quoteShellArgument(url)}${suffix}`;
 }
 function openBrowser(url, viewport, headless = true, sessionName, browserConfig) {
   try {
@@ -1563,10 +1563,10 @@ process.on('SIGTERM', stop);
 function buildTmuxPipeCommand(config) {
   const encodedConfig = encodeConfig(config);
   return [
-    shellQuote2(process.execPath),
+    shellQuote(process.execPath),
     "-e",
-    shellQuote2(TMUX_PIPE_RUNNER_SOURCE),
-    shellQuote2(encodedConfig)
+    shellQuote(TMUX_PIPE_RUNNER_SOURCE),
+    shellQuote(encodedConfig)
   ].join(" ");
 }
 async function waitForCaptureProcess(sourceId, pidFile, timeoutMs = 2e3) {
@@ -1686,7 +1686,7 @@ function readPidIdentity(pidFile) {
 function encodeConfig(config) {
   return Buffer.from(JSON.stringify(config)).toString("base64");
 }
-function shellQuote2(value) {
+function shellQuote(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -2128,7 +2128,7 @@ function buildPaneCommand(pane) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error(`Invalid environment variable name: ${key}`);
     }
-    return `${key}=${shellQuote3(value)}`;
+    return `${key}=${shellQuote2(value)}`;
   });
   return assignments.length > 0 ? `env ${assignments.join(" ")} ${pane.command}` : pane.command;
 }
@@ -2257,7 +2257,7 @@ function validateId(id) {
     throw new Error(`Invalid log source id: ${id}`);
   }
 }
-function shellQuote3(value) {
+function shellQuote2(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 function stripShellQuotes(value) {

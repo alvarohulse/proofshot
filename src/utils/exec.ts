@@ -35,7 +35,7 @@ export function getAgentBrowserEnvironment(
     : { ...process.env };
 }
 
-function shellQuote(value: string): string {
+export function quoteShellArgument(value: string): string {
   const escaped = value.replace(/'/g, "'\\''");
   return `'${escaped}'`;
 }
@@ -48,8 +48,12 @@ export function buildAgentBrowserCommand(
     ...defaultAgentBrowserOptions,
     ...options,
   };
-  const configFlag = mergedOptions.configPath ? ` --config ${shellQuote(mergedOptions.configPath)}` : '';
-  const sessionFlag = mergedOptions.session ? ` --session ${shellQuote(mergedOptions.session)}` : '';
+  const configFlag = mergedOptions.configPath
+    ? ` --config ${quoteShellArgument(mergedOptions.configPath)}`
+    : '';
+  const sessionFlag = mergedOptions.session
+    ? ` --session ${quoteShellArgument(mergedOptions.session)}`
+    : '';
   return `agent-browser${configFlag}${sessionFlag} ${command}`;
 }
 

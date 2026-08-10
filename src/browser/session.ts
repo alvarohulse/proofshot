@@ -1,4 +1,8 @@
-import { ab, ProofShotError } from '../utils/exec.js';
+import {
+  ab,
+  ProofShotError,
+  quoteShellArgument,
+} from '../utils/exec.js';
 import type { BrowserConfig, ViewportConfig } from '../utils/config.js';
 
 export function buildOpenBrowserCommand(
@@ -13,7 +17,7 @@ export function buildOpenBrowserCommand(
   if (browserConfig?.executablePath) flags.push(`--executable-path "${browserConfig.executablePath.replace(/"/g, '\\"')}"`);
 
   const suffix = flags.length > 0 ? ` ${flags.join(' ')}` : '';
-  return `open ${url}${suffix}`;
+  return `open ${quoteShellArgument(url)}${suffix}`;
 }
 
 /**

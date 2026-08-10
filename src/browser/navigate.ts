@@ -1,10 +1,13 @@
-import { ab } from '../utils/exec.js';
+import { ab, quoteShellArgument } from '../utils/exec.js';
 
 /**
  * Navigate to a URL and wait for the page to load.
  */
 export function navigateTo(url: string, sessionName?: string): void {
-  ab(`open ${url}`, { timeoutMs: 60000, session: sessionName });
+  ab(`open ${quoteShellArgument(url)}`, {
+    timeoutMs: 60000,
+    session: sessionName,
+  });
   try {
     ab('wait --load networkidle', { timeoutMs: 30000, session: sessionName });
   } catch {
