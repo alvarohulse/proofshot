@@ -7,7 +7,9 @@ import { loadEvidenceEvents } from './evidence.js';
 import { startOwnedEnvironment, stopOwnedEnvironment } from './runtime.js';
 import type {
   EnvironmentState,
+  LauncherEnvironmentState,
   ProcessEnvironmentState,
+  TmuxEnvironmentState,
 } from './types.js';
 import { processIdentityMatches } from '../utils/process.js';
 
@@ -38,7 +40,7 @@ describe('owned environment capture', () => {
     const sessionDir = path.join(root, 'session');
     fs.mkdirSync(sessionDir, { recursive: true });
     let latestState: EnvironmentState | null = null;
-    const state = await startOwnedEnvironment(
+    const started = await startOwnedEnvironment(
       {
         kind: 'tmux',
         launch: {
@@ -84,7 +86,8 @@ describe('owned environment capture', () => {
         latestState = updated;
       },
     );
-    states.push(state);
+    if (started) states.push(started);
+    const state = requireTmuxState(started);
 
     await waitForEvidence(state.evidencePath, ['vite-live', 'api-live']);
     const events = loadEvidenceEvents(state.evidencePath);
@@ -148,7 +151,7 @@ describe('owned environment capture', () => {
     );
     const sessionDir = path.join(root, 'shared-session');
     fs.mkdirSync(sessionDir, { recursive: true });
-    const state = await startOwnedEnvironment(
+    const started = await startOwnedEnvironment(
       {
         kind: 'tmux',
         launch: {
@@ -175,10 +178,8 @@ describe('owned environment capture', () => {
       Date.now(),
       () => {},
     );
-    states.push(state);
-    if (state.kind !== 'tmux') {
-      throw new Error('expected tmux state');
-    }
+    if (started) states.push(started);
+    const state = requireTmuxState(started);
     expect(state.ownsServer).toBe(false);
     expect(state.ownsSession).toBe(false);
     await waitForEvidence(state.evidencePath, ['shared-live']);
@@ -220,10 +221,8 @@ describe('owned environment capture', () => {
     ).rejects.toThrow(/timed out/);
 
     expect(pendingState).toMatchObject({ kind: 'launcher' });
-    if (!pendingState || pendingState.kind !== 'launcher') {
-      throw new Error('expected persisted launcher state');
-    }
-    expect(processIdentityMatches(pendingState.launcher.process)).toBe(false);
+    const launcherState = requireLauncherState(pendingState);
+    expect(processIdentityMatches(launcherState.launcher.process)).toBe(false);
   }, 15000);
 
   it('preserves direct stdout/stderr and file history/live evidence', async () => {
@@ -231,7 +230,7 @@ describe('owned environment capture', () => {
     const filePath = path.join(root, 'worker.log');
     fs.mkdirSync(sessionDir, { recursive: true });
     fs.writeFileSync(filePath, 'file-history\n');
-    const state = await startOwnedEnvironment(
+    const started = await startOwnedEnvironment(
       {
         kind: 'processes',
         commands: [
@@ -264,11 +263,9 @@ describe('owned environment capture', () => {
       Date.now(),
       () => {},
     );
-    states.push(state);
+    if (started) states.push(started);
     fs.appendFileSync(filePath, 'file-live\n');
-    if (state.kind !== 'processes') {
-      throw new Error('expected process state');
-    }
+    const state = requireProcessState(started);
     const fileCapture = state.processes.find(
       (capture) => capture.sourceId === 'worker',
     );
@@ -336,7 +333,7 @@ describe('owned environment capture', () => {
   it('launches every process definition when only some sources are customized', async () => {
     const sessionDir = path.join(root, 'all-processes-session');
     fs.mkdirSync(sessionDir, { recursive: true });
-    const state = await startOwnedEnvironment(
+    const started = await startOwnedEnvironment(
       {
         kind: 'processes',
         commands: [
@@ -358,8 +355,8 @@ describe('owned environment capture', () => {
       Date.now(),
       () => {},
     );
-    states.push(state);
-    if (state.kind !== 'processes') throw new Error('expected process state');
+    if (started) states.push(started);
+    const state = requireProcessState(started);
 
     expect(state.processes.map((capture) => capture.sourceId).sort()).toEqual([
       'custom-api',
@@ -477,7 +474,7 @@ describe('owned environment capture', () => {
   it('records truncation and cleans descendants after a coordinator dies', async () => {
     const sessionDir = path.join(root, 'truncation-session');
     fs.mkdirSync(sessionDir, { recursive: true });
-    const state = await startOwnedEnvironment(
+    const started = await startOwnedEnvironment(
       {
         kind: 'processes',
         commands: [
@@ -495,7 +492,8 @@ describe('owned environment capture', () => {
       Date.now(),
       () => {},
     );
-    states.push(state);
+    if (started) states.push(started);
+    const state = requireProcessState(started);
     await waitForEvidence(state.evidencePath, ['capture truncated']);
     expect(
       loadEvidenceEvents(state.evidencePath).some((event) => event.truncated),
@@ -504,9 +502,6 @@ describe('owned environment capture', () => {
       fs.statSync(state.evidencePath).size +
         fs.statSync(path.join(sessionDir, 'logs', 'noisy.log')).size,
     ).toBeLessThanOrEqual(512);
-    if (state.kind !== 'processes') {
-      throw new Error('expected process state');
-    }
     const coordinator = state.processes[0].process;
     process.kill(coordinator.pid, 'SIGKILL');
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -522,6 +517,24 @@ function requireProcessState(
 ): ProcessEnvironmentState {
   if (!state || state.kind !== 'processes') {
     throw new Error('expected process state');
+  }
+  return state;
+}
+
+function requireTmuxState(
+  state: EnvironmentState | null,
+): TmuxEnvironmentState {
+  if (!state || state.kind !== 'tmux') {
+    throw new Error('expected tmux state');
+  }
+  return state;
+}
+
+function requireLauncherState(
+  state: EnvironmentState | null,
+): LauncherEnvironmentState {
+  if (!state || state.kind !== 'launcher') {
+    throw new Error('expected persisted launcher state');
   }
   return state;
 }
