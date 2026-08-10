@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { CanonicalEvidence, Verdict } from '../artifacts/evidence.js';
 import {
   loadArtifactManifest,
+  normalizeRepository,
   validateManifestArtifacts,
   writeArtifactManifest,
   type GitProvenance,
@@ -19,6 +20,22 @@ afterEach(() => {
 });
 
 describe('finalized artifact manifests', () => {
+  it('strips credentials from repository remotes', () => {
+    expect(
+      normalizeRepository(
+        'https://x-access-token:secret@github.com/alvarohulse/proofshot.git',
+      ),
+    ).toBe('github.com/alvarohulse/proofshot');
+    expect(normalizeRepository('git@github.com:alvarohulse/proofshot.git')).toBe(
+      'github.com/alvarohulse/proofshot',
+    );
+    expect(
+      normalizeRepository(
+        'ssh://git@github.com:2222/alvarohulse/proofshot.git',
+      ),
+    ).toBe('github.com/alvarohulse/proofshot');
+  });
+
   it('records ordered hashes and nested evidence with stable provenance', () => {
     const sessionDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'proofshot-manifest-'),
@@ -53,6 +70,20 @@ describe('finalized artifact manifests', () => {
           action: 'screenshot second.png',
           relativeTimeSec: 2,
           timestamp: '2026-08-09T00:00:02.000Z',
+        },
+      ],
+      screenshots: [
+        {
+          file: 'first.png',
+          validPng: true,
+          visuallyBlank: false,
+          sha256: 'fixture',
+        },
+        {
+          file: 'second.png',
+          validPng: true,
+          visuallyBlank: false,
+          sha256: 'fixture',
         },
       ],
     } as CanonicalEvidence;

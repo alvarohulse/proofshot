@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
+import { PNG } from 'pngjs';
 import type { SessionLogEntry } from '../commands/exec.js';
 import { loadEvidenceEvents } from '../environment/evidence.js';
 import type {
@@ -28,6 +29,7 @@ export type EvidenceSourceSummary = {
 export type EvidenceIncident = {
   id: string;
   severity: 'fatal' | 'error';
+  origin: EvidenceEvent['origin'];
   group: string;
   message: string;
   count: number;
@@ -40,6 +42,7 @@ export type ScreenshotIntegrity = {
   file: string;
   sha256: string | null;
   validPng: boolean;
+  visuallyBlank: boolean;
   size: number;
 };
 
@@ -72,6 +75,7 @@ export type Verdict = {
 export type EvidenceBuildOptions = {
   sessionId: string;
   sessionDir: string;
+  initialPageUrl?: string;
   durationSec: number;
   timelineOffsetSec?: number;
   videoPath: string;
@@ -89,7 +93,7 @@ export function writeCanonicalEvidence(
   const events = collectEvents(options);
   applyPresentationFilters(events, options.environment?.sources || []);
   const incidents = buildIncidents(events);
-  const screenshots = inspectScreenshots(options.sessionDir);
+  const screenshots = inspectScreenshots(options.sessionDir, options.actions);
   const mediaDurationSec = probeMediaDuration(options.videoPath);
   const actionDuration = options.actions
     .map((entry) => entry.relativeTimeSec)
@@ -121,15 +125,27 @@ export function writeCanonicalEvidence(
     screenshots,
   };
   const verdict = buildVerdict(options, evidence);
-  fs.writeFileSync(
+  writeJsonAtomically(
     path.join(options.sessionDir, 'evidence.json'),
-    JSON.stringify(evidence, null, 2) + '\n',
+    evidence,
   );
-  fs.writeFileSync(
+  writeJsonAtomically(
     path.join(options.sessionDir, 'verdict.json'),
-    JSON.stringify(verdict, null, 2) + '\n',
+    verdict,
   );
   return { evidence, verdict };
+}
+
+function writeJsonAtomically(filePath: string, value: unknown): void {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(value, null, 2) + '\n', {
+      mode: 0o600,
+    });
+    fs.renameSync(temporaryPath, filePath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+  }
 }
 
 function collectEvents(options: EvidenceBuildOptions): EvidenceEvent[] {
@@ -143,21 +159,39 @@ function collectEvents(options: EvidenceBuildOptions): EvidenceEvent[] {
           ),
         )
       : [];
-  if (environmentEvents.length === 0) {
-    environmentEvents.push(
-      ...options.serverEntries.map((entry) =>
-        toEvidenceEvent(entry, {
-          origin: 'environment',
-          group: 'backend',
-          sourceId: 'server',
-          sourceTitle: 'Server',
-          stream: 'stderr',
-        }),
-      ),
-    );
+  if (options.environment && options.environment.kind !== 'launcher') {
+    for (const sourceId of options.environment.healthFailures || []) {
+      const source = options.environment.sources.find(
+        (candidate) => candidate.id === sourceId,
+      );
+      environmentEvents.push({
+        version: 1,
+        origin: 'environment',
+        group: source?.group || 'environment',
+        sourceId,
+        sourceTitle: source?.title || sourceId,
+        stream: source?.stream || 'stderr',
+        segment: 'live',
+        timestamp: null,
+        relativeTimeSec: null,
+        text: `[capture worker exited before stop: ${sourceId}]`,
+        captureGap: true,
+      });
+    }
   }
+  environmentEvents.push(
+    ...options.serverEntries.map((entry) =>
+      toEvidenceEvent(entry, {
+        origin: 'environment',
+        group: 'backend',
+        sourceId: 'server',
+        sourceTitle: 'Server',
+        stream: 'stderr',
+      }),
+    ),
+  );
 
-  const navigations = buildNavigations(options.actions);
+  const navigations = buildNavigations(options.actions, options.initialPageUrl);
   const browserEvents = options.consoleEntries.map((entry) => {
     const navigation = findNavigation(navigations, entry.relativeTimeSec);
     return toEvidenceEvent(entry, {
@@ -217,27 +251,26 @@ function toEvidenceEvent(
 
 function buildNavigations(
   actions: SessionLogEntry[],
+  initialPageUrl?: string,
 ): Array<{ id: string; url: string; startTimeSec: number }> {
-  const navigations = actions
-    .map((entry) => {
-      const match = entry.action.match(/^(?:open|navigate)\s+(\S+)/i);
-      return match && Number.isFinite(entry.relativeTimeSec)
-        ? { url: match[1], startTimeSec: entry.relativeTimeSec }
-        : null;
-    })
-    .filter(
-      (
-        navigation,
-      ): navigation is { url: string; startTimeSec: number } =>
-        navigation !== null,
-    )
-    .map((navigation, index) => ({
-      id: `browser-nav-${index + 1}`,
-      ...navigation,
-    }));
-  return navigations.length > 0
-    ? navigations
-    : [{ id: 'browser-nav-1', url: 'Browser', startTimeSec: 0 }];
+  const navigations: Array<{ url: string; startTimeSec: number }> = [];
+  const append = (url: string | undefined, startTimeSec: number): void => {
+    if (!url || navigations.at(-1)?.url === url) return;
+    navigations.push({ url, startTimeSec });
+  };
+  append(initialPageUrl, 0);
+  for (const entry of actions) {
+    if (!Number.isFinite(entry.relativeTimeSec)) continue;
+    const explicit = entry.action.match(/^(?:open|navigate)\s+(\S+)/i)?.[1];
+    append(entry.pageUrl || explicit, entry.relativeTimeSec);
+  }
+  if (navigations.length === 0) {
+    navigations.push({ url: 'Browser', startTimeSec: 0 });
+  }
+  return navigations.map((navigation, index) => ({
+    id: `browser-nav-${index + 1}`,
+    ...navigation,
+  }));
 }
 
 function findNavigation(
@@ -258,6 +291,7 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
     string,
     {
       severity: 'fatal' | 'error';
+      origin: EvidenceEvent['origin'];
       group: string;
       message: string;
       count: number;
@@ -271,9 +305,10 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
       continue;
     }
     const message = normalizeIncident(event.text);
-    const key = `${event.group}\0${severity}\0${message}`;
+    const key = `${event.origin}\0${event.group}\0${severity}\0${message}`;
     const incident = incidents.get(key) || {
       severity,
+      origin: event.origin,
       group: event.group,
       message,
       count: 0,
@@ -291,6 +326,7 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
   return [...incidents.values()].map((incident, index) => ({
     id: `incident-${index + 1}`,
     severity: incident.severity,
+    origin: incident.origin,
     group: incident.group,
     message: incident.message,
     count: incident.count,
@@ -303,7 +339,11 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
 }
 
 function classifyIncident(text: string): 'fatal' | 'error' | null {
-  if (/\bFATAL\b|\bpanic:|uncaught exception|unhandled rejection/i.test(text)) {
+  if (
+    /\bFATAL\b|\bpanic:|uncaught exception|unhandled rejection|capture worker exited before stop|malformed canonical evidence row|\[process exited with code (?!0\])/i.test(
+      text,
+    )
+  ) {
     return 'fatal';
   }
   if (/\bError:|ERR[_!]|Exception:|Traceback/i.test(text)) {
@@ -334,17 +374,19 @@ function buildSourceSummaries(
     }
   >();
   for (const event of events) {
-    const existing = sourceKeys.get(event.sourceId) || {
+    const key = `${event.origin}\0${event.sourceId}`;
+    const existing = sourceKeys.get(key) || {
       title: event.sourceTitle,
       origin: event.origin,
       group: event.group,
       events: [],
     };
     existing.events.push(event);
-    sourceKeys.set(event.sourceId, existing);
+    sourceKeys.set(key, existing);
   }
 
-  return [...sourceKeys.entries()].map(([id, source]) => {
+  return [...sourceKeys.values()].map((source) => {
+    const id = source.events[0].sourceId;
     const hiddenLineCount = source.events.filter(
       (event) => event.presentationHidden,
     ).length;
@@ -357,8 +399,9 @@ function buildSourceSummaries(
       hiddenLineCount,
       truncationCount: source.events.filter((event) => event.truncated).length,
       captureGapCount: source.events.filter((event) => event.captureGap).length,
-      incidentCount: incidents.filter((incident) =>
-        incident.sourceIds.includes(id),
+      incidentCount: incidents.filter(
+        (incident) =>
+          incident.origin === source.origin && incident.sourceIds.includes(id),
       ).length,
     };
   });
@@ -395,24 +438,48 @@ function isHidden(
   return Boolean(config.exclude?.some((pattern) => text.includes(pattern)));
 }
 
-function inspectScreenshots(sessionDir: string): ScreenshotIntegrity[] {
-  return fs
-    .readdirSync(sessionDir)
-    .filter((file) => file.endsWith('.png'))
-    .sort()
+function inspectScreenshots(
+  sessionDir: string,
+  actions: SessionLogEntry[],
+): ScreenshotIntegrity[] {
+  const files = [
+    ...new Set(
+      actions
+        .filter((action) => action.outcome === 'passed')
+        .map((action) => action.action.match(/^screenshot\s+(.+)$/)?.[1])
+        .filter((value): value is string => Boolean(value))
+        .map((value) => path.basename(value)),
+    ),
+  ];
+  return files
     .map((file) => {
-      const contents = fs.readFileSync(path.join(sessionDir, file));
-      const validPng = isValidPng(contents);
+      const filePath = path.join(sessionDir, file);
+      const size = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+      if (size > 50 * 1024 * 1024) {
+        return {
+          file,
+          sha256: null,
+          validPng: false,
+          visuallyBlank: false,
+          size,
+        };
+      }
+      const contents = size > 0 ? fs.readFileSync(filePath) : Buffer.alloc(0);
+      const integrity = inspectPng(contents);
       return {
         file,
         sha256: createHash('sha256').update(contents).digest('hex'),
-        validPng,
-        size: contents.length,
+        validPng: integrity.valid,
+        visuallyBlank: integrity.visuallyBlank,
+        size,
       };
     });
 }
 
-function isValidPng(contents: Buffer): boolean {
+function inspectPng(contents: Buffer): {
+  valid: boolean;
+  visuallyBlank: boolean;
+} {
   if (
     contents.length < 33 ||
     !contents
@@ -420,9 +487,40 @@ function isValidPng(contents: Buffer): boolean {
       .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
     contents.subarray(12, 16).toString('ascii') !== 'IHDR'
   ) {
-    return false;
+    return { valid: false, visuallyBlank: false };
   }
-  return contents.includes(Buffer.from('IEND', 'ascii'), contents.length - 16);
+  const width = contents.readUInt32BE(16);
+  const height = contents.readUInt32BE(20);
+  if (width <= 0 || height <= 0 || width * height > 20_000_000) {
+    return { valid: false, visuallyBlank: false };
+  }
+  try {
+    const decoded = PNG.sync.read(contents, { checkCRC: true });
+    const spans = [
+      { minimum: 255, maximum: 0 },
+      { minimum: 255, maximum: 0 },
+      { minimum: 255, maximum: 0 },
+      { minimum: 255, maximum: 0 },
+    ];
+    const pixelCount = decoded.width * decoded.height;
+    const sampleStep = Math.max(1, Math.floor(pixelCount / 10_000));
+    for (let pixel = 0; pixel < pixelCount; pixel += sampleStep) {
+      const offset = pixel * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const value = decoded.data[offset + channel];
+        spans[channel].minimum = Math.min(spans[channel].minimum, value);
+        spans[channel].maximum = Math.max(spans[channel].maximum, value);
+      }
+    }
+    return {
+      valid: true,
+      visuallyBlank: spans.every(
+        ({ minimum, maximum }) => maximum - minimum <= 3,
+      ),
+    };
+  } catch {
+    return { valid: false, visuallyBlank: false };
+  }
 }
 
 function buildVerdict(
@@ -432,10 +530,22 @@ function buildVerdict(
   const missingArtifacts: string[] = [];
   if (options.recordingWasActive && !fs.existsSync(options.videoPath)) {
     missingArtifacts.push(path.basename(options.videoPath));
+  } else if (
+    options.recordingWasActive &&
+    (evidence.mediaDurationSec === null || evidence.mediaDurationSec <= 0)
+  ) {
+    missingArtifacts.push(path.basename(options.videoPath));
   }
   const screenshotFiles = new Set(
     evidence.screenshots.map((screenshot) => screenshot.file),
   );
+  const successfulScreenshotPaths = options.actions
+    .filter((action) => action.outcome === 'passed')
+    .map((action) => action.action.match(/^screenshot\s+(.+)$/)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map((value) => path.basename(value));
+  const reusedScreenshotPaths =
+    successfulScreenshotPaths.length - new Set(successfulScreenshotPaths).size;
   for (const action of options.actions) {
     const match = action.action.match(/^screenshot\s+(.+)$/);
     if (match && !screenshotFiles.has(path.basename(match[1]))) {
@@ -443,7 +553,11 @@ function buildVerdict(
     }
   }
   for (const screenshot of evidence.screenshots) {
-    if (!screenshot.validPng || screenshot.size === 0) {
+    if (
+      !screenshot.validPng ||
+      screenshot.visuallyBlank ||
+      screenshot.size === 0
+    ) {
       missingArtifacts.push(screenshot.file);
     }
   }
@@ -465,6 +579,9 @@ function buildVerdict(
         action.expectedSelector && action.outcome === 'failed',
     )
     .map((action) => action.expectedSelector!);
+  const pendingExpectedSelectors = options.actions.filter(
+    (action) => action.expectedSelector && action.outcome === undefined,
+  );
   const fatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === 'fatal',
   ).length;
@@ -492,14 +609,22 @@ function buildVerdict(
     ...(evidence.sources.some((source) => source.truncationCount > 0)
       ? ['One or more evidence sources were truncated.']
       : []),
+    ...(pendingExpectedSelectors.length > 0
+      ? [
+          `${pendingExpectedSelectors.length} expected selector assertion(s) had no recorded outcome.`,
+        ]
+      : []),
+    ...(reusedScreenshotPaths > 0
+      ? ['One or more screenshot paths were reused by multiple actions.']
+      : []),
   ];
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : failureReasons.length > 0
-        ? 'FAIL'
-        : incompleteReasons.length > 0
-          ? 'INCOMPLETE'
+      : incompleteReasons.length > 0
+        ? 'INCOMPLETE'
+        : failureReasons.length > 0
+          ? 'FAIL'
           : 'PASS';
   return {
     version: 1,

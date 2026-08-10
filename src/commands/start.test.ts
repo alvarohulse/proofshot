@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   ensureDevServer: vi.fn(),
   openBrowser: vi.fn(),
+  getPageUrl: vi.fn(),
   closeBrowser: vi.fn(),
   startRecording: vi.fn(),
   ensureOutputDir: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('../server/start.js', () => ({
 }));
 
 vi.mock('../browser/session.js', () => ({
+  getPageUrl: mocks.getPageUrl,
   openBrowser: mocks.openBrowser,
   closeBrowser: mocks.closeBrowser,
 }));
@@ -117,6 +119,7 @@ describe('startCommand', () => {
     mocks.generateAgentBrowserSessionName.mockReturnValue('ps-2026-04-deadbeef1234');
     mocks.prepareAgentBrowserSocketDir.mockReturnValue('/run/user/1000/proofshot');
     mocks.discoverBrowserExecutable.mockReturnValue('/usr/bin/chromium');
+    mocks.getPageUrl.mockReturnValue('');
     mocks.captureAgentBrowserProcessIdentity.mockReturnValue({
       pid: 4001,
       processGroupId: 4001,

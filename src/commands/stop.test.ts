@@ -300,7 +300,7 @@ describe('stopCommand retryability', () => {
 
     expect(session).toMatchObject({
       lifecycleStatus: 'recovery',
-      cleanupError: 'environment identity mismatch',
+      cleanupError: 'Cleanup failed: environment identity mismatch',
     });
     expect(mocks.clearSession).not.toHaveBeenCalled();
     expect(mocks.unregisterSession).not.toHaveBeenCalled();

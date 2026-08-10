@@ -137,7 +137,11 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
       const output = execFileSync(
         'ps',
         ['-o', 'pgid=', '-o', sessionField, '-o', 'lstart=', '-p', String(pid)],
-        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+        {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: { ...process.env, TZ: 'UTC' },
+        },
       );
       const identity = parseUnixProcessIdentity(pid, output);
       if (!identity) return null;

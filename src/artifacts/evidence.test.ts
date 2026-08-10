@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PNG } from 'pngjs';
 import type { EnvironmentState, EvidenceEvent } from '../environment/types.js';
 
 vi.mock('child_process', async () => {
@@ -17,10 +18,9 @@ vi.mock('child_process', async () => {
 import { writeCanonicalEvidence } from './evidence.js';
 
 const temporaryDirectories: string[] = [];
-const VALID_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-  'base64',
-);
+const TEST_IMAGE = new PNG({ width: 2, height: 1 });
+TEST_IMAGE.data.set([0, 0, 0, 255, 255, 255, 255, 255]);
+const VALID_PNG = PNG.sync.write(TEST_IMAGE);
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -39,6 +39,7 @@ describe('canonical evidence and verdicts', () => {
       environmentEvent('Error: Vite stack exploded', 10),
       environmentEvent('GET /health', 11),
       environmentEvent('Error: Vite stack exploded', 12),
+      environmentEvent('[process stopped by ProofShot]', 13),
     ];
     fs.writeFileSync(
       evidencePath,
@@ -81,6 +82,18 @@ describe('canonical evidence and verdicts', () => {
         },
         {
           action: 'screenshot first.png',
+          relativeTimeSec: 100,
+          timestamp: '2026-08-09T00:01:40.000Z',
+          outcome: 'passed',
+        },
+        {
+          action: 'screenshot second.png',
+          relativeTimeSec: 200,
+          timestamp: '2026-08-09T00:03:20.000Z',
+          outcome: 'passed',
+        },
+        {
+          action: 'is visible #ready',
           relativeTimeSec: 598.5,
           timestamp: '2026-08-09T00:09:58.500Z',
           outcome: 'failed',
@@ -121,7 +134,7 @@ describe('canonical evidence and verdicts', () => {
         group: 'browser',
       }),
     );
-    expect(verdict.status).toBe('FAIL');
+    expect(verdict.status).toBe('INCOMPLETE');
     expect(verdict.duplicateScreenshotHashes).toEqual([
       ['first.png', 'second.png'],
     ]);
@@ -183,6 +196,40 @@ describe('canonical evidence and verdicts', () => {
       7,
     ]);
     expect(verdict.status).toBe('PASS');
+  });
+
+  it('marks decoded blank screenshots as incomplete evidence', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-blank-screenshot-'),
+    );
+    temporaryDirectories.push(sessionDir);
+    const blank = new PNG({ width: 2, height: 2 });
+    fs.writeFileSync(path.join(sessionDir, 'blank.png'), PNG.sync.write(blank));
+
+    const { evidence, verdict } = writeCanonicalEvidence({
+      sessionId: 'blank-screenshot',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'screenshot blank.png',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(evidence.screenshots[0]).toMatchObject({
+      validPng: true,
+      visuallyBlank: true,
+    });
+    expect(verdict.status).toBe('INCOMPLETE');
   });
 });
 

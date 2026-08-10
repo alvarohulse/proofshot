@@ -24,12 +24,46 @@ export function loadEvidenceEvents(filePath: string): EvidenceEvent[] {
     .readFileSync(filePath, 'utf-8')
     .split('\n')
     .filter(Boolean)
-    .map((line) => {
+    .map((line, index) => {
       try {
-        return JSON.parse(line) as EvidenceEvent;
+        const parsed: unknown = JSON.parse(line);
+        return isEvidenceEvent(parsed)
+          ? parsed
+          : malformedEvidenceEvent(index + 1);
       } catch {
-        return null;
+        return malformedEvidenceEvent(index + 1);
       }
-    })
-    .filter((event): event is EvidenceEvent => event !== null);
+    });
+}
+
+function isEvidenceEvent(value: unknown): value is EvidenceEvent {
+  if (typeof value !== 'object' || value === null) return false;
+  const event = value as Partial<EvidenceEvent>;
+  return (
+    event.version === 1 &&
+    (event.origin === 'environment' || event.origin === 'browser') &&
+    typeof event.group === 'string' &&
+    typeof event.sourceId === 'string' &&
+    typeof event.sourceTitle === 'string' &&
+    typeof event.text === 'string' &&
+    (event.relativeTimeSec === null ||
+      (typeof event.relativeTimeSec === 'number' &&
+        Number.isFinite(event.relativeTimeSec)))
+  );
+}
+
+function malformedEvidenceEvent(line: number): EvidenceEvent {
+  return {
+    version: 1,
+    origin: 'environment',
+    group: 'environment',
+    sourceId: 'capture-health',
+    sourceTitle: 'Capture health',
+    stream: 'stderr',
+    segment: 'live',
+    timestamp: null,
+    relativeTimeSec: null,
+    text: `[malformed canonical evidence row at line ${line}]`,
+    captureGap: true,
+  };
 }

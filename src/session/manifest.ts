@@ -51,6 +51,7 @@ export type ArtifactManifest = {
 
 export function captureGitProvenance(
   cwd: string = process.cwd(),
+  excludedPaths: string[] = [],
 ): GitProvenance {
   const git = (args: string[]): string =>
     execFileSync('git', args, {
@@ -63,8 +64,22 @@ export function captureGitProvenance(
     const branch = git(['branch', '--show-current']);
     const commitSha = git(['rev-parse', 'HEAD']);
     const treeHash = git(['rev-parse', 'HEAD^{tree}']);
+    const exclusions = excludedPaths
+      .map((excludedPath) => path.relative(cwd, path.resolve(excludedPath)))
+      .filter((relativePath) => relativePath && !relativePath.startsWith('..'))
+      .map(
+        (relativePath) =>
+          `:(exclude)${relativePath.split(path.sep).join(path.posix.sep)}`,
+      );
     const sourceDirty =
-      git(['status', '--porcelain', '--untracked-files=all']) !== '';
+      git([
+        'status',
+        '--porcelain',
+        '--untracked-files=all',
+        '--',
+        '.',
+        ...exclusions,
+      ]) !== '';
     return { repository, branch, commitSha, treeHash, sourceDirty };
   } catch {
     return {
@@ -78,13 +93,23 @@ export function captureGitProvenance(
 }
 
 export function normalizeRepository(remote: string): string {
-  return remote
-    .trim()
-    .replace(/^git@([^:]+):/, '$1/')
-    .replace(/^ssh:\/\/git@/, '')
-    .replace(/^https?:\/\//, '')
+  const trimmed = remote.trim();
+  const scpStyle = trimmed.match(/^(?:[^@]+@)?([^:]+):(.+)$/);
+  if (scpStyle && !trimmed.includes('://')) {
+    return `${scpStyle[1]}/${scpStyle[2]}`
+      .replace(/\.git$/, '')
+      .replace(/\/$/, '');
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.hostname}${parsed.pathname}`
+      .replace(/\.git$/, '')
+      .replace(/\/$/, '');
+  } catch {
+    return trimmed
     .replace(/\.git$/, '')
     .replace(/\/$/, '');
+  }
 }
 
 export function writeArtifactManifest(options: {
@@ -97,7 +122,9 @@ export function writeArtifactManifest(options: {
 }): ArtifactManifest {
   const finalized =
     options.finalizedProvenance ||
-    captureGitProvenance(options.metadata.repositoryRoot);
+    captureGitProvenance(options.metadata.repositoryRoot, [
+      path.dirname(options.sessionDir),
+    ]);
   const sourceDrift =
     (options.metadata.repository || '') !== finalized.repository ||
     options.metadata.branch !== finalized.branch ||
@@ -142,17 +169,8 @@ export function loadArtifactManifest(
     ) {
       return null;
     }
-    const parsed = JSON.parse(
-      fs.readFileSync(manifestPath, 'utf-8'),
-    ) as ArtifactManifest;
-    if (
-      parsed.version !== 1 ||
-      parsed.completion !== 'complete' ||
-      !Array.isArray(parsed.artifacts)
-    ) {
-      return null;
-    }
-    return parsed;
+    const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    return isArtifactManifest(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -164,11 +182,14 @@ export function validateManifestArtifacts(
 ): void {
   const root = fs.realpathSync(sessionDir);
   const ids = new Set<string>();
-  for (const artifact of manifest.artifacts) {
+  for (const [index, artifact] of manifest.artifacts.entries()) {
     if (ids.has(artifact.id)) {
       throw new Error(`Duplicate artifact ID: ${artifact.id}`);
     }
     ids.add(artifact.id);
+    if (artifact.order !== index) {
+      throw new Error(`Artifact order is invalid for ${artifact.id}.`);
+    }
     if (
       !artifact.path ||
       path.isAbsolute(artifact.path) ||
@@ -177,6 +198,13 @@ export function validateManifestArtifacts(
       throw new Error(`Unsafe artifact path: ${artifact.path}`);
     }
     const artifactPath = path.resolve(sessionDir, artifact.path);
+    let componentPath = sessionDir;
+    for (const component of artifact.path.split(/[\\/]/)) {
+      componentPath = path.join(componentPath, component);
+      if (fs.lstatSync(componentPath).isSymbolicLink()) {
+        throw new Error(`Artifact path contains a symlink: ${artifact.path}`);
+      }
+    }
     const stat = fs.lstatSync(artifactPath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
       throw new Error(`Artifact is not a regular file: ${artifact.path}`);
@@ -193,6 +221,49 @@ export function validateManifestArtifacts(
   }
 }
 
+function isArtifactManifest(value: unknown): value is ArtifactManifest {
+  if (typeof value !== 'object' || value === null) return false;
+  const manifest = value as Partial<ArtifactManifest>;
+  return (
+    manifest.version === 1 &&
+    typeof manifest.sessionId === 'string' &&
+    typeof manifest.repository === 'string' &&
+    typeof manifest.branch === 'string' &&
+    typeof manifest.commitSha === 'string' &&
+    typeof manifest.treeHash === 'string' &&
+    typeof manifest.sourceDirty === 'boolean' &&
+    typeof manifest.sourceDrift === 'boolean' &&
+    typeof manifest.startedAt === 'string' &&
+    typeof manifest.finalizedAt === 'string' &&
+    manifest.completion === 'complete' &&
+    (manifest.verdict === 'PASS' ||
+      manifest.verdict === 'FAIL' ||
+      manifest.verdict === 'INCOMPLETE' ||
+      manifest.verdict === 'BLOCKED') &&
+    Array.isArray(manifest.artifacts) &&
+    manifest.artifacts.every(
+      (artifact, index) =>
+        typeof artifact === 'object' &&
+        artifact !== null &&
+        typeof artifact.id === 'string' &&
+        typeof artifact.path === 'string' &&
+        typeof artifact.sha256 === 'string' &&
+        typeof artifact.size === 'number' &&
+        artifact.size >= 0 &&
+        artifact.order === index &&
+        [
+          'screenshot',
+          'video',
+          'viewer',
+          'summary',
+          'evidence',
+          'verdict',
+          'log',
+        ].includes(artifact.kind),
+    )
+  );
+}
+
 function collectManifestArtifacts(
   sessionDir: string,
   evidence: CanonicalEvidence,
@@ -203,8 +274,24 @@ function collectManifestArtifacts(
       .filter((value): value is string => Boolean(value))
       .map((value, index) => [path.basename(value), index]),
   );
+  const verifiedScreenshots = new Set(
+    evidence.screenshots
+      .filter(
+        (screenshot) =>
+          screenshot.validPng &&
+          !screenshot.visuallyBlank &&
+          screenshot.sha256 !== null,
+      )
+      .map((screenshot) => screenshot.file),
+  );
   const candidates = listArtifactFiles(sessionDir)
-    .filter((file) => classifyArtifact(file) !== null)
+    .filter((file) => {
+      const kind = classifyArtifact(file);
+      return (
+        kind !== null &&
+        (kind !== 'screenshot' || verifiedScreenshots.has(path.basename(file)))
+      );
+    })
     .sort((left, right) => {
       const leftOrder = screenshotOrder.get(path.basename(left));
       const rightOrder = screenshotOrder.get(path.basename(right));

@@ -246,8 +246,11 @@ function escapeHtml(str: string): string {
 /**
  * Serialize session log entries to a JSON string safe for embedding in HTML <script>.
  */
-function serializeEntries(entries: SessionLogEntry[]): string {
-  return JSON.stringify(entries).replace(/<\//g, '<\\/');
+function serializeInlineJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 /**
@@ -316,7 +319,7 @@ export function generateViewer(data: ViewerData): string {
   const hasVideo = !!data.videoFilename;
 
   // Build marker data for the scrub bar
-  const markersJson = JSON.stringify(
+  const markersJson = serializeInlineJson(
     data.entries
       .map((entry, i) => ({
         time: entry.relativeTimeSec,
@@ -358,7 +361,7 @@ export function generateViewer(data: ViewerData): string {
       </div>`
     : `<div class="no-video"><p>No video recorded</p><p class="no-video-hint">Screenshots are available in the timeline</p></div>`;
 
-  const entriesJson = serializeEntries(data.entries);
+  const entriesJson = serializeInlineJson(data.entries);
 
   // Prepare log content for embedding — prefer timestamped entries for video sync
   let consoleLogBodyHtml: string;
@@ -1558,7 +1561,16 @@ ${stepsHtml}
         const m = markers[idx];
         if (!m || !scrubTooltip) return;
         const action = m.action.length > 40 ? m.action.slice(0, 40) + '\\u2026' : m.action;
-        scrubTooltip.innerHTML = '<span class="tooltip-icon">' + m.icon + '</span>' + action + '<span class="tooltip-time">' + formatTimeFn(m.time) + '</span>';
+        scrubTooltip.textContent = '';
+        const iconElement = document.createElement('span');
+        iconElement.className = 'tooltip-icon';
+        iconElement.textContent = m.icon;
+        scrubTooltip.appendChild(iconElement);
+        scrubTooltip.appendChild(document.createTextNode(action));
+        const timeElement = document.createElement('span');
+        timeElement.className = 'tooltip-time';
+        timeElement.textContent = formatTimeFn(m.time);
+        scrubTooltip.appendChild(timeElement);
         scrubTooltip.style.display = 'block';
 
         const trackRect = scrubTrack.getBoundingClientRect();
@@ -1704,17 +1716,18 @@ export function writeViewer(
   let entries = data.entries;
   if (!entries) {
     const logPath = path.join(outputDir, 'session-log.json');
-    if (!fs.existsSync(logPath)) return null;
-    try {
-      entries = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-    } catch {
-      return null;
+    if (fs.existsSync(logPath)) {
+      try {
+        entries = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+      } catch {
+        entries = [];
+      }
+    } else {
+      entries = [];
     }
   }
 
-  if (!entries || entries.length === 0) return null;
-
-  const html = generateViewer({ ...data, entries });
+  const html = generateViewer({ ...data, entries: entries || [] });
   const viewerPath = path.join(outputDir, 'viewer.html');
   fs.writeFileSync(viewerPath, html);
   return viewerPath;

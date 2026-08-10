@@ -94,4 +94,28 @@ describe('loadConfig', () => {
       path: path.join(tempDir, 'logs', 'worker.jsonl'),
     });
   });
+
+  it('fails closed for malformed or unsafe capture configuration', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-invalid-config-'));
+    const configPath = path.join(tempDir, 'proofshot.config.json');
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ environment: { kind: 'tmuxx' } }),
+    );
+    expect(() => loadConfig(tempDir)).toThrow(/environment\.kind/);
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        logs: {
+          sources: [{ id: '../escape', kind: 'file', path: './server.log' }],
+        },
+      }),
+    );
+    expect(() => loadConfig(tempDir)).toThrow(/logs\.sources\[0\]\.id/);
+
+    fs.writeFileSync(configPath, '{not-json');
+    expect(() => loadConfig(tempDir)).toThrow(/Invalid ProofShot config/);
+  });
 });

@@ -65,11 +65,13 @@ type TmuxLaunchConfig = {
     kind: 'external-command';
     command: string;
     stopCommand?: string;
+    timeoutMs?: number;
 };
 type TmuxConnectionConfig = {
     source?: 'stdout';
     format: 'json' | 'tmux-attach-command';
     socket?: string;
+    ownership?: 'attach' | 'create';
 };
 type TmuxEnvironmentConfig = {
     kind: 'tmux';
@@ -160,6 +162,7 @@ type TmuxEnvironmentState = {
     ownsSession: boolean;
     panes: TmuxPaneState[];
     captures: CaptureProcessState[];
+    healthFailures?: string[];
     stopCommand?: string;
     stopCwd?: string;
 };
@@ -168,8 +171,15 @@ type ProcessEnvironmentState = {
     evidencePath: string;
     sources: ResolvedLogSourceState[];
     processes: CaptureProcessState[];
+    healthFailures?: string[];
 };
-type EnvironmentState = TmuxEnvironmentState | ProcessEnvironmentState;
+type LauncherEnvironmentState = {
+    kind: 'launcher';
+    evidencePath: string;
+    sources: [];
+    launcher: CaptureProcessState;
+};
+type EnvironmentState = TmuxEnvironmentState | ProcessEnvironmentState | LauncherEnvironmentState;
 type ResolvedLogSourceState = {
     id: string;
     title: string;
@@ -260,6 +270,7 @@ declare function waitForPort(port: number, timeoutMs?: number, intervalMs?: numb
 interface SessionState {
     startedAt: string;
     recordingStartedAt?: string;
+    stoppedAt?: string;
     startDirectory?: string;
     controlDir?: string;
     lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
@@ -289,6 +300,7 @@ interface SessionState {
     serverProcess?: ProcessIdentity | null;
     browserProcess?: ProcessIdentity | null;
     environment?: EnvironmentState | null;
+    environmentStopped?: boolean;
     viewport?: {
         width: number;
         height: number;
@@ -311,6 +323,7 @@ interface SessionLogEntry {
     outcome?: 'passed' | 'failed';
     expectedSelector?: string;
     error?: string;
+    pageUrl?: string;
     element?: {
         label: string;
         bbox: {
@@ -341,6 +354,7 @@ type EvidenceSourceSummary = {
 type EvidenceIncident = {
     id: string;
     severity: 'fatal' | 'error';
+    origin: EvidenceEvent['origin'];
     group: string;
     message: string;
     count: number;
@@ -352,6 +366,7 @@ type ScreenshotIntegrity = {
     file: string;
     sha256: string | null;
     validPng: boolean;
+    visuallyBlank: boolean;
     size: number;
 };
 type CanonicalEvidence = {
@@ -381,6 +396,7 @@ type Verdict = {
 type EvidenceBuildOptions = {
     sessionId: string;
     sessionDir: string;
+    initialPageUrl?: string;
     durationSec: number;
     timelineOffsetSec?: number;
     videoPath: string;
@@ -493,7 +509,7 @@ type ArtifactManifest = {
     verdict: Verdict['status'];
     artifacts: ManifestArtifact[];
 };
-declare function captureGitProvenance(cwd?: string): GitProvenance;
+declare function captureGitProvenance(cwd?: string, excludedPaths?: string[]): GitProvenance;
 declare function writeArtifactManifest(options: {
     sessionId: string;
     sessionDir: string;
@@ -514,6 +530,8 @@ interface PRCommentData {
         renderMode: 'embed' | 'link';
     } | null;
     errorCount: number;
+    verdict: 'PASS' | 'FAIL' | 'INCOMPLETE' | 'BLOCKED';
+    verdictReasons: string[];
     branch: string;
     commitSha: string;
 }

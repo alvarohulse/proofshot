@@ -9,6 +9,7 @@ const SESSION_FILENAME = '.session.json';
 export interface SessionState {
   startedAt: string;
   recordingStartedAt?: string;
+  stoppedAt?: string;
   startDirectory?: string;
   controlDir?: string;
   lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
@@ -38,6 +39,7 @@ export interface SessionState {
   serverProcess?: ProcessIdentity | null;
   browserProcess?: ProcessIdentity | null;
   environment?: EnvironmentState | null;
+  environmentStopped?: boolean;
   viewport?: { width: number; height: number };
 }
 

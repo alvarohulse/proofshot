@@ -100,7 +100,7 @@ describe('owned environment capture', () => {
         expect.objectContaining({
           sourceId: 'frontend-vite',
           segment: 'history',
-          captureGap: true,
+          text: '[tmux history/live capture boundary]',
         }),
         expect.objectContaining({
           sourceId: 'frontend-vite',
@@ -158,6 +158,7 @@ describe('owned environment capture', () => {
         connection: {
           source: 'stdout',
           format: 'tmux-attach-command',
+          ownership: 'attach',
         },
       },
       {
@@ -187,6 +188,42 @@ describe('owned environment capture', () => {
       execFileSync('tmux', ['-S', socket, 'has-session', '-t', 'shared']),
     ).not.toThrow();
     states.pop();
+  }, 15000);
+
+  it('persists and cleans a timed-out external launcher identity', async () => {
+    const sessionDir = path.join(root, 'timed-out-launcher');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    let pendingState: EnvironmentState | null = null;
+
+    await expect(
+      startOwnedEnvironment(
+        {
+          kind: 'tmux',
+          launch: {
+            kind: 'external-command',
+            command: 'sleep 30',
+            timeoutMs: 100,
+          },
+          connection: {
+            format: 'json',
+            ownership: 'attach',
+          },
+        },
+        { sources: [] },
+        sessionDir,
+        'ps-timed-out-launcher',
+        Date.now(),
+        (state) => {
+          pendingState = state;
+        },
+      ),
+    ).rejects.toThrow(/timed out/);
+
+    expect(pendingState).toMatchObject({ kind: 'launcher' });
+    if (!pendingState || pendingState.kind !== 'launcher') {
+      throw new Error('expected persisted launcher state');
+    }
+    expect(processIdentityMatches(pendingState.launcher.process)).toBe(false);
   }, 15000);
 
   it('preserves direct stdout/stderr and file history/live evidence', async () => {
@@ -268,6 +305,44 @@ describe('owned environment capture', () => {
     states.pop();
   }, 15000);
 
+  it('launches every process definition when only some sources are customized', async () => {
+    const sessionDir = path.join(root, 'all-processes-session');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const state = await startOwnedEnvironment(
+      {
+        kind: 'processes',
+        commands: [
+          { id: 'api', command: "printf 'api-ready\\n'; sleep 30" },
+          { id: 'worker', command: "printf 'worker-ready\\n'; sleep 30" },
+        ],
+      },
+      {
+        sources: [
+          {
+            id: 'custom-api',
+            kind: 'process',
+            processId: 'api',
+          },
+        ],
+      },
+      sessionDir,
+      'ps-all-processes',
+      Date.now(),
+      () => {},
+    );
+    states.push(state);
+    if (state.kind !== 'processes') throw new Error('expected process state');
+
+    expect(state.processes.map((capture) => capture.sourceId).sort()).toEqual([
+      'custom-api',
+      'worker',
+    ]);
+    await waitForEvidence(state.evidencePath, ['api-ready', 'worker-ready']);
+
+    await stopOwnedEnvironment(state);
+    states.pop();
+  }, 15000);
+
   it('refuses to replace a pre-existing pipe-pane consumer', async () => {
     const socket = path.join(root, 'p.sock');
     extraTmuxSockets.push(socket);
@@ -302,6 +377,7 @@ describe('owned environment capture', () => {
           connection: {
             source: 'stdout',
             format: 'tmux-attach-command',
+            ownership: 'attach',
           },
         },
         {
@@ -384,7 +460,7 @@ describe('owned environment capture', () => {
         ],
       },
       {
-        maxBytesPerSource: 64,
+        maxBytesPerSource: 512,
       },
       sessionDir,
       'ps-truncation',
@@ -396,6 +472,10 @@ describe('owned environment capture', () => {
     expect(
       loadEvidenceEvents(state.evidencePath).some((event) => event.truncated),
     ).toBe(true);
+    expect(
+      fs.statSync(state.evidencePath).size +
+        fs.statSync(path.join(sessionDir, 'logs', 'noisy.log')).size,
+    ).toBeLessThanOrEqual(512);
     if (state.kind !== 'processes') {
       throw new Error('expected process state');
     }

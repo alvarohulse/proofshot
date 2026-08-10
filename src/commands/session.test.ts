@@ -107,7 +107,9 @@ describe('session commands', () => {
 
     expect(mocks.clearSession).not.toHaveBeenCalled();
     expect(mocks.saveSession).not.toHaveBeenCalled();
-    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenCalledWith(session);
+    expect(session.cleanupError).toMatch(/belongs to another session/);
   });
 });
 

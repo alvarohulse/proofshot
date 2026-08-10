@@ -82,6 +82,7 @@ describe('canonical evidence viewer', () => {
         {
           id: 'incident-1',
           severity: 'error',
+          origin: 'environment',
           group: 'frontend',
           message: 'Error: Vite stack exploded',
           count: 3,
@@ -136,5 +137,32 @@ describe('canonical evidence viewer', () => {
     expect(html).toContain('let duration = 598.5');
     expect(html).toContain('duration = Math.max(duration, video.duration)');
     expect(html).not.toContain('seekTo(NaN)');
+  });
+
+  it('embeds untrusted actions without executable HTML or script terminators', () => {
+    const action = `click </script><img src=x onerror=alert('proofshot')>\u2028next`;
+    const html = generateViewer({
+      description: 'injection fixture',
+      serverCommand: null,
+      durationSec: 1,
+      videoFilename: 'recording.webm',
+      entries: [
+        {
+          action,
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+        },
+      ],
+      consoleErrorCount: 0,
+      serverErrorCount: 0,
+    });
+
+    expect(html).not.toContain('</script><img');
+    expect(html).not.toContain('scrubTooltip.innerHTML');
+    expect(html).toContain('scrubTooltip.textContent');
+    expect(html).toContain('\\u003c/script>');
+    expect(html).toContain('\\u2028');
+    const inlineScript = html.match(/<script>([\s\S]*)<\/script>/)?.[1] || '';
+    expect(inlineScript).not.toContain('\u2028');
   });
 });

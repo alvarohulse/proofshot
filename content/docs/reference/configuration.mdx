@@ -114,7 +114,7 @@ When `true`, the browser runs without a visible window. Set to `false` (or use `
 - `tmux`: ProofShot owns a dedicated tmux socket/session or connects to an external launcher on the launcher-reported socket.
 - `processes`: ProofShot starts multiple direct commands and preserves separate `stdout` and `stderr` streams.
 
-For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, env }` entries. `launch.kind: "external-command"` runs one launcher and reads either structured JSON or a `tmux -L <socket> attach -t <session>` command from stdout. Structured JSON is preferred:
+For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, env }` entries. `launch.kind: "external-command"` runs one launcher and reads either structured JSON or a `tmux -L <socket> attach -t <session>` command from stdout. Set `connection.ownership` to `attach` when the launcher only reports an existing session. Launchers that create resources must provide a stable `connection.socket` hint or `launch.stopCommand`; they also support `launch.timeoutMs`. Structured JSON is preferred:
 
 ```json
 {
@@ -128,7 +128,7 @@ For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, en
 }
 ```
 
-ProofShot snapshots the target tmux server before launch and owns only server/session identities created by that start. It never runs `tmux kill-server` against the default or an unowned socket.
+ProofShot snapshots a hinted tmux socket before launch and owns only server/session identities created by that start. Attach-only launchers are never killed. Shared launchers that create a session must provide `stopCommand`. ProofShot never runs `tmux kill-server` against the default or an unowned socket.
 
 `readiness` accepts HTTP checks (`url`) and TCP checks (`host`, `port`), each with an optional `timeoutMs`.
 

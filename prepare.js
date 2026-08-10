@@ -7,13 +7,14 @@ const packageDirectory = path.dirname(fileURLToPath(import.meta.url));
 const localTsup = path.join(
   packageDirectory,
   'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'tsup.cmd' : 'tsup',
+  'tsup',
+  'dist',
+  'cli-default.js',
 );
 const builtCli = path.join(packageDirectory, 'dist', 'bin', 'proofshot.js');
 
 if (fs.existsSync(localTsup)) {
-  execFileSync(localTsup, [], {
+  execFileSync(process.execPath, [localTsup], {
     cwd: packageDirectory,
     stdio: 'inherit',
   });

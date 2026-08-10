@@ -15,9 +15,12 @@ import {
   type SessionState,
 } from '../session/state.js';
 import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
+import { getPageUrl } from '../browser/session.js';
 import { registerSession } from '../session/registry.js';
 
 const SESSION_LOG_FILENAME = 'session-log.json';
+const SESSION_LOG_LOCK_TIMEOUT_MS = 5000;
+const SESSION_LOG_STALE_LOCK_MS = 120000;
 
 export interface SessionLogEntry {
   action: string;
@@ -26,6 +29,7 @@ export interface SessionLogEntry {
   outcome?: 'passed' | 'failed';
   expectedSelector?: string;
   error?: string;
+  pageUrl?: string;
   element?: {
     label: string;
     bbox: { x: number; y: number; width: number; height: number };
@@ -40,9 +44,14 @@ export function loadSessionLog(sessionDir: string): SessionLogEntry[] {
   const logPath = path.join(sessionDir, SESSION_LOG_FILENAME);
   if (!fs.existsSync(logPath)) return [];
   try {
-    return JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-  } catch {
-    return [];
+    const parsed: unknown = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
+    if (!Array.isArray(parsed)) {
+      throw new Error('session log root must be an array');
+    }
+    return parsed as SessionLogEntry[];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`ProofShot session action log is corrupt: ${logPath}\n${message}`);
   }
 }
 
@@ -54,11 +63,12 @@ function resolveScreenshotPath(args: string[], sessionDir: string): string[] {
   if (args[0] !== 'screenshot' || args.length < 2) return args;
 
   const screenshotPath = args[args.length - 1];
-  // If it's already absolute, leave it alone
-  if (path.isAbsolute(screenshotPath)) return args;
-
-  // Resolve relative to session dir
-  const resolved = path.join(sessionDir, screenshotPath);
+  const resolved = path.resolve(sessionDir, screenshotPath);
+  if (path.dirname(resolved) !== path.resolve(sessionDir)) {
+    throw new Error(
+      'ProofShot screenshots must use a filename directly inside the active session.',
+    );
+  }
   return [...args.slice(0, -1), resolved];
 }
 
@@ -270,9 +280,9 @@ export async function execCommand(args: string[]): Promise<void> {
     }
 
     const logPath = path.join(session.sessionDir, SESSION_LOG_FILENAME);
-    const entries = loadSessionLog(session.sessionDir);
-    entries.push(entry);
-    fs.writeFileSync(logPath, JSON.stringify(entries, null, 2) + '\n');
+    updateSessionLog(logPath, (entries) => {
+      entries.push(entry);
+    });
     loggedEntry = entry;
     sessionLogPath = logPath;
   }
@@ -305,7 +315,8 @@ export async function execCommand(args: string[]): Promise<void> {
         process.stdout.write('\n');
       }
     }
-    persistActionOutcome(loggedEntry, sessionLogPath, 'passed');
+    const pageUrl = session ? getPageUrl(session.sessionName) || undefined : undefined;
+    persistActionOutcome(loggedEntry, sessionLogPath, 'passed', undefined, pageUrl);
   } catch (error: any) {
     // Print stderr and exit with the same code
     const stderr = error?.stderr?.toString?.() || '';
@@ -345,6 +356,7 @@ function persistActionOutcome(
   logPath: string | null,
   outcome: 'passed' | 'failed',
   error?: string,
+  pageUrl?: string,
 ): void {
   if (!entry || !logPath) {
     return;
@@ -353,19 +365,71 @@ function persistActionOutcome(
   if (error) {
     entry.error = error;
   }
-  const entries = loadSessionLog(path.dirname(logPath));
-  const matchingEntry = [...entries]
-    .reverse()
-    .find(
-      (candidate) =>
-        candidate.timestamp === entry.timestamp &&
-        candidate.action === entry.action,
-    );
-  if (matchingEntry) {
-    matchingEntry.outcome = outcome;
-    if (error) {
-      matchingEntry.error = error;
+  if (pageUrl) {
+    entry.pageUrl = pageUrl;
+  }
+  updateSessionLog(logPath, (entries) => {
+    const matchingEntry = [...entries]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.timestamp === entry.timestamp &&
+          candidate.action === entry.action,
+      );
+    if (matchingEntry) {
+      matchingEntry.outcome = outcome;
+      if (error) {
+        matchingEntry.error = error;
+      }
+      if (pageUrl) {
+        matchingEntry.pageUrl = pageUrl;
+      }
     }
-    fs.writeFileSync(logPath, JSON.stringify(entries, null, 2) + '\n');
+  });
+}
+
+function updateSessionLog(
+  logPath: string,
+  update: (entries: SessionLogEntry[]) => void,
+): void {
+  const lockPath = `${logPath}.lock`;
+  const deadline = Date.now() + SESSION_LOG_LOCK_TIMEOUT_MS;
+  let lockFd: number | null = null;
+  while (lockFd === null) {
+    try {
+      lockFd = fs.openSync(lockPath, 'wx', 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - fs.statSync(lockPath).mtimeMs > SESSION_LOG_STALE_LOCK_MS) {
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw statError;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for session log lock: ${lockPath}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+
+  try {
+    const entries = loadSessionLog(path.dirname(logPath));
+    update(entries);
+    const temporaryPath = `${logPath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(temporaryPath, JSON.stringify(entries, null, 2) + '\n', {
+      mode: 0o600,
+    });
+    fs.renameSync(temporaryPath, logPath);
+  } finally {
+    fs.closeSync(lockFd);
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 }

@@ -116,6 +116,21 @@ describe('owned browser lifecycle', () => {
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(persistedIdentity);
   });
 
+  it('falls back to exact termination when graceful browser close fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mocks.closeBrowser.mockImplementationOnce(() => {
+      throw new Error('daemon close failed');
+    });
+
+    await stopOwnedBrowser(session());
+
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(persistedIdentity);
+    expect(mocks.clearAgentBrowserSessionFiles).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('exact owned-process cleanup succeeded'),
+    );
+  });
+
   it('retains a cleanup error when exact browser identity cannot be recovered', async () => {
     const state = {
       ...session(null),

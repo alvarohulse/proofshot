@@ -9,7 +9,7 @@ const SESSION_REGISTRY_DIRECTORY = 'sessions';
 
 export function getSessionRegistryDir(
   env: NodeJS.ProcessEnv = process.env,
-  homeDir = os.homedir(),
+  homeDir = os.userInfo().homedir,
 ): string {
   const stateHome = env.XDG_STATE_HOME || path.join(homeDir, '.local', 'state');
   return path.join(stateHome, 'proofshot', SESSION_REGISTRY_DIRECTORY);

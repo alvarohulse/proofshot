@@ -67,6 +67,8 @@ export interface PRCommentData {
   screenshots: Map<string, string>; // filename → GitHub asset URL
   video: { url: string; renderMode: 'embed' | 'link' } | null;
   errorCount: number;
+  verdict: 'PASS' | 'FAIL' | 'INCOMPLETE' | 'BLOCKED';
+  verdictReasons: string[];
   branch: string;
   commitSha: string;
 }
@@ -83,11 +85,31 @@ export function formatPRComment(data: PRCommentData): string {
   }
 
   // Status
-  const status =
-    data.errorCount === 0
-      ? '✅ No errors detected'
-      : `⚠️ ${data.errorCount} error(s) detected`;
-  md += `${status}\n\n`;
+  const status = (() => {
+    switch (data.verdict) {
+      case 'PASS':
+        return '✅ Verification passed';
+      case 'FAIL':
+        return '❌ Verification failed';
+      case 'INCOMPLETE':
+        return '⚠️ Verification incomplete';
+      case 'BLOCKED':
+        return '⛔ Verification blocked';
+      default: {
+        const exhaustiveVerdict: never = data.verdict;
+        return exhaustiveVerdict;
+      }
+    }
+  })();
+  md += `${status}`;
+  if (data.errorCount > 0) {
+    md += ` · ${data.errorCount} incident(s)`;
+  }
+  md += '\n\n';
+  if (data.verdictReasons.length > 0) {
+    md += data.verdictReasons.map((reason) => `- ${reason}`).join('\n');
+    md += '\n\n';
+  }
 
   // Video (GitHub renders video URLs as playable embeds)
   if (data.video) {

@@ -30,9 +30,12 @@ export function getAgentBrowserEnvironment(
   options: Pick<AgentBrowserCommandOptions, 'socketDir'> = {},
 ): NodeJS.ProcessEnv {
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
-  return socketDir
-    ? { ...process.env, AGENT_BROWSER_SOCKET_DIR: socketDir }
-    : { ...process.env };
+  return {
+    ...process.env,
+    AGENT_BROWSER_IDLE_TIMEOUT_MS:
+      process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || '1800000',
+    ...(socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}),
+  };
 }
 
 export function quoteShellArgument(value: string): string {

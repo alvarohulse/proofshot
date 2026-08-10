@@ -67,11 +67,7 @@ function urlsMatch(actual: string, expected: string): boolean {
  * Close the browser session.
  */
 export function closeBrowser(sessionName?: string): void {
-  try {
-    ab('close', { session: sessionName });
-  } catch {
-    // Browser may already be closed — that's fine
-  }
+  ab('close', { session: sessionName });
 }
 
 /**
@@ -90,22 +86,14 @@ export function checkAgentBrowser(): boolean {
  * Get any console errors from the current page.
  */
 export function getConsoleErrors(sessionName?: string): string {
-  try {
-    return ab('errors', { session: sessionName });
-  } catch {
-    return '';
-  }
+  return ab('errors', { session: sessionName });
 }
 
 /**
  * Get console output from the current page.
  */
 export function getConsoleOutput(sessionName?: string): string {
-  try {
-    return ab('console', { session: sessionName });
-  } catch {
-    return '';
-  }
+  return ab('console', { session: sessionName });
 }
 
 export interface ConsoleMessage {
@@ -118,15 +106,14 @@ export interface ConsoleMessage {
  * Get console output as structured JSON with per-message timestamps.
  */
 export function getConsoleOutputJson(sessionName?: string): ConsoleMessage[] {
-  try {
-    const raw = ab('console --json', { session: sessionName });
-    const parsed = JSON.parse(raw);
-    // agent-browser wraps JSON output: {success, data: {messages: [...]}, error}
-    const messages = parsed?.data?.messages ?? parsed;
-    return Array.isArray(messages) ? messages : [];
-  } catch {
-    return [];
+  const raw = ab('console --json', { session: sessionName });
+  const parsed = JSON.parse(raw);
+  // agent-browser wraps JSON output: {success, data: {messages: [...]}, error}
+  const messages = parsed?.data?.messages ?? parsed;
+  if (!Array.isArray(messages)) {
+    throw new Error('agent-browser returned malformed console JSON.');
   }
+  return messages;
 }
 
 /**

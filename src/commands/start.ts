@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { ensureDevServer } from '../server/start.js';
-import { openBrowser } from '../browser/session.js';
+import { getPageUrl, openBrowser } from '../browser/session.js';
 import { startRecording } from '../browser/capture.js';
 import { discoverBrowserExecutable, browserSetupError } from '../browser/discovery.js';
 import {
@@ -102,7 +102,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const videoPath = path.join(sessionDir, 'session.webm');
   const serverErrorLog = path.join(sessionDir, 'server.log');
 
-  const provenance = captureGitProvenance();
+  const provenance = captureGitProvenance(process.cwd(), [outputDir]);
 
   writeMetadata(sessionDir, {
     ...provenance,
@@ -203,6 +203,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         `Could not record the exact agent-browser daemon identity for session ${sessionName}.`,
       );
     }
+    session.targetUrl = getPageUrl(sessionName) || openUrl;
     persistOwnedSession(session, controlDir);
     console.log(chalk.green('✓') + ' Browser ready');
 

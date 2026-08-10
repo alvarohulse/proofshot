@@ -118,14 +118,32 @@ export async function stopOwnedEnvironment(
     case 'tmux':
       await stopTmuxEnvironment(state);
       return;
-    case 'processes':
-      for (const capture of state.processes) {
-        await terminateOwnedProcessTree(capture.process, { graceMs: 1000 });
-        if (ownedProcessTreeIsAlive(capture.process)) {
-          throw new Error(`Environment process ${capture.sourceId} did not stop.`);
-        }
+    case 'launcher':
+      await terminateOwnedProcessTree(state.launcher.process, { graceMs: 1000 });
+      if (ownedProcessTreeIsAlive(state.launcher.process)) {
+        throw new Error('External environment launcher did not stop.');
       }
       return;
+    case 'processes': {
+      const errors: Error[] = [];
+      for (const capture of state.processes) {
+        try {
+          await terminateOwnedProcessTree(capture.process, { graceMs: 1000 });
+          if (ownedProcessTreeIsAlive(capture.process)) {
+            throw new Error(`Environment process ${capture.sourceId} did not stop.`);
+          }
+        } catch (error) {
+          errors.push(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(
+          errors,
+          'One or more environment processes did not stop.',
+        );
+      }
+      return;
+    }
     default: {
       const exhaustiveState: never = state;
       return exhaustiveState;
@@ -149,10 +167,25 @@ async function startProcessEnvironment(
     (source): source is Extract<LogSourceConfig, { kind: 'process' }> =>
       source.kind === 'process',
   );
-  const sources =
-    configuredSources.length > 0
-      ? configuredSources
-      : definitions.map((definition) => ({
+  const sourceByProcessId = new Map<string, (typeof configuredSources)[number]>();
+  for (const source of configuredSources) {
+    if (sourceByProcessId.has(source.processId)) {
+      throw new Error(
+        `Multiple log sources reference process ${source.processId}; each process can be launched only once.`,
+      );
+    }
+    sourceByProcessId.set(source.processId, source);
+  }
+  for (const source of configuredSources) {
+    if (!definitions.some((definition) => definition.id === source.processId)) {
+      throw new Error(
+        `Log source ${source.id} references unknown process ${source.processId}.`,
+      );
+    }
+  }
+  const sources = definitions.map(
+    (definition) =>
+      sourceByProcessId.get(definition.id) || {
           id: definition.id,
           title: definition.title,
           group: definition.group,
@@ -160,7 +193,8 @@ async function startProcessEnvironment(
           processId: definition.id,
           include: undefined,
           exclude: undefined,
-        }));
+        },
+  );
   validateUniqueIds(sources.map((source) => source.id));
 
   let state: ProcessEnvironmentState = {
@@ -175,11 +209,7 @@ async function startProcessEnvironment(
       const definition = definitions.find(
         (candidate) => candidate.id === sourceConfig.processId,
       );
-      if (!definition) {
-        throw new Error(
-          `Log source ${sourceConfig.id} references unknown process ${sourceConfig.processId}.`,
-        );
-      }
+      if (!definition) throw new Error(`Missing process ${sourceConfig.processId}.`);
       const source: ResolvedLogSourceState = {
         id: sourceConfig.id,
         title: sourceConfig.title || definition.title || definition.id,
@@ -222,6 +252,9 @@ async function attachFileSources(
 ): Promise<EnvironmentState> {
   if (fileSources.length === 0) {
     return state;
+  }
+  if (state.kind === 'launcher') {
+    throw new Error('Cannot attach file sources before the environment launcher exits.');
   }
   const knownIds = new Set(state.sources.map((source) => source.id));
   const logsDir = path.join(sessionDir, 'logs');

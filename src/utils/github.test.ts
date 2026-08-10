@@ -54,11 +54,15 @@ describe('formatPRComment', () => {
         renderMode: 'link',
       },
       errorCount: 0,
+      verdict: 'FAIL',
+      verdictReasons: ['Expected checkout button was missing.'],
       branch: 'feature/test',
       commitSha: 'abcdef123456',
     });
 
     expect(body).toContain('[Session recording](https://example.com/session.mp4)');
+    expect(body).toContain('❌ Verification failed');
+    expect(body).toContain('Expected checkout button was missing.');
     expect(body).not.toContain('\nhttps://example.com/session.mp4\n');
   });
 });

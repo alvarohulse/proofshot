@@ -26,6 +26,7 @@ import { writeCanonicalEvidence } from '../artifacts/evidence.js';
 import { loadMetadata } from '../session/metadata.js';
 import { writeArtifactManifest } from '../session/manifest.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
+import { processIdentityMatches } from '../utils/process.js';
 import { loadSessionLog, type SessionLogEntry } from './exec.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
 
@@ -112,12 +113,16 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     }
     return;
   }
+  const stopSignals = installStopSignalHandlers();
+  try {
 
   session.lifecycleStatus = 'stopping';
   session.cleanupError = null;
+  session.stoppedAt ||= new Date().toISOString();
   persistOwnedSession(session, controlDir);
   const retryingStoppedSession = !session.recordingActive;
-  const recordingWasActive = session.recordingActive;
+  const recordingWasActive =
+    session.recordingActive || Boolean(session.recordingStartedAt);
   const startTime = new Date(session.startedAt).getTime();
   const recordingStartTime = session.recordingStartedAt
     ? new Date(session.recordingStartedAt).getTime()
@@ -126,7 +131,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     0,
     (recordingStartTime - startTime) / 1000,
   );
-  const durationMs = Date.now() - startTime;
+  const durationMs = new Date(session.stoppedAt).getTime() - startTime;
   const durationSec = Math.round(durationMs / 1000);
   const browserSessionAvailable = canAddressOwnedBrowserSession(session);
 
@@ -151,6 +156,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const consoleErrorsPath = path.join(session.sessionDir, 'console-errors.log');
   const consoleOutputPath = path.join(session.sessionDir, 'console-output.log');
   const consoleEntriesPath = path.join(session.sessionDir, 'console-entries.json');
+  let consoleCollectionSucceeded = false;
   if (browserSessionAvailable) {
     try {
       consoleErrors = getConsoleErrors(session.sessionName);
@@ -161,9 +167,12 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         text: `[${msg.type}] ${msg.text}`,
         relativeTimeSec: Math.max(0, parseFloat(((msg.timestamp - startTime) / 1000).toFixed(1))),
       }));
+      consoleCollectionSucceeded = true;
     } catch {
-      // Browser may already be closed
+      consoleCollectionSucceeded = false;
     }
+  }
+  if (consoleCollectionSucceeded) {
     writeTextFileAtomically(consoleErrorsPath, consoleErrors);
     writeTextFileAtomically(consoleOutputPath, consoleOutput);
     writeTextFileAtomically(
@@ -196,6 +205,10 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         // Keep the persisted availability/count; only the optional timeline is absent.
       }
     }
+  } else {
+    session.consoleEvidenceAvailable = false;
+    session.consoleErrorCount = 0;
+    persistOwnedSession(session, controlDir);
   }
 
   // Step 2: Stop recording
@@ -207,25 +220,39 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   persistOwnedSession(session, controlDir);
 
   // Step 3: Close browser (unless --no-close)
-  let cleanupError: unknown;
+  const cleanupErrors: unknown[] = [];
   if (!options.noClose) {
     console.log(chalk.dim('Closing browser...'));
     try {
       await stopOwnedBrowser(session);
     } catch (error) {
-      cleanupError = error;
+      cleanupErrors.push(error);
     }
   }
 
+  if (
+    session.environment &&
+    !session.environmentStopped &&
+    session.environment.kind !== 'launcher'
+  ) {
+    const captures =
+      session.environment.kind === 'tmux'
+        ? session.environment.captures
+        : session.environment.processes;
+    session.environment.healthFailures = captures
+      .filter((capture) => !processIdentityMatches(capture.process))
+      .map((capture) => capture.sourceId);
+    persistOwnedSession(session, controlDir);
+  }
   const finalizedEnvironment = session.environment;
-  if (session.environment) {
+  if (session.environment && !session.environmentStopped) {
     console.log(chalk.dim('Stopping environment...'));
     try {
       await stopOwnedEnvironment(session.environment);
-      session.environment = null;
+      session.environmentStopped = true;
       persistOwnedSession(session, controlDir);
     } catch (error) {
-      cleanupError ||= error;
+      cleanupErrors.push(error);
     }
   }
 
@@ -235,10 +262,16 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     try {
       await stopOwnedServer(session);
     } catch (error) {
-      cleanupError ||= error;
+      cleanupErrors.push(error);
     }
   }
-  if (cleanupError) {
+  if (cleanupErrors.length > 0) {
+    const cleanupError = new AggregateError(
+      cleanupErrors,
+      `Cleanup failed: ${cleanupErrors
+        .map((error) => (error instanceof Error ? error.message : String(error)))
+        .join('; ')}`,
+    );
     session.lifecycleStatus = 'recovery';
     session.cleanupError =
       cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
@@ -373,6 +406,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const { evidence, verdict } = writeCanonicalEvidence({
     sessionId: session.sessionName,
     sessionDir,
+    initialPageUrl: session.targetUrl,
     durationSec: canonicalDurationSec,
     timelineOffsetSec: trimOffsetSec,
     videoPath: session.videoPath,
@@ -487,6 +521,61 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       console.log(chalk.dim(`  ... and ${serverErrorLines.length - 10} more (see SUMMARY.md)`));
     }
   }
+  } finally {
+    const interruptedBy = stopSignals.remove();
+    if (interruptedBy) {
+      process.exitCode = interruptedBy === 'SIGINT' ? 130 : 143;
+    }
+  }
+}
+
+function installStopSignalHandlers(): {
+  remove: () => NodeJS.Signals | null;
+} {
+  let interruptedBy: NodeJS.Signals | null = null;
+  let signalCount = 0;
+  let forcedExitTimer: NodeJS.Timeout | null = null;
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const removeListeners = (): void => {
+    for (const [signal, handler] of handlers) {
+      process.removeListener(signal, handler);
+    }
+  };
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    const handler = (): void => {
+      signalCount += 1;
+      interruptedBy ||= signal;
+      if (signalCount >= 3) {
+        removeListeners();
+        process.kill(process.pid, signal);
+        return;
+      }
+      if (signalCount === 2) {
+        console.error(
+          chalk.yellow(
+            `Received ${signal} again; forcing exit in 5s if exact teardown does not finish.`,
+          ),
+        );
+        forcedExitTimer = setTimeout(() => {
+          removeListeners();
+          process.kill(process.pid, signal);
+        }, 5000);
+        return;
+      }
+      console.error(
+        chalk.yellow(`Received ${signal}; finishing exact ProofShot teardown before exit.`),
+      );
+    };
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+  return {
+    remove: (): NodeJS.Signals | null => {
+      removeListeners();
+      if (forcedExitTimer) clearTimeout(forcedExitTimer);
+      return interruptedBy;
+    },
+  };
 }
 
 function writeTextFileAtomically(filePath: string, contents: string): void {

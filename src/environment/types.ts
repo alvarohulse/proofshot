@@ -17,12 +17,18 @@ export type TmuxPaneDefinition = {
 
 export type TmuxLaunchConfig =
   | { kind: 'panes'; panes: TmuxPaneDefinition[]; sessionName?: string }
-  | { kind: 'external-command'; command: string; stopCommand?: string };
+  | {
+      kind: 'external-command';
+      command: string;
+      stopCommand?: string;
+      timeoutMs?: number;
+    };
 
 export type TmuxConnectionConfig = {
   source?: 'stdout';
   format: 'json' | 'tmux-attach-command';
   socket?: string;
+  ownership?: 'attach' | 'create';
 };
 
 export type TmuxEnvironmentConfig = {
@@ -124,6 +130,7 @@ export type TmuxEnvironmentState = {
   ownsSession: boolean;
   panes: TmuxPaneState[];
   captures: CaptureProcessState[];
+  healthFailures?: string[];
   stopCommand?: string;
   stopCwd?: string;
 };
@@ -133,9 +140,20 @@ export type ProcessEnvironmentState = {
   evidencePath: string;
   sources: ResolvedLogSourceState[];
   processes: CaptureProcessState[];
+  healthFailures?: string[];
 };
 
-export type EnvironmentState = TmuxEnvironmentState | ProcessEnvironmentState;
+export type LauncherEnvironmentState = {
+  kind: 'launcher';
+  evidencePath: string;
+  sources: [];
+  launcher: CaptureProcessState;
+};
+
+export type EnvironmentState =
+  | TmuxEnvironmentState
+  | ProcessEnvironmentState
+  | LauncherEnvironmentState;
 
 export type ResolvedLogSourceState = {
   id: string;

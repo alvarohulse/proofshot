@@ -95,10 +95,15 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
 
 function clearMatchingControlState(session: SessionState): void {
   const controlDir = session.controlDir ?? session.outputDir;
+  if (!hasActiveSession(controlDir)) return;
   const activeSession = loadControlSessionSafely(controlDir);
   if (activeSession?.sessionName === session.sessionName) {
     clearSession(controlDir);
+    return;
   }
+  throw new Error(
+    `Control state at ${controlDir} is corrupt or belongs to another session; it was not removed.`,
+  );
 }
 
 function persistMatchingControlState(session: SessionState): void {

@@ -10,6 +10,8 @@ import {
 import { appendEvidenceEvent } from './evidence.js';
 import type {
   ExternalTmuxConnection,
+  EnvironmentState,
+  LauncherEnvironmentState,
   LogSourceConfig,
   LogsConfig,
   ResolvedLogSourceState,
@@ -19,6 +21,7 @@ import type {
 } from './types.js';
 import {
   captureProcessIdentity,
+  processIdentitiesMatch,
   processIdentityMatches,
   spawnShellCommand,
   terminateOwnedProcess,
@@ -46,7 +49,7 @@ export async function startTmuxEnvironment(
   sessionDir: string,
   proofShotSessionName: string,
   startTimeMs: number,
-  onState: (state: TmuxEnvironmentState) => void,
+  onState: (state: EnvironmentState) => void,
 ): Promise<TmuxEnvironmentState> {
   assertTmuxAvailable();
   const evidencePath = path.join(sessionDir, 'environment.ndjson');
@@ -57,6 +60,7 @@ export async function startTmuxEnvironment(
   fs.writeFileSync(evidencePath, '', { flag: 'a', mode: 0o600 });
 
   let state: TmuxEnvironmentState | null = null;
+  let pendingLauncher: LauncherEnvironmentState | null = null;
   let connection: TmuxConnection;
   try {
     connection =
@@ -70,7 +74,19 @@ export async function startTmuxEnvironment(
             state = startedState;
             onState(startedState);
           })
-        : await startExternalTmux(config);
+        : await startExternalTmux(config, (launcher) => {
+            pendingLauncher = {
+              kind: 'launcher',
+              evidencePath,
+              sources: [],
+              launcher: {
+                sourceId: 'external-launcher',
+                process: launcher,
+                pidFile: '',
+              },
+            };
+            onState(pendingLauncher);
+          });
     if (!state) {
       const connectedState = createTmuxState(
         config,
@@ -83,6 +99,8 @@ export async function startTmuxEnvironment(
   } catch (error) {
     if (state) {
       await stopTmuxEnvironment(state).catch(() => {});
+    } else if (pendingLauncher) {
+      await terminateOwnedProcessTree(pendingLauncher.launcher.process).catch(() => {});
     }
     throw error;
   }
@@ -96,11 +114,19 @@ export async function startTmuxEnvironment(
     const panes = tmuxSources.map(({ config: sourceConfig, mapping }) =>
       resolvePane(
         connection.socketPath,
+        connection.sessionName,
         sourceConfig,
         mapping,
         logsDir,
       ),
     );
+    const resolvedPaneIds = new Set<string>();
+    for (const { pane } of panes) {
+      if (resolvedPaneIds.has(pane.paneId)) {
+        throw new Error(`Multiple log sources resolved to tmux pane ${pane.paneId}.`);
+      }
+      resolvedPaneIds.add(pane.paneId);
+    }
     disambiguateTitles(panes);
     activeState = {
       ...activeState,
@@ -125,12 +151,14 @@ export async function startTmuxEnvironment(
       }
 
       const pidFile = path.join(captureDir, `${pane.source.id}.pid`);
+      const sourceBudget = logs.maxBytesPerSource || 5 * 1024 * 1024;
+      const historyBudget = Math.max(1, Math.floor(sourceBudget / 2));
       const workerConfig = createWorkerConfig({
         evidencePath,
         logPath: pane.source.logPath,
         pidFile,
         startTimeMs,
-        maxBytes: logs.maxBytesPerSource || 5 * 1024 * 1024,
+        maxBytes: Math.max(1, sourceBudget - historyBudget),
         stripAnsi: logs.stripAnsi !== false,
         source: pane.source,
       });
@@ -163,7 +191,7 @@ export async function startTmuxEnvironment(
         history,
         pane.source,
         evidencePath,
-        logs.maxBytesPerSource || 5 * 1024 * 1024,
+        historyBudget,
         logs.stripAnsi !== false,
         'pty',
       );
@@ -178,7 +206,6 @@ export async function startTmuxEnvironment(
         timestamp: null,
         relativeTimeSec: null,
         text: '[tmux history/live capture boundary]',
-        captureGap: true,
       });
       const capture = await waitForCaptureProcess(pane.source.id, pidFile);
       activeState = {
@@ -200,64 +227,121 @@ export async function startTmuxEnvironment(
 export async function stopTmuxEnvironment(
   state: TmuxEnvironmentState,
 ): Promise<void> {
-  if (
-    !processIdentityMatches(state.serverProcess) &&
-    !fs.existsSync(state.socket.path) &&
-    state.captures.every((capture) => !processIdentityMatches(capture.process))
-  ) {
-    return;
-  }
-  assertSocketIdentity(state);
-  if (!processIdentityMatches(state.serverProcess)) {
-    throw new Error('tmux server identity changed; refusing widened cleanup.');
+  const errors: Error[] = [];
+  let socketMatches = false;
+  let socketIdentityError: Error | null = null;
+  if (fs.existsSync(state.socket.path)) {
+    try {
+      assertSocketIdentity(state);
+      socketMatches = true;
+    } catch (error) {
+      socketIdentityError = toError(error);
+    }
   }
 
-  if (state.stopCommand) {
-    await runCommand(state.stopCommand, state.stopCwd || process.cwd());
-  } else if (state.ownsSession && tmuxHasSession(state)) {
-    tmuxExec(state.socket.path, ['kill-session', '-t', state.sessionName]);
-  } else {
-    for (const pane of state.panes.filter(
-      (candidate) => candidate.captureAttached,
-    )) {
-      try {
-        tmuxExec(state.socket.path, ['pipe-pane', '-t', pane.paneId]);
-      } catch {
-        // A launcher-provided shutdown may already have removed the pane.
+  const currentServer = captureProcessIdentity(state.serverProcess.pid);
+  const serverIdentityReused = Boolean(
+    currentServer && !processIdentitiesMatch(currentServer, state.serverProcess),
+  );
+  if (serverIdentityReused) {
+    errors.push(new Error('tmux server identity changed; refusing widened cleanup.'));
+  }
+  const serverMatches = processIdentityMatches(state.serverProcess);
+  if (
+    socketIdentityError &&
+    (serverMatches ||
+      state.captures.some((capture) => processIdentityMatches(capture.process)))
+  ) {
+    errors.push(socketIdentityError);
+  }
+
+  if (serverMatches && socketMatches) {
+    try {
+      if (state.stopCommand) {
+        await runCommand(state.stopCommand, state.stopCwd || process.cwd());
+      } else if (state.ownsSession && tmuxHasSession(state)) {
+        tmuxExec(state.socket.path, ['kill-session', '-t', state.sessionName]);
+      } else {
+        for (const pane of state.panes.filter(
+          (candidate) => candidate.captureAttached,
+        )) {
+          try {
+            tmuxExec(state.socket.path, ['pipe-pane', '-t', pane.paneId]);
+          } catch {
+            // A launcher-provided shutdown may already have removed the pane.
+          }
+        }
       }
+    } catch (error) {
+      errors.push(toError(error));
     }
   }
 
   for (const capture of state.captures) {
-    await terminateOwnedProcess(capture.process, { graceMs: 500 });
-    if (processIdentityMatches(capture.process)) {
-      throw new Error(`Log helper for ${capture.sourceId} did not stop.`);
+    try {
+      await terminateOwnedProcess(capture.process, { graceMs: 500 });
+      if (processIdentityMatches(capture.process)) {
+        throw new Error(`Log helper for ${capture.sourceId} did not stop.`);
+      }
+    } catch (error) {
+      errors.push(toError(error));
     }
   }
 
-  if (state.ownsServer && processIdentityMatches(state.serverProcess)) {
+  if (state.ownsServer && !serverIdentityReused) {
+    if (processIdentityMatches(state.serverProcess) && socketMatches) {
+      try {
+        tmuxExec(state.socket.path, ['kill-server']);
+      } catch {
+        // Exact process-session termination below is the verified fallback.
+      }
+    }
+    if (processIdentityMatches(state.serverProcess)) {
+      try {
+        await terminateOwnedProcessTree(state.serverProcess, { graceMs: 500 });
+      } catch (error) {
+        errors.push(toError(error));
+      }
+    }
+    if (processIdentityMatches(state.serverProcess)) {
+      errors.push(new Error('Owned tmux server did not stop.'));
+    }
+  }
+
+  if (
+    state.ownsServer &&
+    socketMatches &&
+    !processIdentityMatches(state.serverProcess) &&
+    fs.existsSync(state.socket.path)
+  ) {
     try {
-      tmuxExec(state.socket.path, ['kill-server']);
-    } catch {
-      await terminateOwnedProcessTree(state.serverProcess, { graceMs: 500 });
+      const currentSocket = captureSocketIdentity(state.socket.path);
+      if (
+        currentSocket.inode !== state.socket.inode ||
+        currentSocket.uid !== state.socket.uid
+      ) {
+        throw new Error('tmux socket changed before final cleanup.');
+      }
+      fs.unlinkSync(state.socket.path);
+    } catch (error) {
+      errors.push(toError(error));
     }
   }
-  if (state.ownsServer && processIdentityMatches(state.serverProcess)) {
-    throw new Error('Owned tmux server did not stop.');
+  if (
+    state.ownsSession &&
+    processIdentityMatches(state.serverProcess) &&
+    socketMatches &&
+    tmuxHasSession(state)
+  ) {
+    errors.push(new Error(`Owned tmux session ${state.sessionName} did not stop.`));
   }
-  if (state.ownsServer && fs.existsSync(state.socket.path)) {
-    const currentSocket = captureSocketIdentity(state.socket.path);
-    if (
-      currentSocket.inode !== state.socket.inode ||
-      currentSocket.uid !== state.socket.uid
-    ) {
-      throw new Error('tmux socket changed before final cleanup.');
-    }
-    fs.unlinkSync(state.socket.path);
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'One or more tmux cleanup steps failed.');
   }
-  if (state.ownsSession && tmuxHasSession(state)) {
-    throw new Error(`Owned tmux session ${state.sessionName} did not stop.`);
-  }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function startOwnedTmux(
@@ -267,6 +351,15 @@ function startOwnedTmux(
 ): TmuxConnection {
   if (config.launch.kind !== 'panes' || config.launch.panes.length === 0) {
     throw new Error('tmux pane launch requires at least one pane.');
+  }
+  const paneIds = new Set<string>();
+  for (const pane of config.launch.panes) {
+    validateId(pane.id);
+    if (paneIds.has(pane.id)) {
+      throw new Error(`Duplicate tmux pane id: ${pane.id}`);
+    }
+    paneIds.add(pane.id);
+    buildPaneCommand(pane);
   }
   const uid = process.getuid?.() ?? process.pid;
   const socketDir = path.join('/tmp', `proofshot-${uid}`, 'tmux');
@@ -302,7 +395,6 @@ function startOwnedTmux(
       group: firstPane.group,
     },
   ];
-  configurePane(socketPath, first.paneId, firstPane.id, firstPane.title);
   onStarted({
     socketPath,
     sessionName,
@@ -310,6 +402,7 @@ function startOwnedTmux(
     ownsServer: true,
     ownsSession: true,
   });
+  configurePane(socketPath, first.paneId, firstPane.id, firstPane.title);
 
   for (const pane of remainingPanes) {
     const created = parsePaneOutput(
@@ -377,20 +470,33 @@ function createTmuxState(
 
 async function startExternalTmux(
   config: TmuxEnvironmentConfig,
+  onLauncherStarted: (identity: NonNullable<ReturnType<typeof captureProcessIdentity>>) => void,
 ): Promise<TmuxConnection> {
   if (config.launch.kind !== 'external-command' || !config.connection) {
     throw new Error('External tmux launch requires a connection contract.');
   }
   const hintedSocket = config.connection.socket;
   const socketExistedBefore = hintedSocket ? fs.existsSync(hintedSocket) : true;
+  const attachOnly = config.connection.ownership === 'attach';
+  if (
+    !attachOnly &&
+    ((!hintedSocket && !config.launch.stopCommand) ||
+      (socketExistedBefore && !config.launch.stopCommand))
+  ) {
+    throw new Error(
+      'External tmux launch against an existing or undisclosed socket requires stopCommand.',
+    );
+  }
   const output = await runCommand(
     config.launch.command,
     config.cwd || process.cwd(),
+    onLauncherStarted,
+    config.launch.timeoutMs,
   );
   const parsed =
     config.connection.format === 'json'
       ? parseJsonConnection(output)
-      : parseAttachCommand(output);
+      : parseAttachCommand(output, config.cwd || process.cwd());
   const ownsCreatedSocket =
     hintedSocket !== undefined &&
     path.resolve(hintedSocket) === path.resolve(parsed.socketPath) &&
@@ -447,6 +553,7 @@ function resolveTmuxSources(
 
 function resolvePane(
   socketPath: string,
+  sessionName: string,
   sourceConfig: Extract<LogSourceConfig, { kind: 'tmux-pane' }>,
   mapping: PaneMapping | undefined,
   logsDir: string,
@@ -463,7 +570,8 @@ function resolvePane(
     const tag = sourceConfig.match.tag;
     const matches = tmuxExec(socketPath, [
       'list-panes',
-      '-a',
+      '-t',
+      sessionName,
       '-F',
       '#{pane_id}\t#{@proofshot-source}',
     ])
@@ -484,10 +592,15 @@ function resolvePane(
     '-p',
     '-t',
     target,
-    '#{pane_id}\t#{pane_index}\t#{pane_pid}\t#{pane_title}\t#{session_name}:#{window_name}.#{pane_index}',
+    '#{pane_id}\t#{pane_index}\t#{pane_pid}\t#{pane_title}\t#{session_name}\t#{session_name}:#{window_name}.#{pane_index}',
   ]).split('\t');
-  if (fields.length !== 5) {
+  if (fields.length !== 6) {
     throw new Error(`Could not resolve tmux pane metadata for ${target}.`);
+  }
+  if (fields[4] !== sessionName) {
+    throw new Error(
+      `tmux pane ${fields[0]} belongs to session "${fields[4]}", expected "${sessionName}".`,
+    );
   }
   const paneIndex = Number(fields[1]);
   const tmuxTitle = fields[3].trim();
@@ -514,7 +627,7 @@ function resolvePane(
       sourceId: source.id,
       title,
       group,
-      target: fields[4],
+      target: fields[5],
       captureAttached: false,
     },
   };
@@ -583,36 +696,77 @@ function parsePaneOutput(output: string): {
 }
 
 function parseJsonConnection(output: string): TmuxConnection {
-  const parsed = JSON.parse(output) as ExternalTmuxConnection;
+  const parsed = JSON.parse(output) as Partial<ExternalTmuxConnection>;
   if (
     !parsed.tmux ||
     !path.isAbsolute(parsed.tmux.socket) ||
-    typeof parsed.tmux.session !== 'string'
+    typeof parsed.tmux.session !== 'string' ||
+    parsed.tmux.session.length === 0 ||
+    (parsed.tmux.panes !== undefined && !Array.isArray(parsed.tmux.panes))
   ) {
     throw new Error('External launcher returned invalid tmux JSON.');
+  }
+  const paneMappings: PaneMapping[] = [];
+  const keys = new Set<string>();
+  const paneIds = new Set<string>();
+  for (const [index, pane] of (parsed.tmux.panes || []).entries()) {
+    if (
+      typeof pane !== 'object' ||
+      pane === null ||
+      typeof pane.key !== 'string' ||
+      !/^[A-Za-z0-9_-]+$/.test(pane.key) ||
+      typeof pane.paneId !== 'string' ||
+      !/^%\d+$/.test(pane.paneId) ||
+      (pane.title !== undefined && typeof pane.title !== 'string') ||
+      (pane.group !== undefined && typeof pane.group !== 'string')
+    ) {
+      throw new Error(`External launcher returned invalid pane mapping at index ${index}.`);
+    }
+    if (keys.has(pane.key) || paneIds.has(pane.paneId)) {
+      throw new Error('External launcher returned duplicate pane mappings.');
+    }
+    keys.add(pane.key);
+    paneIds.add(pane.paneId);
+    paneMappings.push(pane);
   }
   return {
     socketPath: parsed.tmux.socket,
     sessionName: parsed.tmux.session,
-    paneMappings: parsed.tmux.panes || [],
+    paneMappings,
     ownsServer: false,
     ownsSession: false,
   };
 }
 
-function parseAttachCommand(output: string): TmuxConnection {
-  const match = output.match(
-    /tmux\s+(?:(-S)\s+(\S+)|(-L)\s+(\S+)).*?attach(?:-session)?\s+-t\s+(\S+)/,
+function parseAttachCommand(output: string, cwd: string): TmuxConnection {
+  const tokens = tokenizeShellCommand(output);
+  const tmuxIndex = tokens.findIndex((token) => path.basename(token) === 'tmux');
+  const attachIndex = tokens.findIndex(
+    (token, index) =>
+      index > tmuxIndex && (token === 'attach' || token === 'attach-session'),
   );
-  if (!match) {
+  const targetIndex = tokens.indexOf('-t', attachIndex + 1);
+  const socketIndex = tokens.indexOf('-S', tmuxIndex + 1);
+  const labelIndex = tokens.indexOf('-L', tmuxIndex + 1);
+  if (
+    tmuxIndex < 0 ||
+    attachIndex < 0 ||
+    targetIndex < 0 ||
+    !tokens[targetIndex + 1] ||
+    (socketIndex < 0 && labelIndex < 0)
+  ) {
     throw new Error('External launcher did not emit a supported tmux attach command.');
   }
-  const flag = match[1] || match[3];
-  const value = stripShellQuotes(match[2] || match[4]);
-  const sessionName = stripShellQuotes(match[5]);
+  const flag = socketIndex >= 0 ? '-S' : '-L';
+  const valueIndex = socketIndex >= 0 ? socketIndex + 1 : labelIndex + 1;
+  const value = tokens[valueIndex];
+  const sessionName = tokens[targetIndex + 1];
+  if (!value) {
+    throw new Error('External launcher emitted a tmux socket flag without a value.');
+  }
   const socketPath =
     flag === '-S'
-      ? path.resolve(value)
+      ? path.resolve(cwd, value)
       : execFileSync(
           'tmux',
           ['-L', value, 'display-message', '-p', '#{socket_path}'],
@@ -625,6 +779,38 @@ function parseAttachCommand(output: string): TmuxConnection {
     ownsServer: false,
     ownsSession: false,
   };
+}
+
+function tokenizeShellCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: "'" | '"' | null = null;
+  let escaping = false;
+  for (const character of command.trim()) {
+    if (escaping) {
+      current += character;
+      escaping = false;
+    } else if (character === '\\' && quote !== "'") {
+      escaping = true;
+    } else if (quote) {
+      if (character === quote) quote = null;
+      else current += character;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+    } else if (/\s/.test(character)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+    } else {
+      current += character;
+    }
+  }
+  if (escaping || quote) {
+    throw new Error('External launcher emitted an unterminated tmux attach command.');
+  }
+  if (current) tokens.push(current);
+  return tokens;
 }
 
 function tmuxExec(socketPath: string, args: string[]): string {
@@ -646,7 +832,14 @@ function tmuxHasSession(state: TmuxEnvironmentState): boolean {
   }
 }
 
-async function runCommand(command: string, cwd: string): Promise<string> {
+async function runCommand(
+  command: string,
+  cwd: string,
+  onStarted?: (
+    identity: NonNullable<ReturnType<typeof captureProcessIdentity>>,
+  ) => void,
+  timeoutMs = 30_000,
+): Promise<string> {
   const child = spawnShellCommand(command, {
     cwd,
     detached: true,
@@ -656,6 +849,12 @@ async function runCommand(command: string, cwd: string): Promise<string> {
   if (!identity) {
     throw new Error('ProofShot could not capture the external launcher identity.');
   }
+  try {
+    onStarted?.(identity);
+  } catch (error) {
+    await terminateOwnedProcessTree(identity);
+    throw error;
+  }
   let stdout = '';
   let stderr = '';
   child.stdout?.on('data', (chunk) => {
@@ -664,10 +863,21 @@ async function runCommand(command: string, cwd: string): Promise<string> {
   child.stderr?.on('data', (chunk) => {
     stderr += chunk.toString();
   });
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
+  const outcome = await new Promise<
+    { kind: 'exit'; code: number | null } | { kind: 'timeout' }
+  >((resolve, reject) => {
+    const timer = setTimeout(() => resolve({ kind: 'timeout' }), timeoutMs);
     child.once('error', reject);
-    child.once('close', resolve);
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      resolve({ kind: 'exit', code });
+    });
   });
+  if (outcome.kind === 'timeout') {
+    await terminateOwnedProcessTree(identity);
+    throw new Error(`External environment command timed out after ${timeoutMs}ms.`);
+  }
+  const exitCode = outcome.code;
   if (exitCode !== 0) {
     await terminateOwnedProcessTree(identity);
     throw new Error(
@@ -722,8 +932,4 @@ function validateId(id: string): void {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function stripShellQuotes(value: string): string {
-  return value.replace(/^(['"])(.*)\1$/, '$2');
 }

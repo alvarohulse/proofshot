@@ -333,7 +333,7 @@ function installForTool(tool, force) {
   }
 }
 function checkboxSelect(tools) {
-  return new Promise((resolve12) => {
+  return new Promise((resolve13) => {
     const selected = new Array(tools.length).fill(true);
     let cursor = 0;
     function render() {
@@ -364,7 +364,7 @@ function checkboxSelect(tools) {
         stdin.removeListener("data", onData);
         stdin.pause();
         process.stdout.write("\r\x1B[K\n");
-        resolve12([]);
+        resolve13([]);
         return;
       }
       if (key === "\r" || key === "\n") {
@@ -372,7 +372,7 @@ function checkboxSelect(tools) {
         stdin.removeListener("data", onData);
         stdin.pause();
         process.stdout.write("\r\x1B[K\n");
-        resolve12(tools.filter((_, i) => selected[i]));
+        resolve13(tools.filter((_, i) => selected[i]));
         return;
       }
       if (key === " ") {
@@ -516,6 +516,7 @@ function loadConfig(startDir) {
   try {
     const raw = fs3.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
+    validateConfig(parsed);
     const configDir = path3.dirname(configPath);
     const resolvedBrowser = {
       ...DEFAULT_CONFIG.browser,
@@ -539,8 +540,223 @@ function loadConfig(startDir) {
       environment,
       logs
     };
-  } catch {
-    return { ...DEFAULT_CONFIG };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid ProofShot config at ${configPath}: ${message}`);
+  }
+}
+function validateConfig(value) {
+  assertRecord(value, "config");
+  assertOptionalString(value.output, "output");
+  assertOptionalBoolean(value.headless, "headless");
+  assertOptionalStringArray(value.defaultPages, "defaultPages");
+  if (value.devServer !== void 0) {
+    assertRecord(value.devServer, "devServer");
+    assertOptionalPositiveInteger(value.devServer.port, "devServer.port", 65535);
+    assertOptionalPositiveInteger(
+      value.devServer.startupTimeout,
+      "devServer.startupTimeout"
+    );
+  }
+  if (value.viewport !== void 0) {
+    assertRecord(value.viewport, "viewport");
+    assertOptionalPositiveInteger(value.viewport.width, "viewport.width");
+    assertOptionalPositiveInteger(value.viewport.height, "viewport.height");
+  }
+  if (value.browser !== void 0) {
+    assertRecord(value.browser, "browser");
+    assertOptionalString(value.browser.configPath, "browser.configPath");
+    assertOptionalString(value.browser.executablePath, "browser.executablePath");
+    assertOptionalBoolean(value.browser.ignoreHttpsErrors, "browser.ignoreHttpsErrors");
+  }
+  validateEnvironment(value.environment);
+  validateLogs(value.logs);
+}
+function validateEnvironment(value) {
+  if (value === void 0) return;
+  assertRecord(value, "environment");
+  validateReadiness(value.readiness);
+  if (value.kind === "tmux") {
+    assertRecord(value.launch, "environment.launch");
+    assertOptionalString(value.cwd, "environment.cwd");
+    if (value.launch.kind === "panes") {
+      if (!Array.isArray(value.launch.panes) || value.launch.panes.length === 0) {
+        throw new Error("environment.launch.panes must be a non-empty array");
+      }
+      validateDefinitions(value.launch.panes, "environment.launch.panes");
+      assertOptionalString(
+        value.launch.sessionName,
+        "environment.launch.sessionName"
+      );
+      if (value.connection !== void 0) {
+        throw new Error("environment.connection is only valid for external-command");
+      }
+      return;
+    }
+    if (value.launch.kind === "external-command") {
+      assertNonEmptyString(value.launch.command, "environment.launch.command");
+      assertOptionalString(
+        value.launch.stopCommand,
+        "environment.launch.stopCommand"
+      );
+      assertOptionalPositiveInteger(
+        value.launch.timeoutMs,
+        "environment.launch.timeoutMs"
+      );
+      assertRecord(value.connection, "environment.connection");
+      if (value.connection.format !== "json" && value.connection.format !== "tmux-attach-command") {
+        throw new Error(
+          'environment.connection.format must be "json" or "tmux-attach-command"'
+        );
+      }
+      if (value.connection.source !== void 0 && value.connection.source !== "stdout") {
+        throw new Error('environment.connection.source must be "stdout"');
+      }
+      assertOptionalString(value.connection.socket, "environment.connection.socket");
+      if (value.connection.ownership !== void 0 && value.connection.ownership !== "attach" && value.connection.ownership !== "create") {
+        throw new Error(
+          'environment.connection.ownership must be "attach" or "create"'
+        );
+      }
+      if (value.connection.ownership !== "attach" && value.connection.socket === void 0 && value.launch.stopCommand === void 0) {
+        throw new Error(
+          "external-command requires connection.socket or launch.stopCommand for cleanup"
+        );
+      }
+      return;
+    }
+    throw new Error(
+      'environment.launch.kind must be "panes" or "external-command"'
+    );
+  }
+  if (value.kind === "processes") {
+    if (!Array.isArray(value.commands)) {
+      throw new Error("environment.commands must be an array");
+    }
+    validateDefinitions(value.commands, "environment.commands");
+    return;
+  }
+  throw new Error('environment.kind must be "tmux" or "processes"');
+}
+function validateDefinitions(value, field) {
+  const ids = /* @__PURE__ */ new Set();
+  value.forEach((candidate, index) => {
+    const item = `${field}[${index}]`;
+    assertRecord(candidate, item);
+    assertSafeId(candidate.id, `${item}.id`);
+    if (ids.has(candidate.id)) throw new Error(`Duplicate ${field} id: ${candidate.id}`);
+    ids.add(candidate.id);
+    assertNonEmptyString(candidate.command, `${item}.command`);
+    assertOptionalString(candidate.title, `${item}.title`);
+    assertOptionalString(candidate.group, `${item}.group`);
+    assertOptionalString(candidate.cwd, `${item}.cwd`);
+    if (candidate.env !== void 0) {
+      assertRecord(candidate.env, `${item}.env`);
+      for (const [key, envValue] of Object.entries(candidate.env)) {
+        if (typeof envValue !== "string") {
+          throw new Error(`${item}.env.${key} must be a string`);
+        }
+      }
+    }
+  });
+}
+function validateReadiness(value) {
+  if (value === void 0) return;
+  if (!Array.isArray(value)) throw new Error("environment.readiness must be an array");
+  value.forEach((candidate, index) => {
+    const item = `environment.readiness[${index}]`;
+    assertRecord(candidate, item);
+    assertOptionalPositiveInteger(candidate.timeoutMs, `${item}.timeoutMs`);
+    if (candidate.kind === "http") {
+      assertNonEmptyString(candidate.url, `${item}.url`);
+      return;
+    }
+    if (candidate.kind === "tcp") {
+      assertOptionalString(candidate.host, `${item}.host`);
+      assertOptionalPositiveInteger(candidate.port, `${item}.port`, 65535, true);
+      return;
+    }
+    throw new Error(`${item}.kind must be "http" or "tcp"`);
+  });
+}
+function validateLogs(value) {
+  if (value === void 0) return;
+  assertRecord(value, "logs");
+  assertOptionalBoolean(value.stripAnsi, "logs.stripAnsi");
+  assertOptionalPositiveInteger(value.maxBytesPerSource, "logs.maxBytesPerSource");
+  if (value.maxBytesPerSource !== void 0 && value.maxBytesPerSource < 512) {
+    throw new Error("logs.maxBytesPerSource must be at least 512 bytes");
+  }
+  if (value.sources === void 0) return;
+  if (!Array.isArray(value.sources)) throw new Error("logs.sources must be an array");
+  const ids = /* @__PURE__ */ new Set();
+  value.sources.forEach((candidate, index) => {
+    const item = `logs.sources[${index}]`;
+    assertRecord(candidate, item);
+    assertSafeId(candidate.id, `${item}.id`);
+    if (ids.has(candidate.id)) throw new Error(`Duplicate log source id: ${candidate.id}`);
+    ids.add(candidate.id);
+    assertOptionalString(candidate.title, `${item}.title`);
+    assertOptionalString(candidate.group, `${item}.group`);
+    assertOptionalStringArray(candidate.include, `${item}.include`);
+    assertOptionalStringArray(candidate.exclude, `${item}.exclude`);
+    if (candidate.kind === "tmux-pane") {
+      assertRecord(candidate.match, `${item}.match`);
+      const keys = ["connectionKey", "tag", "target"].filter(
+        (key) => candidate.match[key] !== void 0
+      );
+      if (keys.length !== 1) {
+        throw new Error(`${item}.match must set exactly one pane selector`);
+      }
+      assertNonEmptyString(candidate.match[keys[0]], `${item}.match.${keys[0]}`);
+      return;
+    }
+    if (candidate.kind === "process") {
+      assertSafeId(candidate.processId, `${item}.processId`);
+      return;
+    }
+    if (candidate.kind === "file") {
+      assertNonEmptyString(candidate.path, `${item}.path`);
+      return;
+    }
+    throw new Error(`${item}.kind is unsupported`);
+  });
+}
+function assertRecord(value, field) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+}
+function assertSafeId(value, field) {
+  assertNonEmptyString(value, field);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value)) {
+    throw new Error(`${field} must contain only letters, numbers, "_" or "-"`);
+  }
+}
+function assertNonEmptyString(value, field) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+}
+function assertOptionalString(value, field) {
+  if (value !== void 0 && typeof value !== "string") {
+    throw new Error(`${field} must be a string`);
+  }
+}
+function assertOptionalBoolean(value, field) {
+  if (value !== void 0 && typeof value !== "boolean") {
+    throw new Error(`${field} must be a boolean`);
+  }
+}
+function assertOptionalStringArray(value, field) {
+  if (value !== void 0 && (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))) {
+    throw new Error(`${field} must be an array of strings`);
+  }
+}
+function assertOptionalPositiveInteger(value, field, maximum = Number.MAX_SAFE_INTEGER, required = false) {
+  if (value === void 0 && !required) return;
+  if (!Number.isInteger(value) || value <= 0 || value > maximum) {
+    throw new Error(`${field} must be a positive integer no greater than ${maximum}`);
   }
 }
 function resolveEnvironmentConfig(value, configDir) {
@@ -659,7 +875,11 @@ function captureProcessIdentity(pid) {
       const output = execFileSync(
         "ps",
         ["-o", "pgid=", "-o", sessionField, "-o", "lstart=", "-p", String(pid)],
-        { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }
+        {
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, TZ: "UTC" }
+        }
       );
       const identity = parseUnixProcessIdentity(pid, output);
       if (!identity) return null;
@@ -799,13 +1019,13 @@ async function terminateOwnedProcessTree(identity, options = {}) {
   const pollIntervalMs = options.pollIntervalMs ?? 50;
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline && ownedProcessTreeIsAlive(identity)) {
-    await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
+    await new Promise((resolve13) => setTimeout(resolve13, pollIntervalMs));
   }
   if (ownedProcessTreeIsAlive(identity)) {
     signalOwnedTree(identity, "SIGKILL");
     const killDeadline = Date.now() + 500;
     while (Date.now() < killDeadline && ownedProcessTreeIsAlive(identity)) {
-      await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
+      await new Promise((resolve13) => setTimeout(resolve13, pollIntervalMs));
     }
   }
   return true;
@@ -823,7 +1043,7 @@ async function terminateOwnedProcess(identity, options = {}) {
   }
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline && processIdentityMatches(identity)) {
-    await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
+    await new Promise((resolve13) => setTimeout(resolve13, pollIntervalMs));
   }
   if (processIdentityMatches(identity)) {
     try {
@@ -879,7 +1099,11 @@ function setAgentBrowserDefaults(options) {
 }
 function getAgentBrowserEnvironment(options = {}) {
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
-  return socketDir ? { ...process.env, AGENT_BROWSER_SOCKET_DIR: socketDir } : { ...process.env };
+  return {
+    ...process.env,
+    AGENT_BROWSER_IDLE_TIMEOUT_MS: process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || "1800000",
+    ...socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}
+  };
 }
 function quoteShellArgument(value) {
   const escaped = value.replace(/'/g, "'\\''");
@@ -933,20 +1157,20 @@ async function isPortOpen(port, host = "localhost") {
   return false;
 }
 function tryConnect(port, host) {
-  return new Promise((resolve12) => {
+  return new Promise((resolve13) => {
     const socket = new net.Socket();
     socket.setTimeout(1e3);
     socket.on("connect", () => {
       socket.destroy();
-      resolve12(true);
+      resolve13(true);
     });
     socket.on("timeout", () => {
       socket.destroy();
-      resolve12(false);
+      resolve13(false);
     });
     socket.on("error", () => {
       socket.destroy();
-      resolve12(false);
+      resolve13(false);
     });
     socket.connect(port, host);
   });
@@ -1020,7 +1244,7 @@ Choose another port or stop that process explicitly, then retry.`
   proc.unref();
   let processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
   for (let attempt = 0; !processIdentity && attempt < 5; attempt++) {
-    await new Promise((resolve12) => setTimeout(resolve12, 10));
+    await new Promise((resolve13) => setTimeout(resolve13, 10));
     processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
   }
   if (!processIdentity || !isDetachedProcessIdentity(processIdentity)) {
@@ -1047,7 +1271,7 @@ Make sure the command is correct and the port is available.
 Original error: ${error instanceof Error ? error.message : error}`
     );
   }
-  await new Promise((resolve12) => setTimeout(resolve12, 1e3));
+  await new Promise((resolve13) => setTimeout(resolve13, 1e3));
   return result;
 }
 
@@ -1088,34 +1312,22 @@ function urlsMatch(actual, expected) {
   }
 }
 function closeBrowser(sessionName) {
-  try {
-    ab("close", { session: sessionName });
-  } catch {
-  }
+  ab("close", { session: sessionName });
 }
 function getConsoleErrors(sessionName) {
-  try {
-    return ab("errors", { session: sessionName });
-  } catch {
-    return "";
-  }
+  return ab("errors", { session: sessionName });
 }
 function getConsoleOutput(sessionName) {
-  try {
-    return ab("console", { session: sessionName });
-  } catch {
-    return "";
-  }
+  return ab("console", { session: sessionName });
 }
 function getConsoleOutputJson(sessionName) {
-  try {
-    const raw = ab("console --json", { session: sessionName });
-    const parsed = JSON.parse(raw);
-    const messages = parsed?.data?.messages ?? parsed;
-    return Array.isArray(messages) ? messages : [];
-  } catch {
-    return [];
+  const raw = ab("console --json", { session: sessionName });
+  const parsed = JSON.parse(raw);
+  const messages = parsed?.data?.messages ?? parsed;
+  if (!Array.isArray(messages)) {
+    throw new Error("agent-browser returned malformed console JSON.");
   }
+  return messages;
 }
 function getPageUrl(sessionName) {
   try {
@@ -1323,7 +1535,7 @@ async function waitForAgentBrowserProcessIdentity(socketDir, sessionName, timeou
     if (identity) {
       return identity;
     }
-    await new Promise((resolve12) => setTimeout(resolve12, pollIntervalMs));
+    await new Promise((resolve13) => setTimeout(resolve13, pollIntervalMs));
   } while (Date.now() < deadline);
   return captureAgentBrowserProcessIdentity(socketDir, sessionName);
 }
@@ -1435,13 +1647,34 @@ function loadEvidenceEvents(filePath) {
   if (!fs10.existsSync(filePath)) {
     return [];
   }
-  return fs10.readFileSync(filePath, "utf-8").split("\n").filter(Boolean).map((line) => {
+  return fs10.readFileSync(filePath, "utf-8").split("\n").filter(Boolean).map((line, index) => {
     try {
-      return JSON.parse(line);
+      const parsed = JSON.parse(line);
+      return isEvidenceEvent(parsed) ? parsed : malformedEvidenceEvent(index + 1);
     } catch {
-      return null;
+      return malformedEvidenceEvent(index + 1);
     }
-  }).filter((event) => event !== null);
+  });
+}
+function isEvidenceEvent(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const event = value;
+  return event.version === 1 && (event.origin === "environment" || event.origin === "browser") && typeof event.group === "string" && typeof event.sourceId === "string" && typeof event.sourceTitle === "string" && typeof event.text === "string" && (event.relativeTimeSec === null || typeof event.relativeTimeSec === "number" && Number.isFinite(event.relativeTimeSec));
+}
+function malformedEvidenceEvent(line) {
+  return {
+    version: 1,
+    origin: "environment",
+    group: "environment",
+    sourceId: "capture-health",
+    sourceTitle: "Capture health",
+    stream: "stderr",
+    segment: "live",
+    timestamp: null,
+    relativeTimeSec: null,
+    text: `[malformed canonical evidence row at line ${line}]`,
+    captureGap: true
+  };
 }
 
 // src/environment/workers.ts
@@ -1459,30 +1692,6 @@ function normalize(text) {
 function writeEvent(text, stream, segment = 'live', extra = {}) {
   const normalized = normalize(text);
   if (normalized.length === 0) return;
-  const bytes = Buffer.byteLength(normalized);
-  if (bytesWritten + bytes > config.maxBytes) {
-    if (!truncated) {
-      truncated = true;
-      const now = Date.now();
-      const event = {
-        version: 1,
-        origin: 'environment',
-        group: config.source.group,
-        sourceId: config.source.id,
-        sourceTitle: config.source.title,
-        stream,
-        segment,
-        timestamp: new Date(now).toISOString(),
-        relativeTimeSec: Math.max(0, (now - config.startTimeMs) / 1000),
-        text: '[ProofShot capture truncated at configured byte limit]',
-        truncated: true,
-      };
-      fs.appendFileSync(config.evidencePath, JSON.stringify(event) + '\n');
-      fs.appendFileSync(config.logPath, event.text + '\n');
-    }
-    return;
-  }
-  bytesWritten += bytes;
   const now = Date.now();
   const event = {
     version: 1,
@@ -1497,8 +1706,33 @@ function writeEvent(text, stream, segment = 'live', extra = {}) {
     text: normalized,
     ...extra,
   };
-  fs.appendFileSync(config.evidencePath, JSON.stringify(event) + '\n');
-  fs.appendFileSync(config.logPath, normalized + '\n');
+  const serialized = JSON.stringify(event) + '\n';
+  const logLine = normalized + '\n';
+  const bytes = Buffer.byteLength(serialized) + Buffer.byteLength(logLine);
+  const truncationEvent = {
+    ...event,
+    text: '[ProofShot capture truncated at configured byte limit]',
+    truncated: true,
+  };
+  const truncationSerialized = JSON.stringify(truncationEvent) + '\n';
+  const truncationLogLine = truncationEvent.text + '\n';
+  const truncationBytes =
+    Buffer.byteLength(truncationSerialized) +
+    Buffer.byteLength(truncationLogLine);
+  if (bytesWritten + bytes + truncationBytes > config.maxBytes) {
+    if (!truncated) {
+      truncated = true;
+      if (bytesWritten + truncationBytes <= config.maxBytes) {
+        bytesWritten += truncationBytes;
+        fs.appendFileSync(config.evidencePath, truncationSerialized);
+        fs.appendFileSync(config.logPath, truncationLogLine);
+      }
+    }
+    return;
+  }
+  bytesWritten += bytes;
+  fs.appendFileSync(config.evidencePath, serialized);
+  fs.appendFileSync(config.logPath, logLine);
 }
 function attachLines(stream, streamName) {
   let buffer = '';
@@ -1535,48 +1769,66 @@ process.on('SIGTERM', () => {
 `;
 var PROCESS_RUNNER_SOURCE = `${COMMON_WORKER_SOURCE}
 const { spawn } = require('child_process');
+let stopping = false;
 const child = spawn(config.command, {
   cwd: config.cwd,
   env: { ...process.env, ...config.env },
-  shell: process.env.SHELL || '/bin/sh',
+  shell: config.shellPath,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 attachLines(child.stdout, 'stdout');
 attachLines(child.stderr, 'stderr');
 child.on('error', (error) => writeEvent(error.stack || error.message || String(error), 'stderr'));
 child.on('close', (code) => {
-  writeEvent('[process exited with code ' + (code == null ? 'unknown' : code) + ']', 'stderr');
+  writeEvent(
+    stopping
+      ? '[process stopped by ProofShot]'
+      : '[process exited with code ' + (code == null ? 'unknown' : code) + ']',
+    'stderr',
+  );
   removePidFile();
-  process.exit(code == null ? 1 : code);
+  process.exit(stopping ? 0 : (code == null ? 1 : code));
 });
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    stopping = true;
     try { child.kill(signal); } catch {}
   });
 }
 `;
 var FILE_RUNNER_SOURCE = `${COMMON_WORKER_SOURCE}
 let offset = config.offset || 0;
+let fileDevice = config.fileDevice;
+let fileInode = config.fileInode;
 let buffered = '';
 function readAvailable() {
-  let stat;
+  let fd;
   try {
-    stat = fs.statSync(config.filePath);
+    fd = fs.openSync(config.filePath, 'r');
   } catch {
     return;
   }
-  if (stat.size < offset) {
+  const stat = fs.fstatSync(fd);
+  if (
+    (fileDevice !== undefined && stat.dev !== fileDevice) ||
+    (fileInode !== undefined && stat.ino !== fileInode) ||
+    stat.size < offset
+  ) {
     offset = 0;
     writeEvent('[file rotated or truncated]', 'file', 'live', { captureGap: true });
   }
-  if (stat.size === offset) return;
-  const length = stat.size - offset;
-  const fd = fs.openSync(config.filePath, 'r');
+  fileDevice = stat.dev;
+  fileInode = stat.ino;
+  if (stat.size === offset) {
+    fs.closeSync(fd);
+    return;
+  }
+  const length = Math.min(stat.size - offset, 64 * 1024);
   const buffer = Buffer.alloc(length);
-  fs.readSync(fd, buffer, 0, length, offset);
+  const bytesRead = fs.readSync(fd, buffer, 0, length, offset);
   fs.closeSync(fd);
-  offset = stat.size;
-  buffered += buffer.toString();
+  offset += bytesRead;
+  buffered += buffer.subarray(0, bytesRead).toString().replace(/\\r\\n?/g, '\\n');
   const lines = buffered.split('\\n');
   buffered = lines.pop() || '';
   for (const line of lines) writeEvent(line, 'file');
@@ -1607,7 +1859,7 @@ async function waitForCaptureProcess(sourceId, pidFile, timeoutMs = 2e3) {
     if (identity) {
       return { sourceId, process: identity, pidFile };
     }
-    await new Promise((resolve12) => setTimeout(resolve12, 25));
+    await new Promise((resolve13) => setTimeout(resolve13, 25));
   } while (Date.now() < deadline);
   throw new Error(`ProofShot could not capture the log helper identity for ${sourceId}.`);
 }
@@ -1623,47 +1875,64 @@ async function startProcessCapture(definition, source, evidencePath, startTimeMs
     source,
     command: definition.command,
     cwd: definition.cwd,
-    env: definition.env
+    env: definition.env,
+    shellPath: getShellExecutable()
   };
   return startDetachedWorker(source.id, pidFile, PROCESS_RUNNER_SOURCE, config);
 }
 async function startFileCapture(filePath, source, evidencePath, startTimeMs, maxBytes, stripAnsi) {
   const pidFile = `${source.logPath}.pid`;
   let offset = 0;
+  let fileDevice;
+  let fileInode;
+  let liveMaxBytes = maxBytes;
   if (fs11.existsSync(filePath)) {
-    const raw = fs11.readFileSync(filePath, "utf-8");
-    appendHistory(
-      raw,
-      source,
-      evidencePath,
-      maxBytes,
-      stripAnsi,
-      "file"
-    );
-    offset = fs11.statSync(filePath).size;
+    const fd = fs11.openSync(filePath, "r");
+    try {
+      const stat = fs11.fstatSync(fd);
+      offset = stat.size;
+      fileDevice = stat.dev;
+      fileInode = stat.ino;
+      const historyBudget = Math.max(1, Math.floor(maxBytes / 2));
+      liveMaxBytes = Math.max(1, maxBytes - historyBudget);
+      const historyLength = Math.min(stat.size, historyBudget);
+      const history = Buffer.alloc(historyLength);
+      fs11.readSync(fd, history, 0, historyLength, stat.size - historyLength);
+      appendHistory(
+        history.toString("utf-8"),
+        source,
+        evidencePath,
+        historyBudget,
+        stripAnsi,
+        "file"
+      );
+    } finally {
+      fs11.closeSync(fd);
+    }
   }
   const config = {
     evidencePath,
     logPath: source.logPath,
     pidFile,
     startTimeMs,
-    maxBytes,
+    maxBytes: liveMaxBytes,
     stripAnsi,
     source,
     offset,
+    fileDevice,
+    fileInode,
     filePath
   };
   return startDetachedWorker(source.id, pidFile, FILE_RUNNER_SOURCE, config);
 }
 function appendHistory(raw, source, evidencePath, maxBytes, stripAnsi, stream) {
   const normalized = normalizeLogText(raw, stripAnsi);
-  const buffer = Buffer.from(normalized);
-  const truncated = buffer.byteLength > maxBytes;
-  const retained = truncated ? buffer.subarray(Math.max(0, buffer.byteLength - maxBytes)).toString("utf-8") : normalized;
-  const lines = retained.split("\n").filter((line) => line.length > 0);
-  fs11.appendFileSync(source.logPath, retained + (retained.endsWith("\n") ? "" : "\n"));
-  for (const line of lines) {
-    appendEvidenceEvent(evidencePath, {
+  const lines = normalized.split("\n").filter((line) => line.length > 0);
+  const retained = [];
+  let retainedBytes = 0;
+  let truncated = false;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const event = {
       version: 1,
       origin: "environment",
       group: source.group,
@@ -1673,9 +1942,55 @@ function appendHistory(raw, source, evidencePath, maxBytes, stripAnsi, stream) {
       segment: "history",
       timestamp: null,
       relativeTimeSec: null,
-      text: line,
-      truncated: truncated || void 0
-    });
+      text: lines[index]
+    };
+    const serialized = JSON.stringify(event) + "\n";
+    const logLine = `${lines[index]}
+`;
+    const eventBytes = Buffer.byteLength(serialized) + Buffer.byteLength(logLine);
+    if (retainedBytes + eventBytes > maxBytes) {
+      truncated = true;
+      break;
+    }
+    retained.unshift({ event, serialized, logLine });
+    retainedBytes += eventBytes;
+  }
+  if (truncated && retained.length > 0) {
+    while (retained.length > 0) {
+      retained[0].event.truncated = true;
+      retained[0].serialized = JSON.stringify(retained[0].event) + "\n";
+      retainedBytes = retained.reduce(
+        (total, entry) => total + Buffer.byteLength(entry.serialized) + Buffer.byteLength(entry.logLine),
+        0
+      );
+      if (retainedBytes <= maxBytes) break;
+      retained.shift();
+    }
+  }
+  if (truncated && retained.length === 0) {
+    const event = {
+      version: 1,
+      origin: "environment",
+      group: source.group,
+      sourceId: source.id,
+      sourceTitle: source.title,
+      stream,
+      segment: "history",
+      timestamp: null,
+      relativeTimeSec: null,
+      text: "[ProofShot capture truncated at configured byte limit]",
+      truncated: true
+    };
+    const serialized = JSON.stringify(event) + "\n";
+    const logLine = `${event.text}
+`;
+    if (Buffer.byteLength(serialized) + Buffer.byteLength(logLine) <= maxBytes) {
+      retained.push({ event, serialized, logLine });
+    }
+  }
+  for (const entry of retained) {
+    fs11.appendFileSync(evidencePath, entry.serialized);
+    fs11.appendFileSync(source.logPath, entry.logLine);
   }
 }
 function createWorkerConfig(params) {
@@ -1692,7 +2007,7 @@ async function startDetachedWorker(sourceId, pidFile, workerSource, config) {
   worker.unref();
   let identity = worker.pid ? captureProcessIdentity(worker.pid) : null;
   for (let attempt = 0; !identity && attempt < 20; attempt += 1) {
-    await new Promise((resolve12) => setTimeout(resolve12, 10));
+    await new Promise((resolve13) => setTimeout(resolve13, 10));
     identity = worker.pid ? captureProcessIdentity(worker.pid) : null;
   }
   if (!identity) {
@@ -1734,6 +2049,7 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
   fs12.mkdirSync(captureDir, { recursive: true, mode: 448 });
   fs12.writeFileSync(evidencePath, "", { flag: "a", mode: 384 });
   let state = null;
+  let pendingLauncher = null;
   let connection;
   try {
     connection = config.launch.kind === "panes" ? startOwnedTmux(config, proofShotSessionName, (startedConnection) => {
@@ -1744,7 +2060,19 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
       );
       state = startedState;
       onState(startedState);
-    }) : await startExternalTmux(config);
+    }) : await startExternalTmux(config, (launcher) => {
+      pendingLauncher = {
+        kind: "launcher",
+        evidencePath,
+        sources: [],
+        launcher: {
+          sourceId: "external-launcher",
+          process: launcher,
+          pidFile: ""
+        }
+      };
+      onState(pendingLauncher);
+    });
     if (!state) {
       const connectedState = createTmuxState(
         config,
@@ -1758,6 +2086,9 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
     if (state) {
       await stopTmuxEnvironment(state).catch(() => {
       });
+    } else if (pendingLauncher) {
+      await terminateOwnedProcessTree(pendingLauncher.launcher.process).catch(() => {
+      });
     }
     throw error;
   }
@@ -1770,11 +2101,19 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
     const panes = tmuxSources.map(
       ({ config: sourceConfig, mapping }) => resolvePane(
         connection.socketPath,
+        connection.sessionName,
         sourceConfig,
         mapping,
         logsDir
       )
     );
+    const resolvedPaneIds = /* @__PURE__ */ new Set();
+    for (const { pane } of panes) {
+      if (resolvedPaneIds.has(pane.paneId)) {
+        throw new Error(`Multiple log sources resolved to tmux pane ${pane.paneId}.`);
+      }
+      resolvedPaneIds.add(pane.paneId);
+    }
     disambiguateTitles(panes);
     activeState = {
       ...activeState,
@@ -1797,12 +2136,14 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
         );
       }
       const pidFile = path8.join(captureDir, `${pane.source.id}.pid`);
+      const sourceBudget = logs.maxBytesPerSource || 5 * 1024 * 1024;
+      const historyBudget = Math.max(1, Math.floor(sourceBudget / 2));
       const workerConfig = createWorkerConfig({
         evidencePath,
         logPath: pane.source.logPath,
         pidFile,
         startTimeMs,
-        maxBytes: logs.maxBytesPerSource || 5 * 1024 * 1024,
+        maxBytes: Math.max(1, sourceBudget - historyBudget),
         stripAnsi: logs.stripAnsi !== false,
         source: pane.source
       });
@@ -1833,7 +2174,7 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
         history,
         pane.source,
         evidencePath,
-        logs.maxBytesPerSource || 5 * 1024 * 1024,
+        historyBudget,
         logs.stripAnsi !== false,
         "pty"
       );
@@ -1847,8 +2188,7 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
         segment: "history",
         timestamp: null,
         relativeTimeSec: null,
-        text: "[tmux history/live capture boundary]",
-        captureGap: true
+        text: "[tmux history/live capture boundary]"
       });
       const capture = await waitForCaptureProcess(pane.source.id, pidFile);
       activeState = {
@@ -1868,57 +2208,109 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
   }
 }
 async function stopTmuxEnvironment(state) {
-  if (!processIdentityMatches(state.serverProcess) && !fs12.existsSync(state.socket.path) && state.captures.every((capture) => !processIdentityMatches(capture.process))) {
-    return;
+  const errors = [];
+  let socketMatches = false;
+  let socketIdentityError = null;
+  if (fs12.existsSync(state.socket.path)) {
+    try {
+      assertSocketIdentity(state);
+      socketMatches = true;
+    } catch (error) {
+      socketIdentityError = toError(error);
+    }
   }
-  assertSocketIdentity(state);
-  if (!processIdentityMatches(state.serverProcess)) {
-    throw new Error("tmux server identity changed; refusing widened cleanup.");
+  const currentServer = captureProcessIdentity(state.serverProcess.pid);
+  const serverIdentityReused = Boolean(
+    currentServer && !processIdentitiesMatch(currentServer, state.serverProcess)
+  );
+  if (serverIdentityReused) {
+    errors.push(new Error("tmux server identity changed; refusing widened cleanup."));
   }
-  if (state.stopCommand) {
-    await runCommand(state.stopCommand, state.stopCwd || process.cwd());
-  } else if (state.ownsSession && tmuxHasSession(state)) {
-    tmuxExec(state.socket.path, ["kill-session", "-t", state.sessionName]);
-  } else {
-    for (const pane of state.panes.filter(
-      (candidate) => candidate.captureAttached
-    )) {
-      try {
-        tmuxExec(state.socket.path, ["pipe-pane", "-t", pane.paneId]);
-      } catch {
+  const serverMatches = processIdentityMatches(state.serverProcess);
+  if (socketIdentityError && (serverMatches || state.captures.some((capture) => processIdentityMatches(capture.process)))) {
+    errors.push(socketIdentityError);
+  }
+  if (serverMatches && socketMatches) {
+    try {
+      if (state.stopCommand) {
+        await runCommand(state.stopCommand, state.stopCwd || process.cwd());
+      } else if (state.ownsSession && tmuxHasSession(state)) {
+        tmuxExec(state.socket.path, ["kill-session", "-t", state.sessionName]);
+      } else {
+        for (const pane of state.panes.filter(
+          (candidate) => candidate.captureAttached
+        )) {
+          try {
+            tmuxExec(state.socket.path, ["pipe-pane", "-t", pane.paneId]);
+          } catch {
+          }
+        }
       }
+    } catch (error) {
+      errors.push(toError(error));
     }
   }
   for (const capture of state.captures) {
-    await terminateOwnedProcess(capture.process, { graceMs: 500 });
-    if (processIdentityMatches(capture.process)) {
-      throw new Error(`Log helper for ${capture.sourceId} did not stop.`);
-    }
-  }
-  if (state.ownsServer && processIdentityMatches(state.serverProcess)) {
     try {
-      tmuxExec(state.socket.path, ["kill-server"]);
-    } catch {
-      await terminateOwnedProcessTree(state.serverProcess, { graceMs: 500 });
+      await terminateOwnedProcess(capture.process, { graceMs: 500 });
+      if (processIdentityMatches(capture.process)) {
+        throw new Error(`Log helper for ${capture.sourceId} did not stop.`);
+      }
+    } catch (error) {
+      errors.push(toError(error));
     }
   }
-  if (state.ownsServer && processIdentityMatches(state.serverProcess)) {
-    throw new Error("Owned tmux server did not stop.");
-  }
-  if (state.ownsServer && fs12.existsSync(state.socket.path)) {
-    const currentSocket = captureSocketIdentity(state.socket.path);
-    if (currentSocket.inode !== state.socket.inode || currentSocket.uid !== state.socket.uid) {
-      throw new Error("tmux socket changed before final cleanup.");
+  if (state.ownsServer && !serverIdentityReused) {
+    if (processIdentityMatches(state.serverProcess) && socketMatches) {
+      try {
+        tmuxExec(state.socket.path, ["kill-server"]);
+      } catch {
+      }
     }
-    fs12.unlinkSync(state.socket.path);
+    if (processIdentityMatches(state.serverProcess)) {
+      try {
+        await terminateOwnedProcessTree(state.serverProcess, { graceMs: 500 });
+      } catch (error) {
+        errors.push(toError(error));
+      }
+    }
+    if (processIdentityMatches(state.serverProcess)) {
+      errors.push(new Error("Owned tmux server did not stop."));
+    }
   }
-  if (state.ownsSession && tmuxHasSession(state)) {
-    throw new Error(`Owned tmux session ${state.sessionName} did not stop.`);
+  if (state.ownsServer && socketMatches && !processIdentityMatches(state.serverProcess) && fs12.existsSync(state.socket.path)) {
+    try {
+      const currentSocket = captureSocketIdentity(state.socket.path);
+      if (currentSocket.inode !== state.socket.inode || currentSocket.uid !== state.socket.uid) {
+        throw new Error("tmux socket changed before final cleanup.");
+      }
+      fs12.unlinkSync(state.socket.path);
+    } catch (error) {
+      errors.push(toError(error));
+    }
   }
+  if (state.ownsSession && processIdentityMatches(state.serverProcess) && socketMatches && tmuxHasSession(state)) {
+    errors.push(new Error(`Owned tmux session ${state.sessionName} did not stop.`));
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "One or more tmux cleanup steps failed.");
+  }
+}
+function toError(error) {
+  return error instanceof Error ? error : new Error(String(error));
 }
 function startOwnedTmux(config, proofShotSessionName, onStarted) {
   if (config.launch.kind !== "panes" || config.launch.panes.length === 0) {
     throw new Error("tmux pane launch requires at least one pane.");
+  }
+  const paneIds = /* @__PURE__ */ new Set();
+  for (const pane of config.launch.panes) {
+    validateId(pane.id);
+    if (paneIds.has(pane.id)) {
+      throw new Error(`Duplicate tmux pane id: ${pane.id}`);
+    }
+    paneIds.add(pane.id);
+    buildPaneCommand(pane);
   }
   const uid = process.getuid?.() ?? process.pid;
   const socketDir = path8.join("/tmp", `proofshot-${uid}`, "tmux");
@@ -1953,7 +2345,6 @@ function startOwnedTmux(config, proofShotSessionName, onStarted) {
       group: firstPane.group
     }
   ];
-  configurePane(socketPath, first.paneId, firstPane.id, firstPane.title);
   onStarted({
     socketPath,
     sessionName,
@@ -1961,6 +2352,7 @@ function startOwnedTmux(config, proofShotSessionName, onStarted) {
     ownsServer: true,
     ownsSession: true
   });
+  configurePane(socketPath, first.paneId, firstPane.id, firstPane.title);
   for (const pane of remainingPanes) {
     const created = parsePaneOutput(
       tmuxExec(socketPath, [
@@ -2016,17 +2408,25 @@ function createTmuxState(config, connection, evidencePath) {
     stopCwd: config.cwd
   };
 }
-async function startExternalTmux(config) {
+async function startExternalTmux(config, onLauncherStarted) {
   if (config.launch.kind !== "external-command" || !config.connection) {
     throw new Error("External tmux launch requires a connection contract.");
   }
   const hintedSocket = config.connection.socket;
   const socketExistedBefore = hintedSocket ? fs12.existsSync(hintedSocket) : true;
+  const attachOnly = config.connection.ownership === "attach";
+  if (!attachOnly && (!hintedSocket && !config.launch.stopCommand || socketExistedBefore && !config.launch.stopCommand)) {
+    throw new Error(
+      "External tmux launch against an existing or undisclosed socket requires stopCommand."
+    );
+  }
   const output = await runCommand(
     config.launch.command,
-    config.cwd || process.cwd()
+    config.cwd || process.cwd(),
+    onLauncherStarted,
+    config.launch.timeoutMs
   );
-  const parsed = config.connection.format === "json" ? parseJsonConnection(output) : parseAttachCommand(output);
+  const parsed = config.connection.format === "json" ? parseJsonConnection(output) : parseAttachCommand(output, config.cwd || process.cwd());
   const ownsCreatedSocket = hintedSocket !== void 0 && path8.resolve(hintedSocket) === path8.resolve(parsed.socketPath) && !socketExistedBefore;
   return {
     ...parsed,
@@ -2063,7 +2463,7 @@ function resolveTmuxSources(config, logs, connection) {
     mapping
   }));
 }
-function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
+function resolvePane(socketPath, sessionName, sourceConfig, mapping, logsDir) {
   let target;
   if ("connectionKey" in sourceConfig.match) {
     if (!mapping) {
@@ -2076,7 +2476,8 @@ function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
     const tag = sourceConfig.match.tag;
     const matches = tmuxExec(socketPath, [
       "list-panes",
-      "-a",
+      "-t",
+      sessionName,
       "-F",
       "#{pane_id}	#{@proofshot-source}"
     ]).split("\n").filter((line) => line.split("	")[1] === tag);
@@ -2094,10 +2495,15 @@ function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
     "-p",
     "-t",
     target,
-    "#{pane_id}	#{pane_index}	#{pane_pid}	#{pane_title}	#{session_name}:#{window_name}.#{pane_index}"
+    "#{pane_id}	#{pane_index}	#{pane_pid}	#{pane_title}	#{session_name}	#{session_name}:#{window_name}.#{pane_index}"
   ]).split("	");
-  if (fields.length !== 5) {
+  if (fields.length !== 6) {
     throw new Error(`Could not resolve tmux pane metadata for ${target}.`);
+  }
+  if (fields[4] !== sessionName) {
+    throw new Error(
+      `tmux pane ${fields[0]} belongs to session "${fields[4]}", expected "${sessionName}".`
+    );
   }
   const paneIndex = Number(fields[1]);
   const tmuxTitle = fields[3].trim();
@@ -2122,7 +2528,7 @@ function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
       sourceId: source.id,
       title,
       group,
-      target: fields[4],
+      target: fields[5],
       captureAttached: false
     }
   };
@@ -2172,28 +2578,51 @@ function parsePaneOutput(output) {
 }
 function parseJsonConnection(output) {
   const parsed = JSON.parse(output);
-  if (!parsed.tmux || !path8.isAbsolute(parsed.tmux.socket) || typeof parsed.tmux.session !== "string") {
+  if (!parsed.tmux || !path8.isAbsolute(parsed.tmux.socket) || typeof parsed.tmux.session !== "string" || parsed.tmux.session.length === 0 || parsed.tmux.panes !== void 0 && !Array.isArray(parsed.tmux.panes)) {
     throw new Error("External launcher returned invalid tmux JSON.");
+  }
+  const paneMappings = [];
+  const keys = /* @__PURE__ */ new Set();
+  const paneIds = /* @__PURE__ */ new Set();
+  for (const [index, pane] of (parsed.tmux.panes || []).entries()) {
+    if (typeof pane !== "object" || pane === null || typeof pane.key !== "string" || !/^[A-Za-z0-9_-]+$/.test(pane.key) || typeof pane.paneId !== "string" || !/^%\d+$/.test(pane.paneId) || pane.title !== void 0 && typeof pane.title !== "string" || pane.group !== void 0 && typeof pane.group !== "string") {
+      throw new Error(`External launcher returned invalid pane mapping at index ${index}.`);
+    }
+    if (keys.has(pane.key) || paneIds.has(pane.paneId)) {
+      throw new Error("External launcher returned duplicate pane mappings.");
+    }
+    keys.add(pane.key);
+    paneIds.add(pane.paneId);
+    paneMappings.push(pane);
   }
   return {
     socketPath: parsed.tmux.socket,
     sessionName: parsed.tmux.session,
-    paneMappings: parsed.tmux.panes || [],
+    paneMappings,
     ownsServer: false,
     ownsSession: false
   };
 }
-function parseAttachCommand(output) {
-  const match = output.match(
-    /tmux\s+(?:(-S)\s+(\S+)|(-L)\s+(\S+)).*?attach(?:-session)?\s+-t\s+(\S+)/
+function parseAttachCommand(output, cwd) {
+  const tokens = tokenizeShellCommand(output);
+  const tmuxIndex = tokens.findIndex((token) => path8.basename(token) === "tmux");
+  const attachIndex = tokens.findIndex(
+    (token, index) => index > tmuxIndex && (token === "attach" || token === "attach-session")
   );
-  if (!match) {
+  const targetIndex = tokens.indexOf("-t", attachIndex + 1);
+  const socketIndex = tokens.indexOf("-S", tmuxIndex + 1);
+  const labelIndex = tokens.indexOf("-L", tmuxIndex + 1);
+  if (tmuxIndex < 0 || attachIndex < 0 || targetIndex < 0 || !tokens[targetIndex + 1] || socketIndex < 0 && labelIndex < 0) {
     throw new Error("External launcher did not emit a supported tmux attach command.");
   }
-  const flag = match[1] || match[3];
-  const value = stripShellQuotes(match[2] || match[4]);
-  const sessionName = stripShellQuotes(match[5]);
-  const socketPath = flag === "-S" ? path8.resolve(value) : execFileSync2(
+  const flag = socketIndex >= 0 ? "-S" : "-L";
+  const valueIndex = socketIndex >= 0 ? socketIndex + 1 : labelIndex + 1;
+  const value = tokens[valueIndex];
+  const sessionName = tokens[targetIndex + 1];
+  if (!value) {
+    throw new Error("External launcher emitted a tmux socket flag without a value.");
+  }
+  const socketPath = flag === "-S" ? path8.resolve(cwd, value) : execFileSync2(
     "tmux",
     ["-L", value, "display-message", "-p", "#{socket_path}"],
     { encoding: "utf-8" }
@@ -2205,6 +2634,37 @@ function parseAttachCommand(output) {
     ownsServer: false,
     ownsSession: false
   };
+}
+function tokenizeShellCommand(command) {
+  const tokens = [];
+  let current = "";
+  let quote = null;
+  let escaping = false;
+  for (const character of command.trim()) {
+    if (escaping) {
+      current += character;
+      escaping = false;
+    } else if (character === "\\" && quote !== "'") {
+      escaping = true;
+    } else if (quote) {
+      if (character === quote) quote = null;
+      else current += character;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+    } else if (/\s/.test(character)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += character;
+    }
+  }
+  if (escaping || quote) {
+    throw new Error("External launcher emitted an unterminated tmux attach command.");
+  }
+  if (current) tokens.push(current);
+  return tokens;
 }
 function tmuxExec(socketPath, args) {
   return execFileSync2("tmux", ["-S", socketPath, ...args], {
@@ -2223,7 +2683,7 @@ function tmuxHasSession(state) {
     return false;
   }
 }
-async function runCommand(command, cwd) {
+async function runCommand(command, cwd, onStarted, timeoutMs = 3e4) {
   const child = spawnShellCommand(command, {
     cwd,
     detached: true,
@@ -2233,6 +2693,12 @@ async function runCommand(command, cwd) {
   if (!identity) {
     throw new Error("ProofShot could not capture the external launcher identity.");
   }
+  try {
+    onStarted?.(identity);
+  } catch (error) {
+    await terminateOwnedProcessTree(identity);
+    throw error;
+  }
   let stdout = "";
   let stderr = "";
   child.stdout?.on("data", (chunk) => {
@@ -2241,10 +2707,19 @@ async function runCommand(command, cwd) {
   child.stderr?.on("data", (chunk) => {
     stderr += chunk.toString();
   });
-  const exitCode = await new Promise((resolve12, reject) => {
+  const outcome = await new Promise((resolve13, reject) => {
+    const timer = setTimeout(() => resolve13({ kind: "timeout" }), timeoutMs);
     child.once("error", reject);
-    child.once("close", resolve12);
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve13({ kind: "exit", code });
+    });
   });
+  if (outcome.kind === "timeout") {
+    await terminateOwnedProcessTree(identity);
+    throw new Error(`External environment command timed out after ${timeoutMs}ms.`);
+  }
+  const exitCode = outcome.code;
   if (exitCode !== 0) {
     await terminateOwnedProcessTree(identity);
     throw new Error(
@@ -2290,9 +2765,6 @@ function validateId(id) {
 }
 function shellQuote2(value) {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-function stripShellQuotes(value) {
-  return value.replace(/^(['"])(.*)\1$/, "$2");
 }
 
 // src/environment/runtime.ts
@@ -2349,14 +2821,32 @@ async function stopOwnedEnvironment(state) {
     case "tmux":
       await stopTmuxEnvironment(state);
       return;
-    case "processes":
-      for (const capture of state.processes) {
-        await terminateOwnedProcessTree(capture.process, { graceMs: 1e3 });
-        if (ownedProcessTreeIsAlive(capture.process)) {
-          throw new Error(`Environment process ${capture.sourceId} did not stop.`);
-        }
+    case "launcher":
+      await terminateOwnedProcessTree(state.launcher.process, { graceMs: 1e3 });
+      if (ownedProcessTreeIsAlive(state.launcher.process)) {
+        throw new Error("External environment launcher did not stop.");
       }
       return;
+    case "processes": {
+      const errors = [];
+      for (const capture of state.processes) {
+        try {
+          await terminateOwnedProcessTree(capture.process, { graceMs: 1e3 });
+          if (ownedProcessTreeIsAlive(capture.process)) {
+            throw new Error(`Environment process ${capture.sourceId} did not stop.`);
+          }
+        } catch (error) {
+          errors.push(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(
+          errors,
+          "One or more environment processes did not stop."
+        );
+      }
+      return;
+    }
     default: {
       const exhaustiveState = state;
       return exhaustiveState;
@@ -2371,15 +2861,33 @@ async function startProcessEnvironment(definitions, logs, sessionDir, startTimeM
   const configuredSources = (logs.sources || []).filter(
     (source) => source.kind === "process"
   );
-  const sources = configuredSources.length > 0 ? configuredSources : definitions.map((definition) => ({
-    id: definition.id,
-    title: definition.title,
-    group: definition.group,
-    kind: "process",
-    processId: definition.id,
-    include: void 0,
-    exclude: void 0
-  }));
+  const sourceByProcessId = /* @__PURE__ */ new Map();
+  for (const source of configuredSources) {
+    if (sourceByProcessId.has(source.processId)) {
+      throw new Error(
+        `Multiple log sources reference process ${source.processId}; each process can be launched only once.`
+      );
+    }
+    sourceByProcessId.set(source.processId, source);
+  }
+  for (const source of configuredSources) {
+    if (!definitions.some((definition) => definition.id === source.processId)) {
+      throw new Error(
+        `Log source ${source.id} references unknown process ${source.processId}.`
+      );
+    }
+  }
+  const sources = definitions.map(
+    (definition) => sourceByProcessId.get(definition.id) || {
+      id: definition.id,
+      title: definition.title,
+      group: definition.group,
+      kind: "process",
+      processId: definition.id,
+      include: void 0,
+      exclude: void 0
+    }
+  );
   validateUniqueIds(sources.map((source) => source.id));
   let state = {
     kind: "processes",
@@ -2393,11 +2901,7 @@ async function startProcessEnvironment(definitions, logs, sessionDir, startTimeM
       const definition = definitions.find(
         (candidate) => candidate.id === sourceConfig.processId
       );
-      if (!definition) {
-        throw new Error(
-          `Log source ${sourceConfig.id} references unknown process ${sourceConfig.processId}.`
-        );
-      }
+      if (!definition) throw new Error(`Missing process ${sourceConfig.processId}.`);
       const source = {
         id: sourceConfig.id,
         title: sourceConfig.title || definition.title || definition.id,
@@ -2433,6 +2937,9 @@ async function startProcessEnvironment(definitions, logs, sessionDir, startTimeM
 async function attachFileSources(state, fileSources, logs, sessionDir, startTimeMs, onState) {
   if (fileSources.length === 0) {
     return state;
+  }
+  if (state.kind === "launcher") {
+    throw new Error("Cannot attach file sources before the environment launcher exits.");
   }
   const knownIds = new Set(state.sources.map((source) => source.id));
   const logsDir = path9.join(sessionDir, "logs");
@@ -2496,7 +3003,7 @@ async function waitForReadiness(checks) {
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
       }
-      await new Promise((resolve12) => setTimeout(resolve12, 100));
+      await new Promise((resolve13) => setTimeout(resolve13, 100));
     }
     if (lastError) {
       const target = check.kind === "http" ? check.url : `${check.host || "127.0.0.1"}:${check.port}`;
@@ -2505,7 +3012,7 @@ async function waitForReadiness(checks) {
   }
 }
 function connectTcp(host, port) {
-  return new Promise((resolve12, reject) => {
+  return new Promise((resolve13, reject) => {
     const socket = net2.createConnection({ host, port });
     const timer = setTimeout(() => {
       socket.destroy();
@@ -2514,7 +3021,7 @@ function connectTcp(host, port) {
     socket.once("connect", () => {
       clearTimeout(timer);
       socket.end();
-      resolve12();
+      resolve13();
     });
     socket.once("error", (error) => {
       clearTimeout(timer);
@@ -2554,15 +3061,31 @@ async function stopOwnedBrowser(session) {
     );
   }
   assertIdentityNotReused(identity, "browser");
+  let gracefulCloseError;
   if (identity && processIdentityMatches(identity)) {
-    closeBrowser(session.sessionName);
+    try {
+      closeBrowser(session.sessionName);
+    } catch (error) {
+      gracefulCloseError = error;
+    }
   }
   await terminateOwnedProcessTree(identity);
   if (identity && ownedProcessTreeIsAlive(identity)) {
-    throw new Error(`Owned browser process session ${identity.sessionId} did not stop.`);
+    throw new AggregateError(
+      [
+        ...gracefulCloseError ? [gracefulCloseError] : [],
+        new Error(`Owned browser process session ${identity.sessionId} did not stop.`)
+      ],
+      "Browser cleanup failed."
+    );
   }
   if (session.agentBrowserSocketDir) {
     clearAgentBrowserSessionFiles(session.agentBrowserSocketDir, session.sessionName);
+  }
+  if (gracefulCloseError) {
+    console.warn(
+      `ProofShot graceful browser close failed; exact owned-process cleanup succeeded: ${gracefulCloseError instanceof Error ? gracefulCloseError.message : String(gracefulCloseError)}`
+    );
   }
 }
 async function stopOwnedServer(session) {
@@ -2623,7 +3146,7 @@ import * as os4 from "os";
 import * as path10 from "path";
 import { randomUUID as randomUUID2 } from "crypto";
 var SESSION_REGISTRY_DIRECTORY = "sessions";
-function getSessionRegistryDir(env = process.env, homeDir = os4.homedir()) {
+function getSessionRegistryDir(env = process.env, homeDir = os4.userInfo().homedir) {
   const stateHome = env.XDG_STATE_HOME || path10.join(homeDir, ".local", "state");
   return path10.join(stateHome, "proofshot", SESSION_REGISTRY_DIRECTORY);
 }
@@ -2743,7 +3266,7 @@ import * as path12 from "path";
 import { createHash as createHash2 } from "crypto";
 import { execFileSync as execFileSync3 } from "child_process";
 var MANIFEST_FILENAME = "artifact-manifest.json";
-function captureGitProvenance(cwd = process.cwd()) {
+function captureGitProvenance(cwd = process.cwd(), excludedPaths = []) {
   const git = (args) => execFileSync3("git", args, {
     cwd,
     encoding: "utf-8",
@@ -2754,7 +3277,17 @@ function captureGitProvenance(cwd = process.cwd()) {
     const branch = git(["branch", "--show-current"]);
     const commitSha = git(["rev-parse", "HEAD"]);
     const treeHash = git(["rev-parse", "HEAD^{tree}"]);
-    const sourceDirty = git(["status", "--porcelain", "--untracked-files=all"]) !== "";
+    const exclusions = excludedPaths.map((excludedPath) => path12.relative(cwd, path12.resolve(excludedPath))).filter((relativePath) => relativePath && !relativePath.startsWith("..")).map(
+      (relativePath) => `:(exclude)${relativePath.split(path12.sep).join(path12.posix.sep)}`
+    );
+    const sourceDirty = git([
+      "status",
+      "--porcelain",
+      "--untracked-files=all",
+      "--",
+      ".",
+      ...exclusions
+    ]) !== "";
     return { repository, branch, commitSha, treeHash, sourceDirty };
   } catch {
     return {
@@ -2767,10 +3300,22 @@ function captureGitProvenance(cwd = process.cwd()) {
   }
 }
 function normalizeRepository(remote) {
-  return remote.trim().replace(/^git@([^:]+):/, "$1/").replace(/^ssh:\/\/git@/, "").replace(/^https?:\/\//, "").replace(/\.git$/, "").replace(/\/$/, "");
+  const trimmed = remote.trim();
+  const scpStyle = trimmed.match(/^(?:[^@]+@)?([^:]+):(.+)$/);
+  if (scpStyle && !trimmed.includes("://")) {
+    return `${scpStyle[1]}/${scpStyle[2]}`.replace(/\.git$/, "").replace(/\/$/, "");
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.hostname}${parsed.pathname}`.replace(/\.git$/, "").replace(/\/$/, "");
+  } catch {
+    return trimmed.replace(/\.git$/, "").replace(/\/$/, "");
+  }
 }
 function writeArtifactManifest(options) {
-  const finalized = options.finalizedProvenance || captureGitProvenance(options.metadata.repositoryRoot);
+  const finalized = options.finalizedProvenance || captureGitProvenance(options.metadata.repositoryRoot, [
+    path12.dirname(options.sessionDir)
+  ]);
   const sourceDrift = (options.metadata.repository || "") !== finalized.repository || options.metadata.branch !== finalized.branch || options.metadata.commitSha !== finalized.commitSha || (options.metadata.treeHash || "") !== finalized.treeHash || options.metadata.sourceDirty !== false || finalized.sourceDirty;
   const artifacts = collectManifestArtifacts(
     options.sessionDir,
@@ -2803,13 +3348,8 @@ function loadArtifactManifest(sessionDir) {
     if (fs16.lstatSync(sessionDir).isSymbolicLink() || fs16.lstatSync(manifestPath).isSymbolicLink()) {
       return null;
     }
-    const parsed = JSON.parse(
-      fs16.readFileSync(manifestPath, "utf-8")
-    );
-    if (parsed.version !== 1 || parsed.completion !== "complete" || !Array.isArray(parsed.artifacts)) {
-      return null;
-    }
-    return parsed;
+    const parsed = JSON.parse(fs16.readFileSync(manifestPath, "utf-8"));
+    return isArtifactManifest(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -2817,15 +3357,25 @@ function loadArtifactManifest(sessionDir) {
 function validateManifestArtifacts(sessionDir, manifest) {
   const root = fs16.realpathSync(sessionDir);
   const ids = /* @__PURE__ */ new Set();
-  for (const artifact of manifest.artifacts) {
+  for (const [index, artifact] of manifest.artifacts.entries()) {
     if (ids.has(artifact.id)) {
       throw new Error(`Duplicate artifact ID: ${artifact.id}`);
     }
     ids.add(artifact.id);
+    if (artifact.order !== index) {
+      throw new Error(`Artifact order is invalid for ${artifact.id}.`);
+    }
     if (!artifact.path || path12.isAbsolute(artifact.path) || artifact.path.split(/[\\/]/).includes("..")) {
       throw new Error(`Unsafe artifact path: ${artifact.path}`);
     }
     const artifactPath = path12.resolve(sessionDir, artifact.path);
+    let componentPath = sessionDir;
+    for (const component of artifact.path.split(/[\\/]/)) {
+      componentPath = path12.join(componentPath, component);
+      if (fs16.lstatSync(componentPath).isSymbolicLink()) {
+        throw new Error(`Artifact path contains a symlink: ${artifact.path}`);
+      }
+    }
     const stat = fs16.lstatSync(artifactPath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
       throw new Error(`Artifact is not a regular file: ${artifact.path}`);
@@ -2841,11 +3391,34 @@ function validateManifestArtifacts(sessionDir, manifest) {
     }
   }
 }
+function isArtifactManifest(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const manifest = value;
+  return manifest.version === 1 && typeof manifest.sessionId === "string" && typeof manifest.repository === "string" && typeof manifest.branch === "string" && typeof manifest.commitSha === "string" && typeof manifest.treeHash === "string" && typeof manifest.sourceDirty === "boolean" && typeof manifest.sourceDrift === "boolean" && typeof manifest.startedAt === "string" && typeof manifest.finalizedAt === "string" && manifest.completion === "complete" && (manifest.verdict === "PASS" || manifest.verdict === "FAIL" || manifest.verdict === "INCOMPLETE" || manifest.verdict === "BLOCKED") && Array.isArray(manifest.artifacts) && manifest.artifacts.every(
+    (artifact, index) => typeof artifact === "object" && artifact !== null && typeof artifact.id === "string" && typeof artifact.path === "string" && typeof artifact.sha256 === "string" && typeof artifact.size === "number" && artifact.size >= 0 && artifact.order === index && [
+      "screenshot",
+      "video",
+      "viewer",
+      "summary",
+      "evidence",
+      "verdict",
+      "log"
+    ].includes(artifact.kind)
+  );
+}
 function collectManifestArtifacts(sessionDir, evidence) {
   const screenshotOrder = new Map(
     evidence.actions.map((action) => action.action.match(/^screenshot\s+(.+)$/)?.[1]).filter((value) => Boolean(value)).map((value, index) => [path12.basename(value), index])
   );
-  const candidates = listArtifactFiles(sessionDir).filter((file) => classifyArtifact(file) !== null).sort((left, right) => {
+  const verifiedScreenshots = new Set(
+    evidence.screenshots.filter(
+      (screenshot) => screenshot.validPng && !screenshot.visuallyBlank && screenshot.sha256 !== null
+    ).map((screenshot) => screenshot.file)
+  );
+  const candidates = listArtifactFiles(sessionDir).filter((file) => {
+    const kind = classifyArtifact(file);
+    return kind !== null && (kind !== "screenshot" || verifiedScreenshots.has(path12.basename(file)));
+  }).sort((left, right) => {
     const leftOrder = screenshotOrder.get(path12.basename(left));
     const rightOrder = screenshotOrder.get(path12.basename(right));
     if (leftOrder !== void 0 || rightOrder !== void 0) {
@@ -2882,13 +3455,13 @@ function listArtifactFiles(root, current = root) {
   return files;
 }
 function classifyArtifact(file) {
-  const basename8 = path12.basename(file);
+  const basename9 = path12.basename(file);
   if (file.endsWith(".png")) return "screenshot";
-  if (basename8 === "session.webm" || basename8 === "session.mp4") return "video";
-  if (basename8 === "viewer.html") return "viewer";
-  if (basename8 === "SUMMARY.md") return "summary";
-  if (basename8 === "evidence.json") return "evidence";
-  if (basename8 === "verdict.json") return "verdict";
+  if (basename9 === "session.webm" || basename9 === "session.mp4") return "video";
+  if (basename9 === "viewer.html") return "viewer";
+  if (basename9 === "SUMMARY.md") return "summary";
+  if (basename9 === "evidence.json") return "evidence";
+  if (basename9 === "verdict.json") return "verdict";
   if (file.endsWith(".log") || file.endsWith(".ndjson")) return "log";
   return null;
 }
@@ -2953,7 +3526,7 @@ async function startCommand(options) {
   ensureOutputDir(sessionDir);
   const videoPath = path13.join(sessionDir, "session.webm");
   const serverErrorLog = path13.join(sessionDir, "server.log");
-  const provenance = captureGitProvenance();
+  const provenance = captureGitProvenance(process.cwd(), [outputDir]);
   writeMetadata(sessionDir, {
     ...provenance,
     repositoryRoot: process.cwd(),
@@ -3050,6 +3623,7 @@ async function startCommand(options) {
         `Could not record the exact agent-browser daemon identity for session ${sessionName}.`
       );
     }
+    session.targetUrl = getPageUrl(sessionName) || openUrl;
     persistOwnedSession(session, controlDir);
     console.log(chalk2.green("\u2713") + " Browser ready");
     failureContext = "initialize recording";
@@ -3070,7 +3644,7 @@ async function startCommand(options) {
           console.log(
             chalk2.yellow("\u26A0") + ` Recording failed (attempt ${attempt}/${RECORDING_RETRIES}), retrying in ${RETRY_DELAY_MS / 1e3}s...`
           );
-          await new Promise((resolve12) => setTimeout(resolve12, RETRY_DELAY_MS));
+          await new Promise((resolve13) => setTimeout(resolve13, RETRY_DELAY_MS));
         }
       }
     }
@@ -3189,7 +3763,7 @@ function getTerminationSignal(error) {
 // src/commands/stop.ts
 import * as fs21 from "fs";
 import * as path18 from "path";
-import { randomUUID as randomUUID3 } from "crypto";
+import { randomUUID as randomUUID4 } from "crypto";
 import { execFileSync as execFileSync5 } from "child_process";
 import chalk3 from "chalk";
 
@@ -3336,8 +3910,8 @@ function buildEvidenceLogLines(events) {
 function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-function serializeEntries(entries) {
-  return JSON.stringify(entries).replace(/<\//g, "<\\/");
+function serializeInlineJson(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
 }
 function generateViewer(data) {
   const date = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").slice(0, 19);
@@ -3374,7 +3948,7 @@ function generateViewer(data) {
       ${data.tokenUsage.source === "estimated" ? '<div class="token-usage-note">Estimated from session activity</div>' : ""}
     </div>` : "";
   const hasVideo = !!data.videoFilename;
-  const markersJson = JSON.stringify(
+  const markersJson = serializeInlineJson(
     data.entries.map((entry, i) => ({
       time: entry.relativeTimeSec,
       icon: getActionIcon(entry.action),
@@ -3401,7 +3975,7 @@ function generateViewer(data) {
         </div>
         ${scrubBarHtml}
       </div>` : `<div class="no-video"><p>No video recorded</p><p class="no-video-hint">Screenshots are available in the timeline</p></div>`;
-  const entriesJson = serializeEntries(data.entries);
+  const entriesJson = serializeInlineJson(data.entries);
   let consoleLogBodyHtml;
   if (data.consoleEntries && data.consoleEntries.length > 0) {
     const built = buildTimestampedLogLines(data.consoleEntries);
@@ -4550,7 +5124,16 @@ ${stepsHtml}
         const m = markers[idx];
         if (!m || !scrubTooltip) return;
         const action = m.action.length > 40 ? m.action.slice(0, 40) + '\\u2026' : m.action;
-        scrubTooltip.innerHTML = '<span class="tooltip-icon">' + m.icon + '</span>' + action + '<span class="tooltip-time">' + formatTimeFn(m.time) + '</span>';
+        scrubTooltip.textContent = '';
+        const iconElement = document.createElement('span');
+        iconElement.className = 'tooltip-icon';
+        iconElement.textContent = m.icon;
+        scrubTooltip.appendChild(iconElement);
+        scrubTooltip.appendChild(document.createTextNode(action));
+        const timeElement = document.createElement('span');
+        timeElement.className = 'tooltip-time';
+        timeElement.textContent = formatTimeFn(m.time);
+        scrubTooltip.appendChild(timeElement);
         scrubTooltip.style.display = 'block';
 
         const trackRect = scrubTrack.getBoundingClientRect();
@@ -4687,15 +5270,17 @@ function writeViewer(outputDir, data) {
   let entries = data.entries;
   if (!entries) {
     const logPath = path14.join(outputDir, "session-log.json");
-    if (!fs17.existsSync(logPath)) return null;
-    try {
-      entries = JSON.parse(fs17.readFileSync(logPath, "utf-8"));
-    } catch {
-      return null;
+    if (fs17.existsSync(logPath)) {
+      try {
+        entries = JSON.parse(fs17.readFileSync(logPath, "utf-8"));
+      } catch {
+        entries = [];
+      }
+    } else {
+      entries = [];
     }
   }
-  if (!entries || entries.length === 0) return null;
-  const html = generateViewer({ ...data, entries });
+  const html = generateViewer({ ...data, entries: entries || [] });
   const viewerPath = path14.join(outputDir, "viewer.html");
   fs17.writeFileSync(viewerPath, html);
   return viewerPath;
@@ -4704,13 +5289,14 @@ function writeViewer(outputDir, data) {
 // src/artifacts/evidence.ts
 import * as fs18 from "fs";
 import * as path15 from "path";
-import { createHash as createHash3 } from "crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "crypto";
 import { execFileSync as execFileSync4 } from "child_process";
+import { PNG } from "pngjs";
 function writeCanonicalEvidence(options) {
   const events = collectEvents(options);
   applyPresentationFilters(events, options.environment?.sources || []);
   const incidents = buildIncidents(events);
-  const screenshots = inspectScreenshots(options.sessionDir);
+  const screenshots = inspectScreenshots(options.sessionDir, options.actions);
   const mediaDurationSec = probeMediaDuration(options.videoPath);
   const actionDuration = options.actions.map((entry) => entry.relativeTimeSec).filter(Number.isFinite).reduce((maximum, current) => Math.max(maximum, current), 0);
   const timelineDurationSec = Math.max(options.durationSec, actionDuration);
@@ -4735,15 +5321,26 @@ function writeCanonicalEvidence(options) {
     screenshots
   };
   const verdict = buildVerdict(options, evidence);
-  fs18.writeFileSync(
+  writeJsonAtomically2(
     path15.join(options.sessionDir, "evidence.json"),
-    JSON.stringify(evidence, null, 2) + "\n"
+    evidence
   );
-  fs18.writeFileSync(
+  writeJsonAtomically2(
     path15.join(options.sessionDir, "verdict.json"),
-    JSON.stringify(verdict, null, 2) + "\n"
+    verdict
   );
   return { evidence, verdict };
+}
+function writeJsonAtomically2(filePath, value) {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID3()}.tmp`;
+  try {
+    fs18.writeFileSync(temporaryPath, JSON.stringify(value, null, 2) + "\n", {
+      mode: 384
+    });
+    fs18.renameSync(temporaryPath, filePath);
+  } finally {
+    if (fs18.existsSync(temporaryPath)) fs18.unlinkSync(temporaryPath);
+  }
 }
 function collectEvents(options) {
   const environmentEvents = options.environment?.evidencePath && fs18.existsSync(options.environment.evidencePath) ? loadEvidenceEvents(options.environment.evidencePath).map(
@@ -4752,20 +5349,38 @@ function collectEvents(options) {
       options.timelineOffsetSec ?? 0
     )
   ) : [];
-  if (environmentEvents.length === 0) {
-    environmentEvents.push(
-      ...options.serverEntries.map(
-        (entry) => toEvidenceEvent(entry, {
-          origin: "environment",
-          group: "backend",
-          sourceId: "server",
-          sourceTitle: "Server",
-          stream: "stderr"
-        })
-      )
-    );
+  if (options.environment && options.environment.kind !== "launcher") {
+    for (const sourceId of options.environment.healthFailures || []) {
+      const source = options.environment.sources.find(
+        (candidate) => candidate.id === sourceId
+      );
+      environmentEvents.push({
+        version: 1,
+        origin: "environment",
+        group: source?.group || "environment",
+        sourceId,
+        sourceTitle: source?.title || sourceId,
+        stream: source?.stream || "stderr",
+        segment: "live",
+        timestamp: null,
+        relativeTimeSec: null,
+        text: `[capture worker exited before stop: ${sourceId}]`,
+        captureGap: true
+      });
+    }
   }
-  const navigations = buildNavigations(options.actions);
+  environmentEvents.push(
+    ...options.serverEntries.map(
+      (entry) => toEvidenceEvent(entry, {
+        origin: "environment",
+        group: "backend",
+        sourceId: "server",
+        sourceTitle: "Server",
+        stream: "stderr"
+      })
+    )
+  );
+  const navigations = buildNavigations(options.actions, options.initialPageUrl);
   const browserEvents = options.consoleEntries.map((entry) => {
     const navigation = findNavigation(navigations, entry.relativeTimeSec);
     return toEvidenceEvent(entry, {
@@ -4800,17 +5415,25 @@ function toEvidenceEvent(entry, source) {
     text: entry.text
   };
 }
-function buildNavigations(actions) {
-  const navigations = actions.map((entry) => {
-    const match = entry.action.match(/^(?:open|navigate)\s+(\S+)/i);
-    return match && Number.isFinite(entry.relativeTimeSec) ? { url: match[1], startTimeSec: entry.relativeTimeSec } : null;
-  }).filter(
-    (navigation) => navigation !== null
-  ).map((navigation, index) => ({
+function buildNavigations(actions, initialPageUrl) {
+  const navigations = [];
+  const append = (url, startTimeSec) => {
+    if (!url || navigations.at(-1)?.url === url) return;
+    navigations.push({ url, startTimeSec });
+  };
+  append(initialPageUrl, 0);
+  for (const entry of actions) {
+    if (!Number.isFinite(entry.relativeTimeSec)) continue;
+    const explicit = entry.action.match(/^(?:open|navigate)\s+(\S+)/i)?.[1];
+    append(entry.pageUrl || explicit, entry.relativeTimeSec);
+  }
+  if (navigations.length === 0) {
+    navigations.push({ url: "Browser", startTimeSec: 0 });
+  }
+  return navigations.map((navigation, index) => ({
     id: `browser-nav-${index + 1}`,
     ...navigation
   }));
-  return navigations.length > 0 ? navigations : [{ id: "browser-nav-1", url: "Browser", startTimeSec: 0 }];
 }
 function findNavigation(navigations, relativeTimeSec) {
   const timed = Number.isFinite(relativeTimeSec) ? relativeTimeSec : 0;
@@ -4824,9 +5447,10 @@ function buildIncidents(events) {
       continue;
     }
     const message = normalizeIncident(event.text);
-    const key = `${event.group}\0${severity}\0${message}`;
+    const key = `${event.origin}\0${event.group}\0${severity}\0${message}`;
     const incident = incidents.get(key) || {
       severity,
+      origin: event.origin,
       group: event.group,
       message,
       count: 0,
@@ -4843,6 +5467,7 @@ function buildIncidents(events) {
   return [...incidents.values()].map((incident, index) => ({
     id: `incident-${index + 1}`,
     severity: incident.severity,
+    origin: incident.origin,
     group: incident.group,
     message: incident.message,
     count: incident.count,
@@ -4852,7 +5477,9 @@ function buildIncidents(events) {
   }));
 }
 function classifyIncident(text) {
-  if (/\bFATAL\b|\bpanic:|uncaught exception|unhandled rejection/i.test(text)) {
+  if (/\bFATAL\b|\bpanic:|uncaught exception|unhandled rejection|capture worker exited before stop|malformed canonical evidence row|\[process exited with code (?!0\])/i.test(
+    text
+  )) {
     return "fatal";
   }
   if (/\bError:|ERR[_!]|Exception:|Traceback/i.test(text)) {
@@ -4866,16 +5493,18 @@ function normalizeIncident(text) {
 function buildSourceSummaries(events, incidents) {
   const sourceKeys = /* @__PURE__ */ new Map();
   for (const event of events) {
-    const existing = sourceKeys.get(event.sourceId) || {
+    const key = `${event.origin}\0${event.sourceId}`;
+    const existing = sourceKeys.get(key) || {
       title: event.sourceTitle,
       origin: event.origin,
       group: event.group,
       events: []
     };
     existing.events.push(event);
-    sourceKeys.set(event.sourceId, existing);
+    sourceKeys.set(key, existing);
   }
-  return [...sourceKeys.entries()].map(([id, source]) => {
+  return [...sourceKeys.values()].map((source) => {
+    const id = source.events[0].sourceId;
     const hiddenLineCount = source.events.filter(
       (event) => event.presentationHidden
     ).length;
@@ -4889,7 +5518,7 @@ function buildSourceSummaries(events, incidents) {
       truncationCount: source.events.filter((event) => event.truncated).length,
       captureGapCount: source.events.filter((event) => event.captureGap).length,
       incidentCount: incidents.filter(
-        (incident) => incident.sourceIds.includes(id)
+        (incident) => incident.origin === source.origin && incident.sourceIds.includes(id)
       ).length
     };
   });
@@ -4913,32 +5542,84 @@ function isHidden(text, config) {
   }
   return Boolean(config.exclude?.some((pattern) => text.includes(pattern)));
 }
-function inspectScreenshots(sessionDir) {
-  return fs18.readdirSync(sessionDir).filter((file) => file.endsWith(".png")).sort().map((file) => {
-    const contents = fs18.readFileSync(path15.join(sessionDir, file));
-    const validPng = isValidPng(contents);
+function inspectScreenshots(sessionDir, actions) {
+  const files = [
+    ...new Set(
+      actions.filter((action) => action.outcome === "passed").map((action) => action.action.match(/^screenshot\s+(.+)$/)?.[1]).filter((value) => Boolean(value)).map((value) => path15.basename(value))
+    )
+  ];
+  return files.map((file) => {
+    const filePath = path15.join(sessionDir, file);
+    const size = fs18.existsSync(filePath) ? fs18.statSync(filePath).size : 0;
+    if (size > 50 * 1024 * 1024) {
+      return {
+        file,
+        sha256: null,
+        validPng: false,
+        visuallyBlank: false,
+        size
+      };
+    }
+    const contents = size > 0 ? fs18.readFileSync(filePath) : Buffer.alloc(0);
+    const integrity = inspectPng(contents);
     return {
       file,
       sha256: createHash3("sha256").update(contents).digest("hex"),
-      validPng,
-      size: contents.length
+      validPng: integrity.valid,
+      visuallyBlank: integrity.visuallyBlank,
+      size
     };
   });
 }
-function isValidPng(contents) {
+function inspectPng(contents) {
   if (contents.length < 33 || !contents.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || contents.subarray(12, 16).toString("ascii") !== "IHDR") {
-    return false;
+    return { valid: false, visuallyBlank: false };
   }
-  return contents.includes(Buffer.from("IEND", "ascii"), contents.length - 16);
+  const width = contents.readUInt32BE(16);
+  const height = contents.readUInt32BE(20);
+  if (width <= 0 || height <= 0 || width * height > 2e7) {
+    return { valid: false, visuallyBlank: false };
+  }
+  try {
+    const decoded = PNG.sync.read(contents, { checkCRC: true });
+    const spans = [
+      { minimum: 255, maximum: 0 },
+      { minimum: 255, maximum: 0 },
+      { minimum: 255, maximum: 0 },
+      { minimum: 255, maximum: 0 }
+    ];
+    const pixelCount = decoded.width * decoded.height;
+    const sampleStep = Math.max(1, Math.floor(pixelCount / 1e4));
+    for (let pixel = 0; pixel < pixelCount; pixel += sampleStep) {
+      const offset = pixel * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const value = decoded.data[offset + channel];
+        spans[channel].minimum = Math.min(spans[channel].minimum, value);
+        spans[channel].maximum = Math.max(spans[channel].maximum, value);
+      }
+    }
+    return {
+      valid: true,
+      visuallyBlank: spans.every(
+        ({ minimum, maximum }) => maximum - minimum <= 3
+      )
+    };
+  } catch {
+    return { valid: false, visuallyBlank: false };
+  }
 }
 function buildVerdict(options, evidence) {
   const missingArtifacts = [];
   if (options.recordingWasActive && !fs18.existsSync(options.videoPath)) {
     missingArtifacts.push(path15.basename(options.videoPath));
+  } else if (options.recordingWasActive && (evidence.mediaDurationSec === null || evidence.mediaDurationSec <= 0)) {
+    missingArtifacts.push(path15.basename(options.videoPath));
   }
   const screenshotFiles = new Set(
     evidence.screenshots.map((screenshot) => screenshot.file)
   );
+  const successfulScreenshotPaths = options.actions.filter((action) => action.outcome === "passed").map((action) => action.action.match(/^screenshot\s+(.+)$/)?.[1]).filter((value) => Boolean(value)).map((value) => path15.basename(value));
+  const reusedScreenshotPaths = successfulScreenshotPaths.length - new Set(successfulScreenshotPaths).size;
   for (const action of options.actions) {
     const match = action.action.match(/^screenshot\s+(.+)$/);
     if (match && !screenshotFiles.has(path15.basename(match[1]))) {
@@ -4946,7 +5627,7 @@ function buildVerdict(options, evidence) {
     }
   }
   for (const screenshot of evidence.screenshots) {
-    if (!screenshot.validPng || screenshot.size === 0) {
+    if (!screenshot.validPng || screenshot.visuallyBlank || screenshot.size === 0) {
       missingArtifacts.push(screenshot.file);
     }
   }
@@ -4964,6 +5645,9 @@ function buildVerdict(options, evidence) {
   const expectedSelectorFailures = options.actions.filter(
     (action) => action.expectedSelector && action.outcome === "failed"
   ).map((action) => action.expectedSelector);
+  const pendingExpectedSelectors = options.actions.filter(
+    (action) => action.expectedSelector && action.outcome === void 0
+  );
   const fatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === "fatal"
   ).length;
@@ -4976,9 +5660,13 @@ function buildVerdict(options, evidence) {
   const incompleteReasons = [
     ...missingArtifacts.length > 0 ? [`${missingArtifacts.length} required artifact(s) were missing or invalid.`] : [],
     ...evidence.mediaTruncated ? ["Recorded media ends before the canonical action timeline."] : [],
-    ...evidence.sources.some((source) => source.truncationCount > 0) ? ["One or more evidence sources were truncated."] : []
+    ...evidence.sources.some((source) => source.truncationCount > 0) ? ["One or more evidence sources were truncated."] : [],
+    ...pendingExpectedSelectors.length > 0 ? [
+      `${pendingExpectedSelectors.length} expected selector assertion(s) had no recorded outcome.`
+    ] : [],
+    ...reusedScreenshotPaths > 0 ? ["One or more screenshot paths were reused by multiple actions."] : []
   ];
-  const status = blockingReasons.length > 0 ? "BLOCKED" : failureReasons.length > 0 ? "FAIL" : incompleteReasons.length > 0 ? "INCOMPLETE" : "PASS";
+  const status = blockingReasons.length > 0 ? "BLOCKED" : incompleteReasons.length > 0 ? "INCOMPLETE" : failureReasons.length > 0 ? "FAIL" : "PASS";
   return {
     version: 1,
     status,
@@ -5141,20 +5829,32 @@ import * as fs19 from "fs";
 import * as path16 from "path";
 import { execSync as execSync4 } from "child_process";
 var SESSION_LOG_FILENAME = "session-log.json";
+var SESSION_LOG_LOCK_TIMEOUT_MS = 5e3;
+var SESSION_LOG_STALE_LOCK_MS = 12e4;
 function loadSessionLog(sessionDir) {
   const logPath = path16.join(sessionDir, SESSION_LOG_FILENAME);
   if (!fs19.existsSync(logPath)) return [];
   try {
-    return JSON.parse(fs19.readFileSync(logPath, "utf-8"));
-  } catch {
-    return [];
+    const parsed = JSON.parse(fs19.readFileSync(logPath, "utf-8"));
+    if (!Array.isArray(parsed)) {
+      throw new Error("session log root must be an array");
+    }
+    return parsed;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`ProofShot session action log is corrupt: ${logPath}
+${message}`);
   }
 }
 function resolveScreenshotPath(args, sessionDir) {
   if (args[0] !== "screenshot" || args.length < 2) return args;
   const screenshotPath = args[args.length - 1];
-  if (path16.isAbsolute(screenshotPath)) return args;
-  const resolved = path16.join(sessionDir, screenshotPath);
+  const resolved = path16.resolve(sessionDir, screenshotPath);
+  if (path16.dirname(resolved) !== path16.resolve(sessionDir)) {
+    throw new Error(
+      "ProofShot screenshots must use a filename directly inside the active session."
+    );
+  }
   return [...args.slice(0, -1), resolved];
 }
 function buildShellCommand(args, sessionName) {
@@ -5311,9 +6011,9 @@ async function execCommand(args) {
       entry.element = elementData;
     }
     const logPath = path16.join(session.sessionDir, SESSION_LOG_FILENAME);
-    const entries = loadSessionLog(session.sessionDir);
-    entries.push(entry);
-    fs19.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+    updateSessionLog(logPath, (entries) => {
+      entries.push(entry);
+    });
     loggedEntry = entry;
     sessionLogPath = logPath;
   }
@@ -5338,7 +6038,8 @@ async function execCommand(args) {
         process.stdout.write("\n");
       }
     }
-    persistActionOutcome(loggedEntry, sessionLogPath, "passed");
+    const pageUrl = session ? getPageUrl(session.sessionName) || void 0 : void 0;
+    persistActionOutcome(loggedEntry, sessionLogPath, "passed", void 0, pageUrl);
   } catch (error) {
     const stderr = error?.stderr?.toString?.() || "";
     const stdout = error?.stdout?.toString?.() || "";
@@ -5369,7 +6070,7 @@ async function execCommand(args) {
     }
   }
 }
-function persistActionOutcome(entry, logPath, outcome, error) {
+function persistActionOutcome(entry, logPath, outcome, error, pageUrl) {
   if (!entry || !logPath) {
     return;
   }
@@ -5377,16 +6078,63 @@ function persistActionOutcome(entry, logPath, outcome, error) {
   if (error) {
     entry.error = error;
   }
-  const entries = loadSessionLog(path16.dirname(logPath));
-  const matchingEntry = [...entries].reverse().find(
-    (candidate) => candidate.timestamp === entry.timestamp && candidate.action === entry.action
-  );
-  if (matchingEntry) {
-    matchingEntry.outcome = outcome;
-    if (error) {
-      matchingEntry.error = error;
+  if (pageUrl) {
+    entry.pageUrl = pageUrl;
+  }
+  updateSessionLog(logPath, (entries) => {
+    const matchingEntry = [...entries].reverse().find(
+      (candidate) => candidate.timestamp === entry.timestamp && candidate.action === entry.action
+    );
+    if (matchingEntry) {
+      matchingEntry.outcome = outcome;
+      if (error) {
+        matchingEntry.error = error;
+      }
+      if (pageUrl) {
+        matchingEntry.pageUrl = pageUrl;
+      }
     }
-    fs19.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+  });
+}
+function updateSessionLog(logPath, update) {
+  const lockPath = `${logPath}.lock`;
+  const deadline = Date.now() + SESSION_LOG_LOCK_TIMEOUT_MS;
+  let lockFd = null;
+  while (lockFd === null) {
+    try {
+      lockFd = fs19.openSync(lockPath, "wx", 384);
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - fs19.statSync(lockPath).mtimeMs > SESSION_LOG_STALE_LOCK_MS) {
+          fs19.unlinkSync(lockPath);
+          continue;
+        }
+      } catch (statError) {
+        if (statError.code === "ENOENT") continue;
+        throw statError;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for session log lock: ${lockPath}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    const entries = loadSessionLog(path16.dirname(logPath));
+    update(entries);
+    const temporaryPath = `${logPath}.${process.pid}.${Date.now()}.tmp`;
+    fs19.writeFileSync(temporaryPath, JSON.stringify(entries, null, 2) + "\n", {
+      mode: 384
+    });
+    fs19.renameSync(temporaryPath, logPath);
+  } finally {
+    fs19.closeSync(lockFd);
+    try {
+      fs19.unlinkSync(lockPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
   }
 }
 
@@ -5533,304 +6281,378 @@ async function stopCommand(options) {
     }
     return;
   }
-  session.lifecycleStatus = "stopping";
-  session.cleanupError = null;
-  persistOwnedSession2(session, controlDir);
-  const retryingStoppedSession = !session.recordingActive;
-  const recordingWasActive = session.recordingActive;
-  const startTime = new Date(session.startedAt).getTime();
-  const recordingStartTime = session.recordingStartedAt ? new Date(session.recordingStartedAt).getTime() : startTime;
-  const recordingStartOffsetSec = Math.max(
-    0,
-    (recordingStartTime - startTime) / 1e3
-  );
-  const durationMs = Date.now() - startTime;
-  const durationSec = Math.round(durationMs / 1e3);
-  const browserSessionAvailable = canAddressOwnedBrowserSession(session);
-  const priorConsoleEvidenceAvailable = session.consoleEvidenceAvailable === true;
-  if (!browserSessionAvailable && priorConsoleEvidenceAvailable) {
-    console.log(
-      chalk3.dim("Browser already stopped; reusing console evidence collected before cleanup.")
-    );
-  } else if (!browserSessionAvailable) {
-    console.log(
-      chalk3.yellow("\u26A0") + " Browser ownership could not be verified; skipping console and recording commands.\n" + chalk3.dim("  Browser evidence may be incomplete; exact recorded-process cleanup will still run.")
-    );
-  }
-  console.log(chalk3.dim("Collecting errors..."));
-  let consoleErrors = "";
-  let consoleOutput = "";
-  let consoleEntries = [];
-  const consoleErrorsPath = path18.join(session.sessionDir, "console-errors.log");
-  const consoleOutputPath = path18.join(session.sessionDir, "console-output.log");
-  const consoleEntriesPath = path18.join(session.sessionDir, "console-entries.json");
-  if (browserSessionAvailable) {
-    try {
-      consoleErrors = getConsoleErrors(session.sessionName);
-      consoleOutput = getConsoleOutput(session.sessionName);
-      const consoleMessages = getConsoleOutputJson(session.sessionName);
-      consoleEntries = consoleMessages.map((msg) => ({
-        text: `[${msg.type}] ${msg.text}`,
-        relativeTimeSec: Math.max(0, parseFloat(((msg.timestamp - startTime) / 1e3).toFixed(1)))
-      }));
-    } catch {
-    }
-    writeTextFileAtomically(consoleErrorsPath, consoleErrors);
-    writeTextFileAtomically(consoleOutputPath, consoleOutput);
-    writeTextFileAtomically(
-      consoleEntriesPath,
-      JSON.stringify(consoleEntries, null, 2) + "\n"
-    );
-    const capturedErrorLines = consoleErrors.split("\n").filter((line) => line.trim() && line.trim() !== "No errors");
-    session.consoleEvidenceAvailable = true;
-    session.consoleErrorCount = capturedErrorLines.length > 0 && consoleErrors.trim() !== "" ? capturedErrorLines.length : 0;
+  const stopSignals = installStopSignalHandlers();
+  try {
+    session.lifecycleStatus = "stopping";
+    session.cleanupError = null;
+    session.stoppedAt ||= (/* @__PURE__ */ new Date()).toISOString();
     persistOwnedSession2(session, controlDir);
-  } else if (priorConsoleEvidenceAvailable) {
-    if (fs21.existsSync(consoleErrorsPath)) {
-      consoleErrors = fs21.readFileSync(consoleErrorsPath, "utf-8");
+    const retryingStoppedSession = !session.recordingActive;
+    const recordingWasActive = session.recordingActive || Boolean(session.recordingStartedAt);
+    const startTime = new Date(session.startedAt).getTime();
+    const recordingStartTime = session.recordingStartedAt ? new Date(session.recordingStartedAt).getTime() : startTime;
+    const recordingStartOffsetSec = Math.max(
+      0,
+      (recordingStartTime - startTime) / 1e3
+    );
+    const durationMs = new Date(session.stoppedAt).getTime() - startTime;
+    const durationSec = Math.round(durationMs / 1e3);
+    const browserSessionAvailable = canAddressOwnedBrowserSession(session);
+    const priorConsoleEvidenceAvailable = session.consoleEvidenceAvailable === true;
+    if (!browserSessionAvailable && priorConsoleEvidenceAvailable) {
+      console.log(
+        chalk3.dim("Browser already stopped; reusing console evidence collected before cleanup.")
+      );
+    } else if (!browserSessionAvailable) {
+      console.log(
+        chalk3.yellow("\u26A0") + " Browser ownership could not be verified; skipping console and recording commands.\n" + chalk3.dim("  Browser evidence may be incomplete; exact recorded-process cleanup will still run.")
+      );
     }
-    if (fs21.existsSync(consoleOutputPath)) {
-      consoleOutput = fs21.readFileSync(consoleOutputPath, "utf-8");
-    }
-    if (fs21.existsSync(consoleEntriesPath)) {
+    console.log(chalk3.dim("Collecting errors..."));
+    let consoleErrors = "";
+    let consoleOutput = "";
+    let consoleEntries = [];
+    const consoleErrorsPath = path18.join(session.sessionDir, "console-errors.log");
+    const consoleOutputPath = path18.join(session.sessionDir, "console-output.log");
+    const consoleEntriesPath = path18.join(session.sessionDir, "console-entries.json");
+    let consoleCollectionSucceeded = false;
+    if (browserSessionAvailable) {
       try {
-        const savedEntries = JSON.parse(fs21.readFileSync(consoleEntriesPath, "utf-8"));
-        if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
+        consoleErrors = getConsoleErrors(session.sessionName);
+        consoleOutput = getConsoleOutput(session.sessionName);
+        const consoleMessages = getConsoleOutputJson(session.sessionName);
+        consoleEntries = consoleMessages.map((msg) => ({
+          text: `[${msg.type}] ${msg.text}`,
+          relativeTimeSec: Math.max(0, parseFloat(((msg.timestamp - startTime) / 1e3).toFixed(1)))
+        }));
+        consoleCollectionSucceeded = true;
       } catch {
+        consoleCollectionSucceeded = false;
       }
     }
-  }
-  console.log(chalk3.dim("Stopping recording..."));
-  if (browserSessionAvailable) {
-    stopRecording(session.sessionName);
-  }
-  session.recordingActive = false;
-  persistOwnedSession2(session, controlDir);
-  let cleanupError;
-  if (!options.noClose) {
-    console.log(chalk3.dim("Closing browser..."));
-    try {
-      await stopOwnedBrowser(session);
-    } catch (error) {
-      cleanupError = error;
-    }
-  }
-  const finalizedEnvironment = session.environment;
-  if (session.environment) {
-    console.log(chalk3.dim("Stopping environment..."));
-    try {
-      await stopOwnedEnvironment(session.environment);
-      session.environment = null;
+    if (consoleCollectionSucceeded) {
+      writeTextFileAtomically(consoleErrorsPath, consoleErrors);
+      writeTextFileAtomically(consoleOutputPath, consoleOutput);
+      writeTextFileAtomically(
+        consoleEntriesPath,
+        JSON.stringify(consoleEntries, null, 2) + "\n"
+      );
+      const capturedErrorLines = consoleErrors.split("\n").filter((line) => line.trim() && line.trim() !== "No errors");
+      session.consoleEvidenceAvailable = true;
+      session.consoleErrorCount = capturedErrorLines.length > 0 && consoleErrors.trim() !== "" ? capturedErrorLines.length : 0;
       persistOwnedSession2(session, controlDir);
-    } catch (error) {
-      cleanupError ||= error;
+    } else if (priorConsoleEvidenceAvailable) {
+      if (fs21.existsSync(consoleErrorsPath)) {
+        consoleErrors = fs21.readFileSync(consoleErrorsPath, "utf-8");
+      }
+      if (fs21.existsSync(consoleOutputPath)) {
+        consoleOutput = fs21.readFileSync(consoleOutputPath, "utf-8");
+      }
+      if (fs21.existsSync(consoleEntriesPath)) {
+        try {
+          const savedEntries = JSON.parse(fs21.readFileSync(consoleEntriesPath, "utf-8"));
+          if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
+        } catch {
+        }
+      }
+    } else {
+      session.consoleEvidenceAvailable = false;
+      session.consoleErrorCount = 0;
+      persistOwnedSession2(session, controlDir);
     }
-  }
-  if (session.serverProcess) {
-    console.log(chalk3.dim("Stopping dev server..."));
-    try {
-      await stopOwnedServer(session);
-    } catch (error) {
-      cleanupError ||= error;
+    console.log(chalk3.dim("Stopping recording..."));
+    if (browserSessionAvailable) {
+      stopRecording(session.sessionName);
     }
-  }
-  if (cleanupError) {
-    session.lifecycleStatus = "recovery";
-    session.cleanupError = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    session.recordingActive = false;
     persistOwnedSession2(session, controlDir);
-    throw cleanupError;
-  }
-  let serverLog = "";
-  let serverEntries = [];
-  if (fs21.existsSync(session.serverErrorLog)) {
-    const rawServerLog = fs21.readFileSync(session.serverErrorLog, "utf-8");
-    const parsed = parseTimestampedServerLog(rawServerLog, startTime);
-    serverLog = parsed.cleanText;
-    serverEntries = parsed.entries;
-  }
-  const sessionDir = session.sessionDir;
-  const screenshots = fs21.existsSync(sessionDir) ? fs21.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
-  const sessionLog = loadSessionLog(sessionDir);
-  let trimOffsetSec = session.trimOffsetSec ?? recordingStartOffsetSec;
-  if (!session.videoTrimComplete) {
-    let videoTrimOffsetSec = 0;
+    const cleanupErrors = [];
+    if (!options.noClose) {
+      console.log(chalk3.dim("Closing browser..."));
+      try {
+        await stopOwnedBrowser(session);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (session.environment && !session.environmentStopped && session.environment.kind !== "launcher") {
+      const captures = session.environment.kind === "tmux" ? session.environment.captures : session.environment.processes;
+      session.environment.healthFailures = captures.filter((capture) => !processIdentityMatches(capture.process)).map((capture) => capture.sourceId);
+      persistOwnedSession2(session, controlDir);
+    }
+    const finalizedEnvironment = session.environment;
+    if (session.environment && !session.environmentStopped) {
+      console.log(chalk3.dim("Stopping environment..."));
+      try {
+        await stopOwnedEnvironment(session.environment);
+        session.environmentStopped = true;
+        persistOwnedSession2(session, controlDir);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (session.serverProcess) {
+      console.log(chalk3.dim("Stopping dev server..."));
+      try {
+        await stopOwnedServer(session);
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      const cleanupError = new AggregateError(
+        cleanupErrors,
+        `Cleanup failed: ${cleanupErrors.map((error) => error instanceof Error ? error.message : String(error)).join("; ")}`
+      );
+      session.lifecycleStatus = "recovery";
+      session.cleanupError = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+      persistOwnedSession2(session, controlDir);
+      throw cleanupError;
+    }
+    let serverLog = "";
+    let serverEntries = [];
+    if (fs21.existsSync(session.serverErrorLog)) {
+      const rawServerLog = fs21.readFileSync(session.serverErrorLog, "utf-8");
+      const parsed = parseTimestampedServerLog(rawServerLog, startTime);
+      serverLog = parsed.cleanText;
+      serverEntries = parsed.entries;
+    }
+    const sessionDir = session.sessionDir;
+    const screenshots = fs21.existsSync(sessionDir) ? fs21.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
+    const sessionLog = loadSessionLog(sessionDir);
+    let trimOffsetSec = session.trimOffsetSec ?? recordingStartOffsetSec;
+    if (!session.videoTrimComplete) {
+      let videoTrimOffsetSec = 0;
+      if (fs21.existsSync(session.videoPath)) {
+        videoTrimOffsetSec = trimVideo(
+          session.videoPath,
+          screenshots,
+          sessionDir,
+          startTime,
+          sessionLog,
+          recordingStartOffsetSec
+        );
+      } else if (recordingWasActive) {
+        console.log(
+          chalk3.yellow("\u26A0") + " Recording was active but no video file was produced.\n" + chalk3.dim("  The screencast may have been interrupted. Screenshots and logs are still saved.")
+        );
+      }
+      trimOffsetSec = recordingStartOffsetSec + videoTrimOffsetSec;
+      session.videoTrimComplete = true;
+      session.trimOffsetSec = trimOffsetSec;
+      persistOwnedSession2(session, controlDir);
+    }
+    const consoleErrorLines = consoleErrors.split("\n").filter((l) => l.trim() && l.trim() !== "No errors");
+    const observedConsoleErrorCount = consoleErrorLines.length > 0 && consoleErrors.trim() !== "" ? consoleErrorLines.length : 0;
+    const consoleEvidenceAvailable = browserSessionAvailable || priorConsoleEvidenceAvailable;
+    const consoleErrorCount = browserSessionAvailable ? observedConsoleErrorCount : session.consoleErrorCount ?? 0;
+    if (browserSessionAvailable) {
+      session.consoleEvidenceAvailable = true;
+      session.consoleErrorCount = consoleErrorCount;
+      persistOwnedSession2(session, controlDir);
+    }
+    const serverErrorLines = extractServerErrors(serverLog);
+    const serverErrorCount = serverErrorLines.length;
+    const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
+    const summaryPath = path18.join(sessionDir, "SUMMARY.md");
+    const summary = generateProofSummary({
+      projectDirectory: session.startDirectory || process.cwd(),
+      description: session.description,
+      serverCommand: session.serverCommand,
+      port: session.port,
+      headless: session.headless ?? config.headless ?? true,
+      viewport: session.viewport || config.viewport || { width: 1280, height: 720 },
+      videoPath: session.videoPath,
+      screenshots,
+      consoleErrors,
+      consoleErrorCount,
+      consoleEvidenceAvailable,
+      serverLog,
+      serverErrorCount,
+      tokenUsage,
+      durationSec,
+      outputDir: sessionDir
+    });
+    if (!retryingStoppedSession || !fs21.existsSync(summaryPath)) {
+      writeTextFileAtomically(summaryPath, summary);
+    }
+    let viewerEntries = sessionLog;
+    if (trimOffsetSec > 0 && !session.sessionLogAdjusted) {
+      viewerEntries = sessionLog.map((e) => ({
+        ...e,
+        relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1))
+      }));
+    }
+    if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
+      const logPath = path18.join(sessionDir, "session-log.json");
+      writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + "\n");
+    }
+    if (!session.sessionLogAdjusted) {
+      session.sessionLogAdjusted = true;
+      persistOwnedSession2(session, controlDir);
+    }
+    const adjustTime = (e) => trimOffsetSec > 0 ? { ...e, relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1)) } : e;
+    const viewerConsoleEntries = consoleEntries.map(adjustTime);
+    const viewerServerEntries = serverEntries.map(adjustTime);
+    const canonicalDurationSec = Math.max(0, durationSec - trimOffsetSec);
+    const { evidence, verdict } = writeCanonicalEvidence({
+      sessionId: session.sessionName,
+      sessionDir,
+      initialPageUrl: session.targetUrl,
+      durationSec: canonicalDurationSec,
+      timelineOffsetSec: trimOffsetSec,
+      videoPath: session.videoPath,
+      recordingWasActive,
+      consoleEvidenceAvailable,
+      actions: viewerEntries,
+      consoleEntries: viewerConsoleEntries,
+      serverEntries: viewerServerEntries,
+      environment: finalizedEnvironment
+    });
+    const viewerPath = writeViewer(sessionDir, {
+      description: session.description,
+      serverCommand: session.serverCommand,
+      durationSec: canonicalDurationSec,
+      videoFilename: fs21.existsSync(session.videoPath) ? path18.basename(session.videoPath) : null,
+      consoleErrorCount,
+      consoleEvidenceAvailable,
+      serverErrorCount,
+      consoleOutput,
+      serverLog,
+      consoleEntries: viewerConsoleEntries.length > 0 ? viewerConsoleEntries : void 0,
+      serverEntries: viewerServerEntries.length > 0 ? viewerServerEntries : void 0,
+      entries: viewerEntries.length > 0 ? viewerEntries : void 0,
+      tokenUsage,
+      evidence,
+      verdict
+    });
+    const metadata = loadMetadata(sessionDir) || {
+      repository: "",
+      repositoryRoot: session.startDirectory,
+      branch: "",
+      commitSha: "",
+      treeHash: "",
+      sourceDirty: true,
+      startedAt: session.startedAt,
+      description: session.description
+    };
+    writeArtifactManifest({
+      sessionId: session.sessionName,
+      sessionDir,
+      metadata,
+      evidence,
+      verdict
+    });
+    session.bundleComplete = true;
+    session.browserRetained = Boolean(options.noClose);
+    if (session.browserRetained) {
+      session.lifecycleStatus = "active";
+      persistOwnedSession2(session, controlDir);
+    } else {
+      clearOwnedSession2(session, controlDir);
+    }
+    console.log("");
+    console.log(chalk3.green.bold("\u2705 ProofShot verification complete"));
+    console.log("");
     if (fs21.existsSync(session.videoPath)) {
-      videoTrimOffsetSec = trimVideo(
-        session.videoPath,
-        screenshots,
-        sessionDir,
-        startTime,
-        sessionLog,
-        recordingStartOffsetSec
-      );
-    } else if (recordingWasActive) {
-      console.log(
-        chalk3.yellow("\u26A0") + " Recording was active but no video file was produced.\n" + chalk3.dim("  The screencast may have been interrupted. Screenshots and logs are still saved.")
-      );
+      console.log(`\u{1F4F9} Video:         ${chalk3.dim(session.videoPath)} (${durationSec}s)`);
     }
-    trimOffsetSec = recordingStartOffsetSec + videoTrimOffsetSec;
-    session.videoTrimComplete = true;
-    session.trimOffsetSec = trimOffsetSec;
-    persistOwnedSession2(session, controlDir);
-  }
-  const consoleErrorLines = consoleErrors.split("\n").filter((l) => l.trim() && l.trim() !== "No errors");
-  const observedConsoleErrorCount = consoleErrorLines.length > 0 && consoleErrors.trim() !== "" ? consoleErrorLines.length : 0;
-  const consoleEvidenceAvailable = browserSessionAvailable || priorConsoleEvidenceAvailable;
-  const consoleErrorCount = browserSessionAvailable ? observedConsoleErrorCount : session.consoleErrorCount ?? 0;
-  if (browserSessionAvailable) {
-    session.consoleEvidenceAvailable = true;
-    session.consoleErrorCount = consoleErrorCount;
-    persistOwnedSession2(session, controlDir);
-  }
-  const serverErrorLines = extractServerErrors(serverLog);
-  const serverErrorCount = serverErrorLines.length;
-  const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
-  const summaryPath = path18.join(sessionDir, "SUMMARY.md");
-  const summary = generateProofSummary({
-    projectDirectory: session.startDirectory || process.cwd(),
-    description: session.description,
-    serverCommand: session.serverCommand,
-    port: session.port,
-    headless: session.headless ?? config.headless ?? true,
-    viewport: session.viewport || config.viewport || { width: 1280, height: 720 },
-    videoPath: session.videoPath,
-    screenshots,
-    consoleErrors,
-    consoleErrorCount,
-    consoleEvidenceAvailable,
-    serverLog,
-    serverErrorCount,
-    tokenUsage,
-    durationSec,
-    outputDir: sessionDir
-  });
-  if (!retryingStoppedSession || !fs21.existsSync(summaryPath)) {
-    writeTextFileAtomically(summaryPath, summary);
-  }
-  let viewerEntries = sessionLog;
-  if (trimOffsetSec > 0 && !session.sessionLogAdjusted) {
-    viewerEntries = sessionLog.map((e) => ({
-      ...e,
-      relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1))
-    }));
-  }
-  if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
-    const logPath = path18.join(sessionDir, "session-log.json");
-    writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + "\n");
-  }
-  if (!session.sessionLogAdjusted) {
-    session.sessionLogAdjusted = true;
-    persistOwnedSession2(session, controlDir);
-  }
-  const adjustTime = (e) => trimOffsetSec > 0 ? { ...e, relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1)) } : e;
-  const viewerConsoleEntries = consoleEntries.map(adjustTime);
-  const viewerServerEntries = serverEntries.map(adjustTime);
-  const canonicalDurationSec = Math.max(0, durationSec - trimOffsetSec);
-  const { evidence, verdict } = writeCanonicalEvidence({
-    sessionId: session.sessionName,
-    sessionDir,
-    durationSec: canonicalDurationSec,
-    timelineOffsetSec: trimOffsetSec,
-    videoPath: session.videoPath,
-    recordingWasActive,
-    consoleEvidenceAvailable,
-    actions: viewerEntries,
-    consoleEntries: viewerConsoleEntries,
-    serverEntries: viewerServerEntries,
-    environment: finalizedEnvironment
-  });
-  const viewerPath = writeViewer(sessionDir, {
-    description: session.description,
-    serverCommand: session.serverCommand,
-    durationSec: canonicalDurationSec,
-    videoFilename: fs21.existsSync(session.videoPath) ? path18.basename(session.videoPath) : null,
-    consoleErrorCount,
-    consoleEvidenceAvailable,
-    serverErrorCount,
-    consoleOutput,
-    serverLog,
-    consoleEntries: viewerConsoleEntries.length > 0 ? viewerConsoleEntries : void 0,
-    serverEntries: viewerServerEntries.length > 0 ? viewerServerEntries : void 0,
-    entries: viewerEntries.length > 0 ? viewerEntries : void 0,
-    tokenUsage,
-    evidence,
-    verdict
-  });
-  const metadata = loadMetadata(sessionDir) || {
-    repository: "",
-    repositoryRoot: session.startDirectory,
-    branch: "",
-    commitSha: "",
-    treeHash: "",
-    sourceDirty: true,
-    startedAt: session.startedAt,
-    description: session.description
-  };
-  writeArtifactManifest({
-    sessionId: session.sessionName,
-    sessionDir,
-    metadata,
-    evidence,
-    verdict
-  });
-  session.bundleComplete = true;
-  session.browserRetained = Boolean(options.noClose);
-  if (session.browserRetained) {
-    session.lifecycleStatus = "active";
-    persistOwnedSession2(session, controlDir);
-  } else {
-    clearOwnedSession2(session, controlDir);
-  }
-  console.log("");
-  console.log(chalk3.green.bold("\u2705 ProofShot verification complete"));
-  console.log("");
-  if (fs21.existsSync(session.videoPath)) {
-    console.log(`\u{1F4F9} Video:         ${chalk3.dim(session.videoPath)} (${durationSec}s)`);
-  }
-  console.log(`\u{1F4F8} Screenshots:   ${screenshots.length} captured`);
-  console.log(`\u{1F4DD} Summary:       ${chalk3.dim(summaryPath)}`);
-  console.log(`\u{1F9FE} Verdict:       ${verdict.status}`);
-  if (viewerPath) {
-    console.log(`\u{1F3AC} Viewer:        ${chalk3.dim(viewerPath)}`);
-  } else {
-    console.log(chalk3.dim('Tip: Use "proofshot exec" instead of "agent-browser" to get an interactive timeline viewer.'));
-  }
-  console.log("");
-  console.log(
-    `Console errors:   ${!consoleEvidenceAvailable ? chalk3.yellow("unavailable") : consoleErrorCount === 0 ? chalk3.green("0") : chalk3.red(String(consoleErrorCount))}`
-  );
-  console.log(
-    `Server errors:    ${serverErrorCount === 0 ? chalk3.green("0") : chalk3.red(String(serverErrorCount))}`
-  );
-  console.log(`Duration:         ${durationSec} seconds`);
-  console.log("");
-  console.log(`Proof artifacts saved to ${chalk3.dim(sessionDir)}`);
-  if (session.browserRetained) {
-    console.log(chalk3.dim('Browser retained. Run "proofshot stop" later to close this exact session.'));
-  }
-  if (consoleErrorCount > 0) {
+    console.log(`\u{1F4F8} Screenshots:   ${screenshots.length} captured`);
+    console.log(`\u{1F4DD} Summary:       ${chalk3.dim(summaryPath)}`);
+    console.log(`\u{1F9FE} Verdict:       ${verdict.status}`);
+    if (viewerPath) {
+      console.log(`\u{1F3AC} Viewer:        ${chalk3.dim(viewerPath)}`);
+    } else {
+      console.log(chalk3.dim('Tip: Use "proofshot exec" instead of "agent-browser" to get an interactive timeline viewer.'));
+    }
     console.log("");
-    console.log(chalk3.red.bold("Console Errors:"));
-    for (const line of consoleErrorLines.slice(0, 10)) {
-      console.log(chalk3.red(`  ${line}`));
-    }
-    if (consoleErrorLines.length > 10) {
-      console.log(chalk3.dim(`  ... and ${consoleErrorLines.length - 10} more (see SUMMARY.md)`));
-    }
-  }
-  if (serverErrorCount > 0) {
+    console.log(
+      `Console errors:   ${!consoleEvidenceAvailable ? chalk3.yellow("unavailable") : consoleErrorCount === 0 ? chalk3.green("0") : chalk3.red(String(consoleErrorCount))}`
+    );
+    console.log(
+      `Server errors:    ${serverErrorCount === 0 ? chalk3.green("0") : chalk3.red(String(serverErrorCount))}`
+    );
+    console.log(`Duration:         ${durationSec} seconds`);
     console.log("");
-    console.log(chalk3.red.bold("Server Errors:"));
-    for (const line of serverErrorLines.slice(0, 10)) {
-      console.log(chalk3.red(`  ${line}`));
+    console.log(`Proof artifacts saved to ${chalk3.dim(sessionDir)}`);
+    if (session.browserRetained) {
+      console.log(chalk3.dim('Browser retained. Run "proofshot stop" later to close this exact session.'));
     }
-    if (serverErrorLines.length > 10) {
-      console.log(chalk3.dim(`  ... and ${serverErrorLines.length - 10} more (see SUMMARY.md)`));
+    if (consoleErrorCount > 0) {
+      console.log("");
+      console.log(chalk3.red.bold("Console Errors:"));
+      for (const line of consoleErrorLines.slice(0, 10)) {
+        console.log(chalk3.red(`  ${line}`));
+      }
+      if (consoleErrorLines.length > 10) {
+        console.log(chalk3.dim(`  ... and ${consoleErrorLines.length - 10} more (see SUMMARY.md)`));
+      }
+    }
+    if (serverErrorCount > 0) {
+      console.log("");
+      console.log(chalk3.red.bold("Server Errors:"));
+      for (const line of serverErrorLines.slice(0, 10)) {
+        console.log(chalk3.red(`  ${line}`));
+      }
+      if (serverErrorLines.length > 10) {
+        console.log(chalk3.dim(`  ... and ${serverErrorLines.length - 10} more (see SUMMARY.md)`));
+      }
+    }
+  } finally {
+    const interruptedBy = stopSignals.remove();
+    if (interruptedBy) {
+      process.exitCode = interruptedBy === "SIGINT" ? 130 : 143;
     }
   }
 }
+function installStopSignalHandlers() {
+  let interruptedBy = null;
+  let signalCount = 0;
+  let forcedExitTimer = null;
+  const handlers = /* @__PURE__ */ new Map();
+  const removeListeners = () => {
+    for (const [signal, handler] of handlers) {
+      process.removeListener(signal, handler);
+    }
+  };
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const handler = () => {
+      signalCount += 1;
+      interruptedBy ||= signal;
+      if (signalCount >= 3) {
+        removeListeners();
+        process.kill(process.pid, signal);
+        return;
+      }
+      if (signalCount === 2) {
+        console.error(
+          chalk3.yellow(
+            `Received ${signal} again; forcing exit in 5s if exact teardown does not finish.`
+          )
+        );
+        forcedExitTimer = setTimeout(() => {
+          removeListeners();
+          process.kill(process.pid, signal);
+        }, 5e3);
+        return;
+      }
+      console.error(
+        chalk3.yellow(`Received ${signal}; finishing exact ProofShot teardown before exit.`)
+      );
+    };
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+  return {
+    remove: () => {
+      removeListeners();
+      if (forcedExitTimer) clearTimeout(forcedExitTimer);
+      return interruptedBy;
+    }
+  };
+}
 function writeTextFileAtomically(filePath, contents) {
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID3()}.tmp`;
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID4()}.tmp`;
   try {
     fs21.writeFileSync(temporaryPath, contents);
     fs21.renameSync(temporaryPath, filePath);
@@ -6115,6 +6937,13 @@ import * as path21 from "path";
 import { execFileSync as execFileSync6, execSync as execSync5 } from "child_process";
 var GITHUB_API_VERSION = "2022-11-28";
 var DEFAULT_ARTIFACTS_BRANCH = "proofshot-artifacts";
+var GitHubApiError = class extends ProofShotError {
+  constructor(status, body) {
+    super(`GitHub API request failed (${status}): ${body}`);
+    this.status = status;
+    this.name = "GitHubApiError";
+  }
+};
 function getGitHubToken() {
   const envToken = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
   if (envToken) return envToken.trim();
@@ -6230,10 +7059,10 @@ function getContentType(filePath) {
       return "application/octet-stream";
   }
 }
-async function uploadAsset(filePath, token, repoId) {
-  const fileName = path21.basename(filePath);
-  const fileSize = fs24.statSync(filePath).size;
-  const contentType = getContentType(filePath);
+async function uploadPreparedAsset(assetToUpload, token, repoId) {
+  const fileName = assetToUpload.name;
+  const fileSize = assetToUpload.content.length;
+  const contentType = getContentType(fileName);
   const policyResponse = await fetch("https://github.com/upload/policies/assets", {
     method: "POST",
     headers: {
@@ -6266,12 +7095,11 @@ GitHub response: ${body}`
     );
   }
   const policy = await policyResponse.json();
-  const fileBuffer = fs24.readFileSync(filePath);
   const formData = new FormData();
   for (const [key, value] of Object.entries(policy.form)) {
     formData.append(key, value);
   }
-  const blob = new Blob([fileBuffer], { type: contentType });
+  const blob = new Blob([assetToUpload.content], { type: contentType });
   formData.append("file", blob, fileName);
   const uploadResponse = await fetch(policy.upload_url, {
     method: "POST",
@@ -6295,16 +7123,16 @@ async function uploadAssets(options) {
 }
 async function uploadAssetsToWebAttachments(options) {
   const results = /* @__PURE__ */ new Map();
-  const { filePaths, token, repo, onProgress } = options;
-  for (let i = 0; i < filePaths.length; i += 1) {
-    const filePath = filePaths[i];
-    const fileName = path21.basename(filePath);
-    onProgress?.(i + 1, filePaths.length, fileName);
+  const assets = prepareUploadAssets(options);
+  const { token, repo, onProgress } = options;
+  for (let i = 0; i < assets.length; i += 1) {
+    const prepared = assets[i];
+    onProgress?.(i + 1, assets.length, prepared.name);
     try {
-      const asset = await uploadAsset(filePath, token, repo.id);
-      results.set(filePath, asset);
+      const asset = await uploadPreparedAsset(prepared, token, repo.id);
+      results.set(prepared.key, asset);
     } catch (error) {
-      console.error(`  Failed to upload ${fileName}: ${error.message}`);
+      console.error(`  Failed to upload ${prepared.name}: ${error.message}`);
     }
   }
   return results;
@@ -6312,19 +7140,32 @@ async function uploadAssetsToWebAttachments(options) {
 async function uploadAssetsToRepoContents(options) {
   const results = /* @__PURE__ */ new Map();
   const artifactsBranch = options.artifactsBranch || DEFAULT_ARTIFACTS_BRANCH;
+  const assets = prepareUploadAssets(options);
   await ensureArtifactsBranch(options.repo, artifactsBranch, options.token);
-  for (let i = 0; i < options.filePaths.length; i += 1) {
-    const filePath = options.filePaths[i];
-    const fileName = path21.basename(filePath);
-    options.onProgress?.(i + 1, options.filePaths.length, fileName);
+  for (let i = 0; i < assets.length; i += 1) {
+    const prepared = assets[i];
+    const fileName = prepared.name;
+    options.onProgress?.(i + 1, assets.length, fileName);
     try {
-      const content = fs24.readFileSync(filePath, "base64");
+      const content = prepared.content.toString("base64");
       const uploadPath = path21.posix.join(
         options.uploadRoot,
-        path21.basename(path21.dirname(filePath)),
+        prepared.relativeDirectory,
         fileName
       );
-      await githubApi(
+      let existingSha;
+      try {
+        const existing = await githubApi(
+          `repos/${options.repo.owner}/${options.repo.repo}/contents/${encodePath(uploadPath)}?ref=${encodeURIComponent(artifactsBranch)}`,
+          options.token
+        );
+        existingSha = existing.sha;
+      } catch (error) {
+        if (!(error instanceof GitHubApiError) || error.status !== 404) {
+          throw error;
+        }
+      }
+      const result = await githubApi(
         `repos/${options.repo.owner}/${options.repo.repo}/contents/${encodePath(uploadPath)}`,
         options.token,
         {
@@ -6332,12 +7173,13 @@ async function uploadAssetsToRepoContents(options) {
           body: JSON.stringify({
             message: `proofshot: add ${uploadPath}`,
             content,
-            branch: artifactsBranch
+            branch: artifactsBranch,
+            ...existingSha ? { sha: existingSha } : {}
           })
         }
       );
-      results.set(filePath, {
-        url: buildBlobUrl(options.repo, artifactsBranch, uploadPath),
+      results.set(prepared.key, {
+        url: buildBlobUrl(options.repo, result.commit.sha, uploadPath),
         name: fileName
       });
     } catch (error) {
@@ -6345,6 +7187,17 @@ async function uploadAssetsToRepoContents(options) {
     }
   }
   return results;
+}
+function prepareUploadAssets(options) {
+  if (options.preparedAssets) {
+    return options.preparedAssets;
+  }
+  return (options.filePaths || []).map((filePath) => ({
+    key: filePath,
+    name: path21.basename(filePath),
+    relativeDirectory: path21.basename(path21.dirname(filePath)),
+    content: fs24.readFileSync(filePath)
+  }));
 }
 async function ensureArtifactsBranch(repo, branch, token) {
   try {
@@ -6354,8 +7207,7 @@ async function ensureArtifactsBranch(repo, branch, token) {
     );
     return;
   } catch (error) {
-    const message = error.message;
-    if (!message.includes("(404)")) throw error;
+    if (!(error instanceof GitHubApiError) || error.status !== 404) throw error;
   }
   const baseRef = await githubApi(
     `repos/${repo.owner}/${repo.repo}/git/ref/heads/${encodeURIComponent(repo.defaultBranch)}`,
@@ -6390,7 +7242,7 @@ async function githubApi(apiPath, token, init = {}) {
   });
   if (!response.ok) {
     const body = await response.text();
-    throw new ProofShotError(`GitHub API request failed (${response.status}): ${body}`);
+    throw new GitHubApiError(response.status, body);
   }
   if (response.status === 204) {
     return void 0;
@@ -6421,10 +7273,31 @@ function formatPRComment(data) {
 
 `;
   }
-  const status = data.errorCount === 0 ? "\u2705 No errors detected" : `\u26A0\uFE0F ${data.errorCount} error(s) detected`;
-  md += `${status}
-
-`;
+  const status = (() => {
+    switch (data.verdict) {
+      case "PASS":
+        return "\u2705 Verification passed";
+      case "FAIL":
+        return "\u274C Verification failed";
+      case "INCOMPLETE":
+        return "\u26A0\uFE0F Verification incomplete";
+      case "BLOCKED":
+        return "\u26D4 Verification blocked";
+      default: {
+        const exhaustiveVerdict = data.verdict;
+        return exhaustiveVerdict;
+      }
+    }
+  })();
+  md += `${status}`;
+  if (data.errorCount > 0) {
+    md += ` \xB7 ${data.errorCount} incident(s)`;
+  }
+  md += "\n\n";
+  if (data.verdictReasons.length > 0) {
+    md += data.verdictReasons.map((reason) => `- ${reason}`).join("\n");
+    md += "\n\n";
+  }
   if (data.video) {
     md += `### Recording
 
@@ -6618,7 +7491,7 @@ async function prCommand(options) {
       "ProofShot could not determine the current repository, branch, and commit."
     );
   }
-  const prNumber = options.dryRun ? null : getPRNumber(options.prNumber);
+  const prNumber = options.dryRun && !options.prNumber ? null : getPRNumber(options.prNumber);
   const target = prNumber ? getPRHeadProvenance(prNumber) : {
     repository: local.repository,
     branch: local.branch,
@@ -6659,12 +7532,10 @@ async function prCommand(options) {
     (artifact) => path23.join(selection.sessionDir, artifact.path)
   );
   const videoPath = selection.video ? path23.join(selection.sessionDir, selection.video.path) : null;
-  const errorCount = readIncidentCount(selection.sessionDir);
-  const filesToUpload = [
-    ...screenshotPaths,
-    ...videoPath ? [videoPath] : []
-  ];
-  if (filesToUpload.length === 0) {
+  const errorCount = readIncidentCount(selection.sessionDir, selection.manifest);
+  const verdict = readVerdictSummary(selection.sessionDir, selection.manifest);
+  const preparedAssets = prepareSelectedAssets(selection);
+  if (preparedAssets.length === 0) {
     throw new Error("The selected session has no publishable screenshots or video.");
   }
   if (options.dryRun) {
@@ -6682,6 +7553,8 @@ async function prCommand(options) {
         renderMode: "embed"
       } : null,
       errorCount,
+      verdict: verdict.status,
+      verdictReasons: verdict.reasons,
       branch: selection.manifest.branch,
       commitSha: selection.manifest.commitSha
     };
@@ -6704,9 +7577,9 @@ async function prCommand(options) {
   if (uploadProvider === "repo-contents") {
     console.log(chalk6.dim(`Artifacts branch: ${artifactsBranch}`));
   }
-  console.log(chalk6.dim(`Uploading ${filesToUpload.length} artifact(s)...`));
+  console.log(chalk6.dim(`Uploading ${preparedAssets.length} artifact(s)...`));
   const uploaded = await uploadAssets({
-    filePaths: filesToUpload,
+    preparedAssets,
     token,
     repo: repoInfo,
     uploadProvider,
@@ -6716,9 +7589,9 @@ async function prCommand(options) {
       console.log(chalk6.dim(`  [${current}/${total}] ${fileName}`));
     }
   });
-  if (uploaded.size !== filesToUpload.length) {
+  if (uploaded.size !== preparedAssets.length) {
     throw new Error(
-      `Only ${uploaded.size}/${filesToUpload.length} artifacts uploaded. PR comment was not posted.`
+      `Only ${uploaded.size}/${preparedAssets.length} artifacts uploaded. PR comment was not posted.`
     );
   }
   const screenshotMap = /* @__PURE__ */ new Map();
@@ -6742,10 +7615,18 @@ async function prCommand(options) {
     screenshots: screenshotMap,
     video,
     errorCount,
+    verdict: verdict.status,
+    verdictReasons: verdict.reasons,
     branch: selection.manifest.branch,
     commitSha: selection.manifest.commitSha
   };
   const commentBody = formatPRComment(commentData);
+  const currentTarget = getPRHeadProvenance(prNumber);
+  if (currentTarget.repository !== target.repository || currentTarget.branch !== target.branch || currentTarget.headSha !== target.headSha) {
+    throw new Error(
+      "The target PR head changed while artifacts were uploading; the PR comment was not posted."
+    );
+  }
   console.log(chalk6.dim("Posting PR comment..."));
   postPRComment(prNumber, commentBody);
   console.log("");
@@ -6753,6 +7634,30 @@ async function prCommand(options) {
   console.log(
     chalk6.dim(`  ${screenshotMap.size} screenshot(s), ${video ? "1 video" : "no video"}`)
   );
+}
+function prepareSelectedAssets(selection) {
+  const artifacts = [
+    ...selection.screenshots,
+    ...selection.video ? [selection.video] : []
+  ];
+  return artifacts.map((artifact) => {
+    const filePath = path23.join(selection.sessionDir, artifact.path);
+    const stat = fs26.lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Selected artifact is not a regular file: ${artifact.path}`);
+    }
+    const content = fs26.readFileSync(filePath);
+    const hash = createHash4("sha256").update(content).digest("hex");
+    if (hash !== artifact.sha256 || content.length !== artifact.size) {
+      throw new Error(`Selected artifact changed after validation: ${artifact.path}`);
+    }
+    return {
+      key: filePath,
+      name: path23.basename(artifact.path),
+      relativeDirectory: path23.basename(selection.sessionDir),
+      content
+    };
+  });
 }
 function buildUploadRoot(prNumber, manifest) {
   const sessionId = manifest.sessionId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
@@ -6764,34 +7669,73 @@ function buildUploadRoot(prNumber, manifest) {
     manifestHash
   );
 }
-function readIncidentCount(sessionDir) {
+function readIncidentCount(sessionDir, manifest) {
+  const evidenceArtifact = manifest.artifacts.find(
+    (artifact) => artifact.kind === "evidence"
+  );
+  if (!evidenceArtifact) return 0;
   try {
-    const evidence = JSON.parse(
-      fs26.readFileSync(path23.join(sessionDir, "evidence.json"), "utf-8")
-    );
+    const contents = fs26.readFileSync(path23.join(sessionDir, evidenceArtifact.path));
+    if (contents.length !== evidenceArtifact.size || createHash4("sha256").update(contents).digest("hex") !== evidenceArtifact.sha256) {
+      throw new Error("Evidence artifact changed after publication selection.");
+    }
+    const evidence = JSON.parse(contents.toString("utf-8"));
     return (evidence.incidents || []).reduce(
       (total, incident) => total + (incident.count || 0),
       0
     );
-  } catch {
-    return 0;
+  } catch (error) {
+    throw new Error(
+      `Could not read finalized evidence: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
+function readVerdictSummary(sessionDir, manifest) {
+  const verdictArtifact = manifest.artifacts.find(
+    (artifact) => artifact.kind === "verdict"
+  );
+  if (!verdictArtifact) {
+    return { status: manifest.verdict, reasons: [] };
+  }
+  const contents = fs26.readFileSync(
+    path23.join(sessionDir, verdictArtifact.path)
+  );
+  if (contents.length !== verdictArtifact.size || createHash4("sha256").update(contents).digest("hex") !== verdictArtifact.sha256) {
+    throw new Error("Verdict artifact changed after publication selection.");
+  }
+  const parsed = JSON.parse(contents.toString("utf-8"));
+  if (parsed.status !== manifest.verdict) {
+    throw new Error("Verdict artifact does not match the finalized manifest.");
+  }
+  const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.filter(
+    (reason) => typeof reason === "string"
+  ) : [];
+  return { status: manifest.verdict, reasons };
+}
 function selectLegacyPublication(options) {
-  if (!options.sessionId || path23.basename(options.sessionId) !== options.sessionId) {
+  if (!options.sessionId || options.sessionId === "." || options.sessionId === ".." || path23.basename(options.sessionId) !== options.sessionId) {
     throw new Error(
       "Legacy publication requires an exact --session folder name."
     );
   }
   const sessionDir = path23.join(options.outputDir, options.sessionId);
+  const outputRoot = fs26.realpathSync(options.outputDir);
+  const sessionRoot = fs26.realpathSync(sessionDir);
+  if (path23.dirname(sessionRoot) !== outputRoot) {
+    throw new Error("Legacy session must be a direct child of the output directory.");
+  }
   const stat = fs26.lstatSync(sessionDir);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error("Legacy session is not a safe directory.");
   }
-  if (fs26.existsSync(path23.join(sessionDir, "artifact-manifest.json"))) {
+  const manifestPath = path23.join(sessionDir, "artifact-manifest.json");
+  try {
+    fs26.lstatSync(manifestPath);
     throw new Error(
-      "A finalized manifest exists; --legacy-session cannot bypass its validation."
+      "A finalized manifest entry exists; --legacy-session cannot bypass its validation."
     );
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
   }
   const metadata = loadMetadata(sessionDir);
   if (!metadata || metadata.branch !== options.branch || metadata.commitSha !== options.headSha) {
@@ -6971,10 +7915,15 @@ async function sessionCleanCommand(options) {
 }
 function clearMatchingControlState(session) {
   const controlDir = session.controlDir ?? session.outputDir;
+  if (!hasActiveSession(controlDir)) return;
   const activeSession = loadControlSessionSafely(controlDir);
   if (activeSession?.sessionName === session.sessionName) {
     clearSession(controlDir);
+    return;
   }
+  throw new Error(
+    `Control state at ${controlDir} is corrupt or belongs to another session; it was not removed.`
+  );
 }
 function persistMatchingControlState(session) {
   const controlDir = session.controlDir ?? session.outputDir;

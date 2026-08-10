@@ -1,14 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { appendEvidenceEvent, normalizeLogText } from './evidence.js';
+import { normalizeLogText } from './evidence.js';
 import type {
   CaptureProcessState,
   EvidenceEvent,
   ProcessDefinition,
   ResolvedLogSourceState,
 } from './types.js';
-import { captureProcessIdentity, type ProcessIdentity } from '../utils/process.js';
+import {
+  captureProcessIdentity,
+  getShellExecutable,
+  type ProcessIdentity,
+} from '../utils/process.js';
 
 type WorkerConfig = {
   evidencePath: string;
@@ -21,7 +25,10 @@ type WorkerConfig = {
   command?: string;
   cwd?: string;
   env?: Record<string, string>;
+  shellPath?: string;
   offset?: number;
+  fileDevice?: number;
+  fileInode?: number;
 };
 
 const COMMON_WORKER_SOURCE = String.raw`
@@ -38,30 +45,6 @@ function normalize(text) {
 function writeEvent(text, stream, segment = 'live', extra = {}) {
   const normalized = normalize(text);
   if (normalized.length === 0) return;
-  const bytes = Buffer.byteLength(normalized);
-  if (bytesWritten + bytes > config.maxBytes) {
-    if (!truncated) {
-      truncated = true;
-      const now = Date.now();
-      const event = {
-        version: 1,
-        origin: 'environment',
-        group: config.source.group,
-        sourceId: config.source.id,
-        sourceTitle: config.source.title,
-        stream,
-        segment,
-        timestamp: new Date(now).toISOString(),
-        relativeTimeSec: Math.max(0, (now - config.startTimeMs) / 1000),
-        text: '[ProofShot capture truncated at configured byte limit]',
-        truncated: true,
-      };
-      fs.appendFileSync(config.evidencePath, JSON.stringify(event) + '\n');
-      fs.appendFileSync(config.logPath, event.text + '\n');
-    }
-    return;
-  }
-  bytesWritten += bytes;
   const now = Date.now();
   const event = {
     version: 1,
@@ -76,8 +59,33 @@ function writeEvent(text, stream, segment = 'live', extra = {}) {
     text: normalized,
     ...extra,
   };
-  fs.appendFileSync(config.evidencePath, JSON.stringify(event) + '\n');
-  fs.appendFileSync(config.logPath, normalized + '\n');
+  const serialized = JSON.stringify(event) + '\n';
+  const logLine = normalized + '\n';
+  const bytes = Buffer.byteLength(serialized) + Buffer.byteLength(logLine);
+  const truncationEvent = {
+    ...event,
+    text: '[ProofShot capture truncated at configured byte limit]',
+    truncated: true,
+  };
+  const truncationSerialized = JSON.stringify(truncationEvent) + '\n';
+  const truncationLogLine = truncationEvent.text + '\n';
+  const truncationBytes =
+    Buffer.byteLength(truncationSerialized) +
+    Buffer.byteLength(truncationLogLine);
+  if (bytesWritten + bytes + truncationBytes > config.maxBytes) {
+    if (!truncated) {
+      truncated = true;
+      if (bytesWritten + truncationBytes <= config.maxBytes) {
+        bytesWritten += truncationBytes;
+        fs.appendFileSync(config.evidencePath, truncationSerialized);
+        fs.appendFileSync(config.logPath, truncationLogLine);
+      }
+    }
+    return;
+  }
+  bytesWritten += bytes;
+  fs.appendFileSync(config.evidencePath, serialized);
+  fs.appendFileSync(config.logPath, logLine);
 }
 function attachLines(stream, streamName) {
   let buffer = '';
@@ -116,22 +124,29 @@ process.on('SIGTERM', () => {
 
 const PROCESS_RUNNER_SOURCE = `${COMMON_WORKER_SOURCE}
 const { spawn } = require('child_process');
+let stopping = false;
 const child = spawn(config.command, {
   cwd: config.cwd,
   env: { ...process.env, ...config.env },
-  shell: process.env.SHELL || '/bin/sh',
+  shell: config.shellPath,
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 attachLines(child.stdout, 'stdout');
 attachLines(child.stderr, 'stderr');
 child.on('error', (error) => writeEvent(error.stack || error.message || String(error), 'stderr'));
 child.on('close', (code) => {
-  writeEvent('[process exited with code ' + (code == null ? 'unknown' : code) + ']', 'stderr');
+  writeEvent(
+    stopping
+      ? '[process stopped by ProofShot]'
+      : '[process exited with code ' + (code == null ? 'unknown' : code) + ']',
+    'stderr',
+  );
   removePidFile();
-  process.exit(code == null ? 1 : code);
+  process.exit(stopping ? 0 : (code == null ? 1 : code));
 });
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    stopping = true;
     try { child.kill(signal); } catch {}
   });
 }
@@ -139,26 +154,37 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 const FILE_RUNNER_SOURCE = `${COMMON_WORKER_SOURCE}
 let offset = config.offset || 0;
+let fileDevice = config.fileDevice;
+let fileInode = config.fileInode;
 let buffered = '';
 function readAvailable() {
-  let stat;
+  let fd;
   try {
-    stat = fs.statSync(config.filePath);
+    fd = fs.openSync(config.filePath, 'r');
   } catch {
     return;
   }
-  if (stat.size < offset) {
+  const stat = fs.fstatSync(fd);
+  if (
+    (fileDevice !== undefined && stat.dev !== fileDevice) ||
+    (fileInode !== undefined && stat.ino !== fileInode) ||
+    stat.size < offset
+  ) {
     offset = 0;
     writeEvent('[file rotated or truncated]', 'file', 'live', { captureGap: true });
   }
-  if (stat.size === offset) return;
-  const length = stat.size - offset;
-  const fd = fs.openSync(config.filePath, 'r');
+  fileDevice = stat.dev;
+  fileInode = stat.ino;
+  if (stat.size === offset) {
+    fs.closeSync(fd);
+    return;
+  }
+  const length = Math.min(stat.size - offset, 64 * 1024);
   const buffer = Buffer.alloc(length);
-  fs.readSync(fd, buffer, 0, length, offset);
+  const bytesRead = fs.readSync(fd, buffer, 0, length, offset);
   fs.closeSync(fd);
-  offset = stat.size;
-  buffered += buffer.toString();
+  offset += bytesRead;
+  buffered += buffer.subarray(0, bytesRead).toString().replace(/\\r\\n?/g, '\\n');
   const lines = buffered.split('\\n');
   buffered = lines.pop() || '';
   for (const line of lines) writeEvent(line, 'file');
@@ -221,6 +247,7 @@ export async function startProcessCapture(
     command: definition.command,
     cwd: definition.cwd,
     env: definition.env,
+    shellPath: getShellExecutable(),
   };
   return startDetachedWorker(source.id, pidFile, PROCESS_RUNNER_SOURCE, config);
 }
@@ -235,17 +262,32 @@ export async function startFileCapture(
 ): Promise<CaptureProcessState> {
   const pidFile = `${source.logPath}.pid`;
   let offset = 0;
+  let fileDevice: number | undefined;
+  let fileInode: number | undefined;
+  let liveMaxBytes = maxBytes;
   if (fs.existsSync(filePath)) {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    appendHistory(
-      raw,
-      source,
-      evidencePath,
-      maxBytes,
-      stripAnsi,
-      'file',
-    );
-    offset = fs.statSync(filePath).size;
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      offset = stat.size;
+      fileDevice = stat.dev;
+      fileInode = stat.ino;
+      const historyBudget = Math.max(1, Math.floor(maxBytes / 2));
+      liveMaxBytes = Math.max(1, maxBytes - historyBudget);
+      const historyLength = Math.min(stat.size, historyBudget);
+      const history = Buffer.alloc(historyLength);
+      fs.readSync(fd, history, 0, historyLength, stat.size - historyLength);
+      appendHistory(
+        history.toString('utf-8'),
+        source,
+        evidencePath,
+        historyBudget,
+        stripAnsi,
+        'file',
+      );
+    } finally {
+      fs.closeSync(fd);
+    }
   }
 
   const config = {
@@ -253,10 +295,12 @@ export async function startFileCapture(
     logPath: source.logPath,
     pidFile,
     startTimeMs,
-    maxBytes,
+    maxBytes: liveMaxBytes,
     stripAnsi,
     source,
     offset,
+    fileDevice,
+    fileInode,
     filePath,
   };
   return startDetachedWorker(source.id, pidFile, FILE_RUNNER_SOURCE, config);
@@ -271,15 +315,12 @@ export function appendHistory(
   stream: EvidenceEvent['stream'],
 ): void {
   const normalized = normalizeLogText(raw, stripAnsi);
-  const buffer = Buffer.from(normalized);
-  const truncated = buffer.byteLength > maxBytes;
-  const retained = truncated
-    ? buffer.subarray(Math.max(0, buffer.byteLength - maxBytes)).toString('utf-8')
-    : normalized;
-  const lines = retained.split('\n').filter((line) => line.length > 0);
-  fs.appendFileSync(source.logPath, retained + (retained.endsWith('\n') ? '' : '\n'));
-  for (const line of lines) {
-    appendEvidenceEvent(evidencePath, {
+  const lines = normalized.split('\n').filter((line) => line.length > 0);
+  const retained: Array<{ event: EvidenceEvent; serialized: string; logLine: string }> = [];
+  let retainedBytes = 0;
+  let truncated = false;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const event: EvidenceEvent = {
       version: 1,
       origin: 'environment',
       group: source.group,
@@ -289,9 +330,60 @@ export function appendHistory(
       segment: 'history',
       timestamp: null,
       relativeTimeSec: null,
-      text: line,
-      truncated: truncated || undefined,
-    });
+      text: lines[index],
+    };
+    const serialized = JSON.stringify(event) + '\n';
+    const logLine = `${lines[index]}\n`;
+    const eventBytes =
+      Buffer.byteLength(serialized) + Buffer.byteLength(logLine);
+    if (retainedBytes + eventBytes > maxBytes) {
+      truncated = true;
+      break;
+    }
+    retained.unshift({ event, serialized, logLine });
+    retainedBytes += eventBytes;
+  }
+  if (truncated && retained.length > 0) {
+    while (retained.length > 0) {
+      retained[0].event.truncated = true;
+      retained[0].serialized = JSON.stringify(retained[0].event) + '\n';
+      retainedBytes = retained.reduce(
+        (total, entry) =>
+          total +
+          Buffer.byteLength(entry.serialized) +
+          Buffer.byteLength(entry.logLine),
+        0,
+      );
+      if (retainedBytes <= maxBytes) break;
+      retained.shift();
+    }
+  }
+  if (truncated && retained.length === 0) {
+    const event: EvidenceEvent = {
+      version: 1,
+      origin: 'environment',
+      group: source.group,
+      sourceId: source.id,
+      sourceTitle: source.title,
+      stream,
+      segment: 'history',
+      timestamp: null,
+      relativeTimeSec: null,
+      text: '[ProofShot capture truncated at configured byte limit]',
+      truncated: true,
+    };
+    const serialized = JSON.stringify(event) + '\n';
+    const logLine = `${event.text}\n`;
+    if (
+      Buffer.byteLength(serialized) + Buffer.byteLength(logLine) <=
+      maxBytes
+    ) {
+      retained.push({ event, serialized, logLine });
+    }
+  }
+  for (const entry of retained) {
+    fs.appendFileSync(evidencePath, entry.serialized);
+    fs.appendFileSync(source.logPath, entry.logLine);
   }
 }
 

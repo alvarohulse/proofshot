@@ -51,15 +51,35 @@ export async function stopOwnedBrowser(session: SessionState): Promise<void> {
   // The graceful CLI command is name/socket addressed, so issue it only while
   // the persisted immutable identity still matches. Exact tree termination
   // below remains safe when the leader has exited or its PID was recycled.
+  let gracefulCloseError: unknown;
   if (identity && processIdentityMatches(identity)) {
-    closeBrowser(session.sessionName);
+    try {
+      closeBrowser(session.sessionName);
+    } catch (error) {
+      gracefulCloseError = error;
+    }
   }
   await terminateOwnedProcessTree(identity);
   if (identity && ownedProcessTreeIsAlive(identity)) {
-    throw new Error(`Owned browser process session ${identity.sessionId} did not stop.`);
+    throw new AggregateError(
+      [
+        ...(gracefulCloseError ? [gracefulCloseError] : []),
+        new Error(`Owned browser process session ${identity.sessionId} did not stop.`),
+      ],
+      'Browser cleanup failed.',
+    );
   }
   if (session.agentBrowserSocketDir) {
     clearAgentBrowserSessionFiles(session.agentBrowserSocketDir, session.sessionName);
+  }
+  if (gracefulCloseError) {
+    console.warn(
+      `ProofShot graceful browser close failed; exact owned-process cleanup succeeded: ${
+        gracefulCloseError instanceof Error
+          ? gracefulCloseError.message
+          : String(gracefulCloseError)
+      }`,
+    );
   }
 }
 

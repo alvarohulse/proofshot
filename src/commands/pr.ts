@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import { loadConfig } from '../utils/config.js';
 import {
   type GitHubUploadProvider,
+  type PreparedUploadAsset,
   getGitHubToken,
   getRepoInfo,
   getPRNumber,
@@ -45,7 +46,7 @@ export async function prCommand(options: PROptions): Promise<void> {
       'ProofShot could not determine the current repository, branch, and commit.',
     );
   }
-  const prNumber = options.dryRun
+  const prNumber = options.dryRun && !options.prNumber
     ? null
     : getPRNumber(options.prNumber);
   const target = prNumber
@@ -94,12 +95,10 @@ export async function prCommand(options: PROptions): Promise<void> {
   const videoPath = selection.video
     ? path.join(selection.sessionDir, selection.video.path)
     : null;
-  const errorCount = readIncidentCount(selection.sessionDir);
-  const filesToUpload = [
-    ...screenshotPaths,
-    ...(videoPath ? [videoPath] : []),
-  ];
-  if (filesToUpload.length === 0) {
+  const errorCount = readIncidentCount(selection.sessionDir, selection.manifest);
+  const verdict = readVerdictSummary(selection.sessionDir, selection.manifest);
+  const preparedAssets = prepareSelectedAssets(selection);
+  if (preparedAssets.length === 0) {
     throw new Error('The selected session has no publishable screenshots or video.');
   }
 
@@ -122,6 +121,8 @@ export async function prCommand(options: PROptions): Promise<void> {
           }
         : null,
       errorCount,
+      verdict: verdict.status,
+      verdictReasons: verdict.reasons,
       branch: selection.manifest.branch,
       commitSha: selection.manifest.commitSha,
     };
@@ -149,10 +150,10 @@ export async function prCommand(options: PROptions): Promise<void> {
   if (uploadProvider === 'repo-contents') {
     console.log(chalk.dim(`Artifacts branch: ${artifactsBranch}`));
   }
-  console.log(chalk.dim(`Uploading ${filesToUpload.length} artifact(s)...`));
+  console.log(chalk.dim(`Uploading ${preparedAssets.length} artifact(s)...`));
 
   const uploaded = await uploadAssets({
-    filePaths: filesToUpload,
+    preparedAssets,
     token,
     repo: repoInfo,
     uploadProvider,
@@ -163,9 +164,9 @@ export async function prCommand(options: PROptions): Promise<void> {
     },
   });
 
-  if (uploaded.size !== filesToUpload.length) {
+  if (uploaded.size !== preparedAssets.length) {
     throw new Error(
-      `Only ${uploaded.size}/${filesToUpload.length} artifacts uploaded. PR comment was not posted.`,
+      `Only ${uploaded.size}/${preparedAssets.length} artifacts uploaded. PR comment was not posted.`,
     );
   }
 
@@ -193,12 +194,24 @@ export async function prCommand(options: PROptions): Promise<void> {
     screenshots: screenshotMap,
     video,
     errorCount,
+    verdict: verdict.status,
+    verdictReasons: verdict.reasons,
     branch: selection.manifest.branch,
     commitSha: selection.manifest.commitSha,
   };
 
   const commentBody = formatPRComment(commentData);
 
+  const currentTarget = getPRHeadProvenance(prNumber);
+  if (
+    currentTarget.repository !== target.repository ||
+    currentTarget.branch !== target.branch ||
+    currentTarget.headSha !== target.headSha
+  ) {
+    throw new Error(
+      'The target PR head changed while artifacts were uploading; the PR comment was not posted.',
+    );
+  }
   console.log(chalk.dim('Posting PR comment...'));
   postPRComment(prNumber, commentBody);
 
@@ -207,6 +220,33 @@ export async function prCommand(options: PROptions): Promise<void> {
   console.log(
     chalk.dim(`  ${screenshotMap.size} screenshot(s), ${video ? '1 video' : 'no video'}`),
   );
+}
+
+function prepareSelectedAssets(
+  selection: PublicationSelection,
+): PreparedUploadAsset[] {
+  const artifacts = [
+    ...selection.screenshots,
+    ...(selection.video ? [selection.video] : []),
+  ];
+  return artifacts.map((artifact) => {
+    const filePath = path.join(selection.sessionDir, artifact.path);
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Selected artifact is not a regular file: ${artifact.path}`);
+    }
+    const content = fs.readFileSync(filePath);
+    const hash = createHash('sha256').update(content).digest('hex');
+    if (hash !== artifact.sha256 || content.length !== artifact.size) {
+      throw new Error(`Selected artifact changed after validation: ${artifact.path}`);
+    }
+    return {
+      key: filePath,
+      name: path.basename(artifact.path),
+      relativeDirectory: path.basename(selection.sessionDir),
+      content,
+    };
+  });
 }
 
 function buildUploadRoot(
@@ -229,18 +269,75 @@ function buildUploadRoot(
   );
 }
 
-function readIncidentCount(sessionDir: string): number {
+function readIncidentCount(
+  sessionDir: string,
+  manifest: ArtifactManifest,
+): number {
+  const evidenceArtifact = manifest.artifacts.find(
+    (artifact) => artifact.kind === 'evidence',
+  );
+  if (!evidenceArtifact) return 0;
   try {
-    const evidence = JSON.parse(
-      fs.readFileSync(path.join(sessionDir, 'evidence.json'), 'utf-8'),
-    ) as { incidents?: Array<{ count?: number }> };
+    const contents = fs.readFileSync(path.join(sessionDir, evidenceArtifact.path));
+    if (
+      contents.length !== evidenceArtifact.size ||
+      createHash('sha256').update(contents).digest('hex') !==
+        evidenceArtifact.sha256
+    ) {
+      throw new Error('Evidence artifact changed after publication selection.');
+    }
+    const evidence = JSON.parse(contents.toString('utf-8')) as {
+      incidents?: Array<{ count?: number }>;
+    };
     return (evidence.incidents || []).reduce(
       (total, incident) => total + (incident.count || 0),
       0,
     );
-  } catch {
-    return 0;
+  } catch (error) {
+    throw new Error(
+      `Could not read finalized evidence: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
+}
+
+function readVerdictSummary(
+  sessionDir: string,
+  manifest: ArtifactManifest,
+): {
+  status: ArtifactManifest['verdict'];
+  reasons: string[];
+} {
+  const verdictArtifact = manifest.artifacts.find(
+    (artifact) => artifact.kind === 'verdict',
+  );
+  if (!verdictArtifact) {
+    return { status: manifest.verdict, reasons: [] };
+  }
+  const contents = fs.readFileSync(
+    path.join(sessionDir, verdictArtifact.path),
+  );
+  if (
+    contents.length !== verdictArtifact.size ||
+    createHash('sha256').update(contents).digest('hex') !==
+      verdictArtifact.sha256
+  ) {
+    throw new Error('Verdict artifact changed after publication selection.');
+  }
+  const parsed = JSON.parse(contents.toString('utf-8')) as {
+    status?: unknown;
+    reasons?: unknown;
+  };
+  if (parsed.status !== manifest.verdict) {
+    throw new Error('Verdict artifact does not match the finalized manifest.');
+  }
+  const reasons = Array.isArray(parsed.reasons)
+    ? parsed.reasons.filter(
+        (reason): reason is string => typeof reason === 'string',
+      )
+    : [];
+  return { status: manifest.verdict, reasons };
 }
 
 function selectLegacyPublication(options: {
@@ -253,6 +350,8 @@ function selectLegacyPublication(options: {
 }): PublicationSelection {
   if (
     !options.sessionId ||
+    options.sessionId === '.' ||
+    options.sessionId === '..' ||
     path.basename(options.sessionId) !== options.sessionId
   ) {
     throw new Error(
@@ -260,14 +359,23 @@ function selectLegacyPublication(options: {
     );
   }
   const sessionDir = path.join(options.outputDir, options.sessionId);
+  const outputRoot = fs.realpathSync(options.outputDir);
+  const sessionRoot = fs.realpathSync(sessionDir);
+  if (path.dirname(sessionRoot) !== outputRoot) {
+    throw new Error('Legacy session must be a direct child of the output directory.');
+  }
   const stat = fs.lstatSync(sessionDir);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error('Legacy session is not a safe directory.');
   }
-  if (fs.existsSync(path.join(sessionDir, 'artifact-manifest.json'))) {
+  const manifestPath = path.join(sessionDir, 'artifact-manifest.json');
+  try {
+    fs.lstatSync(manifestPath);
     throw new Error(
-      'A finalized manifest exists; --legacy-session cannot bypass its validation.',
+      'A finalized manifest entry exists; --legacy-session cannot bypass its validation.',
     );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   const metadata = loadMetadata(sessionDir);
   if (
