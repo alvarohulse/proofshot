@@ -10,6 +10,7 @@ import {
   parseUnixProcessIdentity,
   parseWindowsNetstatOutput,
   readCommandVersion,
+  terminateOwnedProcess,
   terminateOwnedProcessTree,
 } from './process.js';
 
@@ -146,6 +147,32 @@ describe('process ownership', () => {
     } finally {
       await terminateOwnedProcessTree(unrelatedIdentity, { graceMs: 200 });
       await waitForExit(unrelated.pid!);
+    }
+  });
+
+  it('terminates an exact helper without widening to its process group', async () => {
+    const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    });
+    const helperIdentity = captureProcessIdentity(helper.pid!);
+    const unrelatedIdentity = captureProcessIdentity(unrelated.pid!);
+    expect(helperIdentity).not.toBeNull();
+    expect(unrelatedIdentity).not.toBeNull();
+
+    try {
+      await expect(
+        terminateOwnedProcess(helperIdentity, { graceMs: 200 }),
+      ).resolves.toBe(true);
+      await waitForExit(helper.pid!);
+      expect(captureProcessIdentity(unrelated.pid!)).not.toBeNull();
+    } finally {
+      if (unrelatedIdentity) {
+        process.kill(unrelatedIdentity.pid, 'SIGKILL');
+        await waitForExit(unrelatedIdentity.pid);
+      }
     }
   });
 });

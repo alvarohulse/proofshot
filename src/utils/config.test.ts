@@ -52,4 +52,46 @@ describe('loadConfig', () => {
 
     expect(loadConfig(nested).output).toBe(path.join(tempDir, 'project-proof'));
   });
+
+  it('resolves environment runners and file sources relative to the config', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-environment-config-'));
+    fs.writeFileSync(
+      path.join(tempDir, 'proofshot.config.json'),
+      JSON.stringify({
+        environment: {
+          kind: 'tmux',
+          launch: {
+            kind: 'panes',
+            panes: [
+              { id: 'vite', command: 'npm run dev', cwd: './frontend' },
+              { id: 'api', command: 'npm run api' },
+            ],
+          },
+          cwd: './workspace',
+        },
+        logs: {
+          sources: [
+            { id: 'vite', kind: 'tmux-pane', match: { connectionKey: 'vite' } },
+            { id: 'worker', kind: 'file', path: './logs/worker.jsonl' },
+          ],
+        },
+      }),
+    );
+
+    const config = loadConfig(tempDir);
+    expect(config.environment).toMatchObject({
+      kind: 'tmux',
+      cwd: path.join(tempDir, 'workspace'),
+      launch: {
+        panes: [
+          { id: 'vite', cwd: path.join(tempDir, 'frontend') },
+          { id: 'api', cwd: path.join(tempDir, 'workspace') },
+        ],
+      },
+    });
+    expect(config.logs.sources?.[1]).toMatchObject({
+      kind: 'file',
+      path: path.join(tempDir, 'logs', 'worker.jsonl'),
+    });
+  });
 });

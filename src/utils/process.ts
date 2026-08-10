@@ -321,6 +321,36 @@ export async function terminateOwnedProcessTree(
   return true;
 }
 
+export async function terminateOwnedProcess(
+  identity: ProcessIdentity | null | undefined,
+  options: TerminateProcessTreeOptions = {},
+): Promise<boolean> {
+  if (!identity || !processIdentityMatches(identity)) {
+    return false;
+  }
+
+  const graceMs = options.graceMs ?? 1500;
+  const pollIntervalMs = options.pollIntervalMs ?? 50;
+  try {
+    process.kill(identity.pid, 'SIGTERM');
+  } catch {
+    return false;
+  }
+
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline && processIdentityMatches(identity)) {
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  if (processIdentityMatches(identity)) {
+    try {
+      process.kill(identity.pid, 'SIGKILL');
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function parseWindowsNetstatOutput(output: string, port: number): number[] {
   const pids = new Set<number>();
 

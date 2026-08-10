@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   prepareAgentBrowserSocketDir: vi.fn(),
   captureAgentBrowserProcessIdentity: vi.fn(),
   cleanupFailedStart: vi.fn(),
+  startOwnedEnvironment: vi.fn(),
   registerSession: vi.fn(),
   unregisterSession: vi.fn(),
   execSync: vi.fn(),
@@ -72,6 +73,9 @@ vi.mock('../session/state.js', () => ({
 vi.mock('../session/lifecycle.js', () => ({
   cleanupFailedStart: mocks.cleanupFailedStart,
 }));
+vi.mock('../environment/runtime.js', () => ({
+  startOwnedEnvironment: mocks.startOwnedEnvironment,
+}));
 
 vi.mock('../session/registry.js', () => ({
   registerSession: mocks.registerSession,
@@ -120,6 +124,7 @@ describe('startCommand', () => {
       startTime: '12345',
     });
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
+    mocks.startOwnedEnvironment.mockResolvedValue(null);
     mocks.execSync.mockImplementation((command: string) => {
       if (command === 'git branch --show-current') return 'main';
       if (command === 'git rev-parse HEAD') return 'deadbeef';
@@ -250,6 +255,47 @@ describe('startCommand', () => {
         lifecycleStatus: 'recovery',
         cleanupError: 'daemon identity unavailable',
       }),
+    );
+  });
+
+  it('persists owned environment state before opening the browser', async () => {
+    const environmentState = {
+      kind: 'processes',
+      evidencePath: '/audit/custom-evidence/run/environment.ndjson',
+      sources: [],
+      processes: [],
+    };
+    mocks.loadConfig.mockReturnValue({
+      output: './proofshot-artifacts',
+      headless: true,
+      viewport: { width: 1280, height: 720 },
+      browser: {},
+      devServer: { port: 3000, startupTimeout: 1000 },
+      environment: { kind: 'processes', commands: [] },
+      logs: {},
+    });
+    mocks.startOwnedEnvironment.mockImplementation(
+      async (
+        _environment: unknown,
+        _logs: unknown,
+        _sessionDir: string,
+        _sessionName: string,
+        _startTime: number,
+        onState: (state: unknown) => void,
+      ) => {
+        onState(environmentState);
+        return environmentState;
+      },
+    );
+
+    await startCommand({});
+
+    expect(mocks.startOwnedEnvironment).toHaveBeenCalled();
+    expect(mocks.startOwnedEnvironment.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.openBrowser.mock.invocationCallOrder[0],
+    );
+    expect(mocks.registerSession).toHaveBeenCalledWith(
+      expect.objectContaining({ environment: environmentState }),
     );
   });
 });

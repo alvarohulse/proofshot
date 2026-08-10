@@ -329,7 +329,7 @@ function installForTool(tool, force) {
   }
 }
 function checkboxSelect(tools) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     const selected = new Array(tools.length).fill(true);
     let cursor = 0;
     function render() {
@@ -360,7 +360,7 @@ function checkboxSelect(tools) {
         stdin.removeListener("data", onData);
         stdin.pause();
         process.stdout.write("\r\x1B[K\n");
-        resolve10([]);
+        resolve11([]);
         return;
       }
       if (key === "\r" || key === "\n") {
@@ -368,7 +368,7 @@ function checkboxSelect(tools) {
         stdin.removeListener("data", onData);
         stdin.pause();
         process.stdout.write("\r\x1B[K\n");
-        resolve10(tools.filter((_, i) => selected[i]));
+        resolve11(tools.filter((_, i) => selected[i]));
         return;
       }
       if (key === " ") {
@@ -471,7 +471,7 @@ async function installCommand(options) {
 }
 
 // src/commands/start.ts
-import * as path9 from "path";
+import * as path12 from "path";
 import chalk2 from "chalk";
 import { execSync as execSync4 } from "child_process";
 
@@ -490,6 +490,11 @@ var DEFAULT_CONFIG = {
   headless: true,
   browser: {
     ignoreHttpsErrors: false
+  },
+  logs: {
+    stripAnsi: true,
+    maxBytesPerSource: 5 * 1024 * 1024,
+    sources: []
   }
 };
 function findConfigPath(startDir) {
@@ -516,6 +521,8 @@ function loadConfig(startDir) {
     if (resolvedBrowser.configPath) {
       resolvedBrowser.configPath = path3.resolve(configDir, resolvedBrowser.configPath);
     }
+    const environment = resolveEnvironmentConfig(parsed.environment, configDir);
+    const logs = resolveLogsConfig(parsed.logs, configDir);
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
@@ -525,11 +532,58 @@ function loadConfig(startDir) {
       ),
       devServer: { ...DEFAULT_CONFIG.devServer, ...parsed.devServer },
       viewport: { ...DEFAULT_CONFIG.viewport, ...parsed.viewport },
-      browser: resolvedBrowser
+      browser: resolvedBrowser,
+      environment,
+      logs
     };
   } catch {
     return { ...DEFAULT_CONFIG };
   }
+}
+function resolveEnvironmentConfig(value, configDir) {
+  if (typeof value !== "object" || value === null) {
+    return void 0;
+  }
+  const environment = value;
+  if (environment.kind === "tmux") {
+    const launch = environment.launch.kind === "panes" ? {
+      ...environment.launch,
+      panes: environment.launch.panes.map((pane) => ({
+        ...pane,
+        cwd: path3.resolve(configDir, pane.cwd || environment.cwd || ".")
+      }))
+    } : environment.launch;
+    return {
+      ...environment,
+      cwd: path3.resolve(configDir, environment.cwd || "."),
+      connection: environment.connection?.socket ? {
+        ...environment.connection,
+        socket: path3.resolve(configDir, environment.connection.socket)
+      } : environment.connection,
+      launch
+    };
+  }
+  if (environment.kind === "processes") {
+    return {
+      ...environment,
+      commands: environment.commands.map((command) => ({
+        ...command,
+        cwd: path3.resolve(configDir, command.cwd || ".")
+      }))
+    };
+  }
+  return void 0;
+}
+function resolveLogsConfig(value, configDir) {
+  const logs = typeof value === "object" && value !== null ? value : DEFAULT_CONFIG.logs;
+  const sources = (logs.sources || []).map(
+    (source) => source.kind === "file" ? { ...source, path: path3.resolve(configDir, source.path) } : source
+  );
+  return {
+    ...DEFAULT_CONFIG.logs,
+    ...logs,
+    sources
+  };
 }
 
 // src/utils/exec.ts
@@ -547,6 +601,12 @@ function getShellExecutable(platform = process.platform, env = process.env) {
     return env.ComSpec || "cmd.exe";
   }
   return env.SHELL || "/bin/sh";
+}
+function spawnShellCommand(command, options = {}) {
+  return spawn(command, {
+    ...options,
+    shell: getShellExecutable()
+  });
 }
 function parseLinuxProcStat(stat) {
   const closeParen = stat.lastIndexOf(")");
@@ -726,13 +786,37 @@ async function terminateOwnedProcessTree(identity, options = {}) {
   const pollIntervalMs = options.pollIntervalMs ?? 50;
   const deadline = Date.now() + graceMs;
   while (Date.now() < deadline && ownedProcessTreeIsAlive(identity)) {
-    await new Promise((resolve10) => setTimeout(resolve10, pollIntervalMs));
+    await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
   }
   if (ownedProcessTreeIsAlive(identity)) {
     signalOwnedTree(identity, "SIGKILL");
     const killDeadline = Date.now() + 500;
     while (Date.now() < killDeadline && ownedProcessTreeIsAlive(identity)) {
-      await new Promise((resolve10) => setTimeout(resolve10, pollIntervalMs));
+      await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
+    }
+  }
+  return true;
+}
+async function terminateOwnedProcess(identity, options = {}) {
+  if (!identity || !processIdentityMatches(identity)) {
+    return false;
+  }
+  const graceMs = options.graceMs ?? 1500;
+  const pollIntervalMs = options.pollIntervalMs ?? 50;
+  try {
+    process.kill(identity.pid, "SIGTERM");
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline && processIdentityMatches(identity)) {
+    await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
+  }
+  if (processIdentityMatches(identity)) {
+    try {
+      process.kill(identity.pid, "SIGKILL");
+    } catch {
+      return false;
     }
   }
   return true;
@@ -836,20 +920,20 @@ async function isPortOpen(port, host = "localhost") {
   return false;
 }
 function tryConnect(port, host) {
-  return new Promise((resolve10) => {
+  return new Promise((resolve11) => {
     const socket = new net.Socket();
     socket.setTimeout(1e3);
     socket.on("connect", () => {
       socket.destroy();
-      resolve10(true);
+      resolve11(true);
     });
     socket.on("timeout", () => {
       socket.destroy();
-      resolve10(false);
+      resolve11(false);
     });
     socket.on("error", () => {
       socket.destroy();
-      resolve10(false);
+      resolve11(false);
     });
     socket.connect(port, host);
   });
@@ -923,7 +1007,7 @@ Choose another port or stop that process explicitly, then retry.`
   proc.unref();
   let processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
   for (let attempt = 0; !processIdentity && attempt < 5; attempt++) {
-    await new Promise((resolve10) => setTimeout(resolve10, 10));
+    await new Promise((resolve11) => setTimeout(resolve11, 10));
     processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
   }
   if (!processIdentity || !isDetachedProcessIdentity(processIdentity)) {
@@ -950,7 +1034,7 @@ Make sure the command is correct and the port is available.
 Original error: ${error instanceof Error ? error.message : error}`
     );
   }
-  await new Promise((resolve10) => setTimeout(resolve10, 1e3));
+  await new Promise((resolve11) => setTimeout(resolve11, 1e3));
   return result;
 }
 
@@ -1193,7 +1277,7 @@ async function waitForAgentBrowserProcessIdentity(socketDir, sessionName, timeou
     if (identity) {
       return identity;
     }
-    await new Promise((resolve10) => setTimeout(resolve10, pollIntervalMs));
+    await new Promise((resolve11) => setTimeout(resolve11, pollIntervalMs));
   } while (Date.now() < deadline);
   return captureAgentBrowserProcessIdentity(socketDir, sessionName);
 }
@@ -1253,6 +1337,1085 @@ function generateAgentBrowserSessionName(seed, nonce = randomUUID()) {
   return normalized ? `ps-${normalized}-${digest}` : `ps-${digest}`;
 }
 
+// src/environment/runtime.ts
+import * as fs13 from "fs";
+import * as net2 from "net";
+import * as path9 from "path";
+
+// src/environment/workers.ts
+import * as fs11 from "fs";
+import * as path7 from "path";
+import { spawn as spawn3 } from "child_process";
+
+// src/environment/evidence.ts
+import * as fs10 from "fs";
+var ANSI_PATTERN = (
+  // eslint-disable-next-line no-control-regex
+  /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g
+);
+var CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g;
+function normalizeLogText(text, stripAnsi = true) {
+  const normalized = text.replace(/\r\n?/g, "\n").replace(CONTROL_PATTERN, "");
+  return stripAnsi ? normalized.replace(ANSI_PATTERN, "") : normalized;
+}
+function appendEvidenceEvent(filePath, event) {
+  fs10.appendFileSync(filePath, JSON.stringify(event) + "\n");
+}
+
+// src/environment/workers.ts
+var COMMON_WORKER_SOURCE = String.raw`
+const fs = require('fs');
+const config = JSON.parse(Buffer.from(process.argv[1], 'base64').toString('utf8'));
+const ansiPattern = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+const controlPattern = /[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g;
+let bytesWritten = 0;
+let truncated = false;
+function normalize(text) {
+  const normalized = text.replace(/\r\n?/g, '\n').replace(controlPattern, '');
+  return config.stripAnsi ? normalized.replace(ansiPattern, '') : normalized;
+}
+function writeEvent(text, stream, segment = 'live', extra = {}) {
+  const normalized = normalize(text);
+  if (normalized.length === 0) return;
+  const bytes = Buffer.byteLength(normalized);
+  if (bytesWritten + bytes > config.maxBytes) {
+    if (!truncated) {
+      truncated = true;
+      const now = Date.now();
+      const event = {
+        version: 1,
+        origin: 'environment',
+        group: config.source.group,
+        sourceId: config.source.id,
+        sourceTitle: config.source.title,
+        stream,
+        segment,
+        timestamp: new Date(now).toISOString(),
+        relativeTimeSec: Math.max(0, (now - config.startTimeMs) / 1000),
+        text: '[ProofShot capture truncated at configured byte limit]',
+        truncated: true,
+      };
+      fs.appendFileSync(config.evidencePath, JSON.stringify(event) + '\n');
+      fs.appendFileSync(config.logPath, event.text + '\n');
+    }
+    return;
+  }
+  bytesWritten += bytes;
+  const now = Date.now();
+  const event = {
+    version: 1,
+    origin: 'environment',
+    group: config.source.group,
+    sourceId: config.source.id,
+    sourceTitle: config.source.title,
+    stream,
+    segment,
+    timestamp: new Date(now).toISOString(),
+    relativeTimeSec: Math.max(0, (now - config.startTimeMs) / 1000),
+    text: normalized,
+    ...extra,
+  };
+  fs.appendFileSync(config.evidencePath, JSON.stringify(event) + '\n');
+  fs.appendFileSync(config.logPath, normalized + '\n');
+}
+function attachLines(stream, streamName) {
+  let buffer = '';
+  stream.on('data', (chunk) => {
+    buffer += chunk.toString().replace(/\r\n?/g, '\n');
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) writeEvent(line, streamName);
+  });
+  stream.on('end', () => {
+    if (buffer.length > 0) writeEvent(buffer, streamName);
+    buffer = '';
+  });
+}
+if (config.pidFile) {
+  fs.writeFileSync(config.pidFile, String(process.pid), { mode: 0o600 });
+}
+function removePidFile() {
+  if (config.pidFile) {
+    try { fs.unlinkSync(config.pidFile); } catch {}
+  }
+}
+`;
+var TMUX_PIPE_RUNNER_SOURCE = `${COMMON_WORKER_SOURCE}
+attachLines(process.stdin, 'pty');
+process.stdin.on('end', () => {
+  removePidFile();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  removePidFile();
+  process.exit(0);
+});
+`;
+var PROCESS_RUNNER_SOURCE = `${COMMON_WORKER_SOURCE}
+const { spawn } = require('child_process');
+const child = spawn(config.command, {
+  cwd: config.cwd,
+  env: { ...process.env, ...config.env },
+  shell: process.env.SHELL || '/bin/sh',
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+attachLines(child.stdout, 'stdout');
+attachLines(child.stderr, 'stderr');
+child.on('error', (error) => writeEvent(error.stack || error.message || String(error), 'stderr'));
+child.on('close', (code) => {
+  writeEvent('[process exited with code ' + (code == null ? 'unknown' : code) + ']', 'stderr');
+  removePidFile();
+  process.exit(code == null ? 1 : code);
+});
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {
+    try { child.kill(signal); } catch {}
+  });
+}
+`;
+var FILE_RUNNER_SOURCE = `${COMMON_WORKER_SOURCE}
+let offset = config.offset || 0;
+let buffered = '';
+function readAvailable() {
+  let stat;
+  try {
+    stat = fs.statSync(config.filePath);
+  } catch {
+    return;
+  }
+  if (stat.size < offset) {
+    offset = 0;
+    writeEvent('[file rotated or truncated]', 'file', 'live', { captureGap: true });
+  }
+  if (stat.size === offset) return;
+  const length = stat.size - offset;
+  const fd = fs.openSync(config.filePath, 'r');
+  const buffer = Buffer.alloc(length);
+  fs.readSync(fd, buffer, 0, length, offset);
+  fs.closeSync(fd);
+  offset = stat.size;
+  buffered += buffer.toString();
+  const lines = buffered.split('\\n');
+  buffered = lines.pop() || '';
+  for (const line of lines) writeEvent(line, 'file');
+}
+const timer = setInterval(readAvailable, 100);
+function stop() {
+  clearInterval(timer);
+  if (buffered.length > 0) writeEvent(buffered, 'file');
+  removePidFile();
+  process.exit(0);
+}
+process.on('SIGINT', stop);
+process.on('SIGTERM', stop);
+`;
+function buildTmuxPipeCommand(config) {
+  const encodedConfig = encodeConfig(config);
+  return [
+    shellQuote2(process.execPath),
+    "-e",
+    shellQuote2(TMUX_PIPE_RUNNER_SOURCE),
+    shellQuote2(encodedConfig)
+  ].join(" ");
+}
+async function waitForCaptureProcess(sourceId, pidFile, timeoutMs = 2e3) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    const identity = readPidIdentity(pidFile);
+    if (identity) {
+      return { sourceId, process: identity, pidFile };
+    }
+    await new Promise((resolve11) => setTimeout(resolve11, 25));
+  } while (Date.now() < deadline);
+  throw new Error(`ProofShot could not capture the log helper identity for ${sourceId}.`);
+}
+async function startProcessCapture(definition, source, evidencePath, startTimeMs, maxBytes, stripAnsi) {
+  const pidFile = `${source.logPath}.pid`;
+  const config = {
+    evidencePath,
+    logPath: source.logPath,
+    pidFile,
+    startTimeMs,
+    maxBytes,
+    stripAnsi,
+    source,
+    command: definition.command,
+    cwd: definition.cwd,
+    env: definition.env
+  };
+  return startDetachedWorker(source.id, pidFile, PROCESS_RUNNER_SOURCE, config);
+}
+async function startFileCapture(filePath, source, evidencePath, startTimeMs, maxBytes, stripAnsi) {
+  const pidFile = `${source.logPath}.pid`;
+  let offset = 0;
+  if (fs11.existsSync(filePath)) {
+    const raw = fs11.readFileSync(filePath, "utf-8");
+    appendHistory(
+      raw,
+      source,
+      evidencePath,
+      maxBytes,
+      stripAnsi,
+      "file"
+    );
+    offset = fs11.statSync(filePath).size;
+  }
+  const config = {
+    evidencePath,
+    logPath: source.logPath,
+    pidFile,
+    startTimeMs,
+    maxBytes,
+    stripAnsi,
+    source,
+    offset,
+    filePath
+  };
+  return startDetachedWorker(source.id, pidFile, FILE_RUNNER_SOURCE, config);
+}
+function appendHistory(raw, source, evidencePath, maxBytes, stripAnsi, stream) {
+  const normalized = normalizeLogText(raw, stripAnsi);
+  const buffer = Buffer.from(normalized);
+  const truncated = buffer.byteLength > maxBytes;
+  const retained = truncated ? buffer.subarray(Math.max(0, buffer.byteLength - maxBytes)).toString("utf-8") : normalized;
+  const lines = retained.split("\n").filter((line) => line.length > 0);
+  fs11.appendFileSync(source.logPath, retained + (retained.endsWith("\n") ? "" : "\n"));
+  for (const line of lines) {
+    appendEvidenceEvent(evidencePath, {
+      version: 1,
+      origin: "environment",
+      group: source.group,
+      sourceId: source.id,
+      sourceTitle: source.title,
+      stream,
+      segment: "history",
+      timestamp: null,
+      relativeTimeSec: null,
+      text: line,
+      truncated: truncated || void 0
+    });
+  }
+}
+function createWorkerConfig(params) {
+  return params;
+}
+async function startDetachedWorker(sourceId, pidFile, workerSource, config) {
+  fs11.mkdirSync(path7.dirname(pidFile), { recursive: true });
+  const errorFd = fs11.openSync(`${pidFile}.stderr`, "a", 384);
+  const worker = spawn3(process.execPath, ["-e", workerSource, encodeConfig(config)], {
+    detached: true,
+    stdio: ["ignore", "ignore", errorFd]
+  });
+  fs11.closeSync(errorFd);
+  worker.unref();
+  let identity = worker.pid ? captureProcessIdentity(worker.pid) : null;
+  for (let attempt = 0; !identity && attempt < 20; attempt += 1) {
+    await new Promise((resolve11) => setTimeout(resolve11, 10));
+    identity = worker.pid ? captureProcessIdentity(worker.pid) : null;
+  }
+  if (!identity) {
+    try {
+      if (worker.pid) {
+        process.kill(-worker.pid, "SIGKILL");
+      }
+    } catch {
+    }
+    throw new Error(`ProofShot could not capture the runner identity for ${sourceId}.`);
+  }
+  return { sourceId, process: identity, pidFile };
+}
+function readPidIdentity(pidFile) {
+  try {
+    const pid = Number(fs11.readFileSync(pidFile, "utf-8").trim());
+    return captureProcessIdentity(pid);
+  } catch {
+    return null;
+  }
+}
+function encodeConfig(config) {
+  return Buffer.from(JSON.stringify(config)).toString("base64");
+}
+function shellQuote2(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+// src/environment/tmux.ts
+import * as fs12 from "fs";
+import * as path8 from "path";
+import { execFileSync as execFileSync2 } from "child_process";
+async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionName, startTimeMs, onState) {
+  assertTmuxAvailable();
+  const evidencePath = path8.join(sessionDir, "environment.ndjson");
+  const logsDir = path8.join(sessionDir, "logs");
+  const captureDir = path8.join(sessionDir, ".capture");
+  fs12.mkdirSync(logsDir, { recursive: true });
+  fs12.mkdirSync(captureDir, { recursive: true, mode: 448 });
+  fs12.writeFileSync(evidencePath, "", { flag: "a", mode: 384 });
+  let state = null;
+  let connection;
+  try {
+    connection = config.launch.kind === "panes" ? startOwnedTmux(config, proofShotSessionName, (startedConnection) => {
+      state = createTmuxState(
+        config,
+        startedConnection,
+        evidencePath
+      );
+      onState(state);
+    }) : await startExternalTmux(config);
+    if (!state) {
+      state = createTmuxState(config, connection, evidencePath);
+      onState(state);
+    }
+  } catch (error) {
+    if (state) {
+      await stopTmuxEnvironment(state).catch(() => {
+      });
+    }
+    throw error;
+  }
+  try {
+    const tmuxSources = resolveTmuxSources(config, logs, connection);
+    const panes = tmuxSources.map(
+      ({ config: sourceConfig, mapping }) => resolvePane(
+        connection.socketPath,
+        sourceConfig,
+        mapping,
+        logsDir
+      )
+    );
+    disambiguateTitles(panes);
+    state = { ...state, panes, sources: panes.map((pane) => pane.source) };
+    onState(state);
+    for (const pane of panes) {
+      const pipeStatus = tmuxExec(connection.socketPath, [
+        "display-message",
+        "-p",
+        "-t",
+        pane.pane.paneId,
+        "#{pane_pipe}"
+      ]);
+      if (pipeStatus === "1") {
+        throw new Error(
+          `tmux pane ${pane.pane.paneId} already has a pipe-pane consumer.`
+        );
+      }
+      const pidFile = path8.join(captureDir, `${pane.source.id}.pid`);
+      const workerConfig = createWorkerConfig({
+        evidencePath,
+        logPath: pane.source.logPath,
+        pidFile,
+        startTimeMs,
+        maxBytes: logs.maxBytesPerSource || 5 * 1024 * 1024,
+        stripAnsi: logs.stripAnsi !== false,
+        source: pane.source
+      });
+      tmuxExec(connection.socketPath, [
+        "pipe-pane",
+        "-t",
+        pane.pane.paneId,
+        buildTmuxPipeCommand(workerConfig)
+      ]);
+      const history = tmuxExec(connection.socketPath, [
+        "capture-pane",
+        "-p",
+        "-S",
+        "-",
+        "-t",
+        pane.pane.paneId
+      ]);
+      appendHistory(
+        history,
+        pane.source,
+        evidencePath,
+        logs.maxBytesPerSource || 5 * 1024 * 1024,
+        logs.stripAnsi !== false,
+        "pty"
+      );
+      appendEvidenceEvent(evidencePath, {
+        version: 1,
+        origin: "environment",
+        group: pane.source.group,
+        sourceId: pane.source.id,
+        sourceTitle: pane.source.title,
+        stream: "pty",
+        segment: "history",
+        timestamp: null,
+        relativeTimeSec: null,
+        text: "[tmux history/live capture boundary]",
+        captureGap: true
+      });
+      const capture = await waitForCaptureProcess(pane.source.id, pidFile);
+      state = { ...state, captures: [...state.captures, capture] };
+      onState(state);
+    }
+    return state;
+  } catch (error) {
+    await stopTmuxEnvironment(state).catch(() => {
+    });
+    throw error;
+  }
+}
+async function stopTmuxEnvironment(state) {
+  if (!processIdentityMatches(state.serverProcess) && !fs12.existsSync(state.socket.path) && state.captures.every((capture) => !processIdentityMatches(capture.process))) {
+    return;
+  }
+  assertSocketIdentity(state);
+  if (!processIdentityMatches(state.serverProcess)) {
+    throw new Error("tmux server identity changed; refusing widened cleanup.");
+  }
+  if (state.stopCommand) {
+    await runCommand(state.stopCommand, state.stopCwd || process.cwd());
+  } else if (state.ownsSession && tmuxHasSession(state)) {
+    tmuxExec(state.socket.path, ["kill-session", "-t", state.sessionName]);
+  } else {
+    for (const pane of state.panes) {
+      try {
+        tmuxExec(state.socket.path, ["pipe-pane", "-t", pane.paneId]);
+      } catch {
+      }
+    }
+  }
+  for (const capture of state.captures) {
+    await terminateOwnedProcess(capture.process, { graceMs: 500 });
+    if (processIdentityMatches(capture.process)) {
+      throw new Error(`Log helper for ${capture.sourceId} did not stop.`);
+    }
+  }
+  if (state.ownsServer && processIdentityMatches(state.serverProcess)) {
+    try {
+      tmuxExec(state.socket.path, ["kill-server"]);
+    } catch {
+      await terminateOwnedProcessTree(state.serverProcess, { graceMs: 500 });
+    }
+  }
+  if (state.ownsServer && processIdentityMatches(state.serverProcess)) {
+    throw new Error("Owned tmux server did not stop.");
+  }
+  if (state.ownsServer && fs12.existsSync(state.socket.path)) {
+    const currentSocket = captureSocketIdentity(state.socket.path);
+    if (currentSocket.inode !== state.socket.inode || currentSocket.uid !== state.socket.uid) {
+      throw new Error("tmux socket changed before final cleanup.");
+    }
+    fs12.unlinkSync(state.socket.path);
+  }
+  if (state.ownsSession && tmuxHasSession(state)) {
+    throw new Error(`Owned tmux session ${state.sessionName} did not stop.`);
+  }
+}
+function startOwnedTmux(config, proofShotSessionName, onStarted) {
+  if (config.launch.kind !== "panes" || config.launch.panes.length === 0) {
+    throw new Error("tmux pane launch requires at least one pane.");
+  }
+  const uid = process.getuid?.() ?? process.pid;
+  const socketDir = path8.join("/tmp", `proofshot-${uid}`, "tmux");
+  fs12.mkdirSync(socketDir, { recursive: true, mode: 448 });
+  const socketPath = path8.join(socketDir, `${proofShotSessionName}.sock`);
+  if (fs12.existsSync(socketPath)) {
+    throw new Error(`Refusing to reuse an existing tmux socket: ${socketPath}`);
+  }
+  const sessionName = config.launch.sessionName || proofShotSessionName;
+  const [firstPane, ...remainingPanes] = config.launch.panes;
+  const first = parsePaneOutput(
+    tmuxExec(socketPath, [
+      "new-session",
+      "-d",
+      "-P",
+      "-F",
+      "#{pane_id}	#{pane_index}	#{pane_pid}",
+      "-s",
+      sessionName,
+      "-n",
+      "environment",
+      "-c",
+      firstPane.cwd || config.cwd || process.cwd(),
+      buildPaneCommand(firstPane)
+    ])
+  );
+  const mappings = [
+    {
+      key: firstPane.id,
+      paneId: first.paneId,
+      title: firstPane.title,
+      group: firstPane.group
+    }
+  ];
+  configurePane(socketPath, first.paneId, firstPane.id, firstPane.title);
+  onStarted({
+    socketPath,
+    sessionName,
+    paneMappings: [...mappings],
+    ownsServer: true,
+    ownsSession: true
+  });
+  for (const pane of remainingPanes) {
+    const created = parsePaneOutput(
+      tmuxExec(socketPath, [
+        "split-window",
+        "-d",
+        "-P",
+        "-F",
+        "#{pane_id}	#{pane_index}	#{pane_pid}",
+        "-t",
+        `${sessionName}:environment`,
+        "-c",
+        pane.cwd || config.cwd || process.cwd(),
+        buildPaneCommand(pane)
+      ])
+    );
+    configurePane(socketPath, created.paneId, pane.id, pane.title);
+    mappings.push({
+      key: pane.id,
+      paneId: created.paneId,
+      title: pane.title,
+      group: pane.group
+    });
+  }
+  tmuxExec(socketPath, ["select-layout", "-t", `${sessionName}:environment`, "tiled"]);
+  return {
+    socketPath,
+    sessionName,
+    paneMappings: mappings,
+    ownsServer: true,
+    ownsSession: true
+  };
+}
+function createTmuxState(config, connection, evidencePath) {
+  const serverPid = Number(
+    tmuxExec(connection.socketPath, ["display-message", "-p", "#{pid}"])
+  );
+  const serverProcess = captureProcessIdentity(serverPid);
+  if (!serverProcess) {
+    throw new Error("ProofShot could not capture the exact tmux server identity.");
+  }
+  return {
+    kind: "tmux",
+    evidencePath,
+    sources: [],
+    socket: captureSocketIdentity(connection.socketPath),
+    serverProcess,
+    sessionName: connection.sessionName,
+    ownsServer: connection.ownsServer,
+    ownsSession: connection.ownsSession,
+    panes: [],
+    captures: [],
+    stopCommand: config.launch.kind === "external-command" ? config.launch.stopCommand : void 0,
+    stopCwd: config.cwd
+  };
+}
+async function startExternalTmux(config) {
+  if (config.launch.kind !== "external-command" || !config.connection) {
+    throw new Error("External tmux launch requires a connection contract.");
+  }
+  const hintedSocket = config.connection.socket;
+  const socketExistedBefore = hintedSocket ? fs12.existsSync(hintedSocket) : true;
+  const output = await runCommand(
+    config.launch.command,
+    config.cwd || process.cwd()
+  );
+  const parsed = config.connection.format === "json" ? parseJsonConnection(output) : parseAttachCommand(output);
+  const ownsCreatedSocket = hintedSocket !== void 0 && path8.resolve(hintedSocket) === path8.resolve(parsed.socketPath) && !socketExistedBefore;
+  return {
+    ...parsed,
+    ownsServer: ownsCreatedSocket,
+    ownsSession: ownsCreatedSocket
+  };
+}
+function resolveTmuxSources(config, logs, connection) {
+  const configured = (logs.sources || []).filter(
+    (source) => source.kind === "tmux-pane"
+  );
+  if (configured.length > 0) {
+    return configured.map((source) => ({
+      config: source,
+      mapping: "connectionKey" in source.match ? connection.paneMappings.find(
+        (mapping) => mapping.key === source.match.connectionKey
+      ) : void 0
+    }));
+  }
+  if (config.launch.kind !== "panes") {
+    return [];
+  }
+  return connection.paneMappings.map((mapping) => ({
+    config: {
+      id: mapping.key,
+      title: mapping.title,
+      group: mapping.group,
+      kind: "tmux-pane",
+      match: { connectionKey: mapping.key }
+    },
+    mapping
+  }));
+}
+function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
+  let target;
+  if ("connectionKey" in sourceConfig.match) {
+    if (!mapping) {
+      throw new Error(
+        `No tmux pane mapping matched connection key "${sourceConfig.match.connectionKey}".`
+      );
+    }
+    target = mapping.paneId;
+  } else if ("tag" in sourceConfig.match) {
+    const matches = tmuxExec(socketPath, [
+      "list-panes",
+      "-a",
+      "-F",
+      "#{pane_id}	#{@proofshot-source}"
+    ]).split("\n").filter((line) => line.split("	")[1] === sourceConfig.match.tag);
+    if (matches.length !== 1) {
+      throw new Error(
+        `Expected one tmux pane tagged "${sourceConfig.match.tag}", found ${matches.length}.`
+      );
+    }
+    target = matches[0].split("	")[0];
+  } else {
+    target = sourceConfig.match.target;
+  }
+  const fields = tmuxExec(socketPath, [
+    "display-message",
+    "-p",
+    "-t",
+    target,
+    "#{pane_id}	#{pane_index}	#{pane_pid}	#{pane_title}	#{session_name}:#{window_name}.#{pane_index}"
+  ]).split("	");
+  if (fields.length !== 5) {
+    throw new Error(`Could not resolve tmux pane metadata for ${target}.`);
+  }
+  const paneIndex = Number(fields[1]);
+  const tmuxTitle = fields[3].trim();
+  const title = sourceConfig.title || mapping?.title || (tmuxTitle.length > 0 ? tmuxTitle : `Pane ${paneIndex}`);
+  const group = sourceConfig.group || mapping?.group || "environment";
+  const source = {
+    id: sourceConfig.id,
+    title,
+    group,
+    kind: "tmux-pane",
+    stream: "pty",
+    logPath: path8.join(logsDir, `${sourceConfig.id}.log`),
+    include: sourceConfig.include,
+    exclude: sourceConfig.exclude
+  };
+  return {
+    source,
+    pane: {
+      paneId: fields[0],
+      paneIndex,
+      panePid: Number(fields[2]),
+      sourceId: source.id,
+      title,
+      group,
+      target: fields[4]
+    }
+  };
+}
+function disambiguateTitles(panes) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const pane of panes) {
+    counts.set(pane.source.title, (counts.get(pane.source.title) || 0) + 1);
+  }
+  for (const pane of panes) {
+    if ((counts.get(pane.source.title) || 0) > 1) {
+      const title = `${pane.source.title} (Pane ${pane.pane.paneIndex})`;
+      pane.source.title = title;
+      pane.pane.title = title;
+    }
+  }
+}
+function configurePane(socketPath, paneId, sourceId, title) {
+  validateId(sourceId);
+  tmuxExec(socketPath, [
+    "set-option",
+    "-p",
+    "-t",
+    paneId,
+    "@proofshot-source",
+    sourceId
+  ]);
+  if (title) {
+    tmuxExec(socketPath, ["select-pane", "-t", paneId, "-T", title]);
+  }
+}
+function buildPaneCommand(pane) {
+  const assignments = Object.entries(pane.env || {}).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      throw new Error(`Invalid environment variable name: ${key}`);
+    }
+    return `${key}=${shellQuote3(value)}`;
+  });
+  return assignments.length > 0 ? `env ${assignments.join(" ")} ${pane.command}` : pane.command;
+}
+function parsePaneOutput(output) {
+  const [paneId, paneIndex, panePid] = output.split("	");
+  if (!paneId || !Number.isInteger(Number(paneIndex)) || !Number.isInteger(Number(panePid))) {
+    throw new Error(`Unexpected tmux pane output: ${output}`);
+  }
+  return { paneId, paneIndex: Number(paneIndex), panePid: Number(panePid) };
+}
+function parseJsonConnection(output) {
+  const parsed = JSON.parse(output);
+  if (!parsed.tmux || !path8.isAbsolute(parsed.tmux.socket) || typeof parsed.tmux.session !== "string") {
+    throw new Error("External launcher returned invalid tmux JSON.");
+  }
+  return {
+    socketPath: parsed.tmux.socket,
+    sessionName: parsed.tmux.session,
+    paneMappings: parsed.tmux.panes || [],
+    ownsServer: false,
+    ownsSession: false
+  };
+}
+function parseAttachCommand(output) {
+  const match = output.match(
+    /tmux\s+(?:(-S)\s+(\S+)|(-L)\s+(\S+)).*?attach(?:-session)?\s+-t\s+(\S+)/
+  );
+  if (!match) {
+    throw new Error("External launcher did not emit a supported tmux attach command.");
+  }
+  const flag = match[1] || match[3];
+  const value = stripShellQuotes(match[2] || match[4]);
+  const sessionName = stripShellQuotes(match[5]);
+  const socketPath = flag === "-S" ? path8.resolve(value) : execFileSync2(
+    "tmux",
+    ["-L", value, "display-message", "-p", "#{socket_path}"],
+    { encoding: "utf-8" }
+  ).trim();
+  return {
+    socketPath,
+    sessionName,
+    paneMappings: [],
+    ownsServer: false,
+    ownsSession: false
+  };
+}
+function tmuxExec(socketPath, args) {
+  return execFileSync2("tmux", ["-S", socketPath, ...args], {
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"]
+  }).trimEnd();
+}
+function tmuxHasSession(state) {
+  if (!processIdentityMatches(state.serverProcess)) {
+    return false;
+  }
+  try {
+    tmuxExec(state.socket.path, ["has-session", "-t", state.sessionName]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function runCommand(command, cwd) {
+  const child = spawnShellCommand(command, {
+    cwd,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const identity = child.pid ? captureProcessIdentity(child.pid) : null;
+  if (!identity) {
+    throw new Error("ProofShot could not capture the external launcher identity.");
+  }
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+  const exitCode = await new Promise((resolve11, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve11);
+  });
+  if (exitCode !== 0) {
+    await terminateOwnedProcessTree(identity);
+    throw new Error(
+      `External environment command failed with code ${String(exitCode)}: ${stderr.trim()}`
+    );
+  }
+  return stdout.trim();
+}
+function captureSocketIdentity(socketPath) {
+  const stat = fs12.lstatSync(socketPath);
+  if (!stat.isSocket() || stat.isSymbolicLink()) {
+    throw new Error(`tmux socket is not an owned Unix socket: ${socketPath}`);
+  }
+  const uid = process.getuid?.();
+  if (uid !== void 0 && stat.uid !== uid) {
+    throw new Error(`tmux socket is owned by uid ${stat.uid}, expected ${uid}.`);
+  }
+  return { path: socketPath, inode: stat.ino, uid: stat.uid };
+}
+function assertSocketIdentity(state) {
+  if (!fs12.existsSync(state.socket.path)) {
+    if (!processIdentityMatches(state.serverProcess)) {
+      return;
+    }
+    throw new Error("Owned tmux socket disappeared while its server is still alive.");
+  }
+  const current = captureSocketIdentity(state.socket.path);
+  if (current.inode !== state.socket.inode || current.uid !== state.socket.uid) {
+    throw new Error("tmux socket identity changed; refusing widened cleanup.");
+  }
+}
+function assertTmuxAvailable() {
+  try {
+    execFileSync2("tmux", ["-V"], { stdio: "pipe" });
+  } catch {
+    throw new Error('tmux is required for environment.kind "tmux".');
+  }
+}
+function validateId(id) {
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+    throw new Error(`Invalid log source id: ${id}`);
+  }
+}
+function shellQuote3(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+function stripShellQuotes(value) {
+  return value.replace(/^(['"])(.*)\1$/, "$2");
+}
+
+// src/environment/runtime.ts
+async function startOwnedEnvironment(environment, logs, sessionDir, sessionName, startTimeMs, onState) {
+  const fileSources = (logs.sources || []).filter(
+    (source) => source.kind === "file"
+  );
+  if (!environment && fileSources.length === 0) {
+    return null;
+  }
+  let state;
+  if (environment?.kind === "tmux") {
+    state = await startTmuxEnvironment(
+      environment,
+      logs,
+      sessionDir,
+      sessionName,
+      startTimeMs,
+      onState
+    );
+  } else {
+    state = await startProcessEnvironment(
+      environment?.kind === "processes" ? environment.commands : [],
+      logs,
+      sessionDir,
+      startTimeMs,
+      onState
+    );
+  }
+  try {
+    state = await attachFileSources(
+      state,
+      fileSources,
+      logs,
+      sessionDir,
+      startTimeMs,
+      onState
+    );
+    if (environment) {
+      await waitForReadiness(environment.readiness || []);
+    }
+    return state;
+  } catch (error) {
+    await stopOwnedEnvironment(state).catch(() => {
+    });
+    throw error;
+  }
+}
+async function stopOwnedEnvironment(state) {
+  if (!state) {
+    return;
+  }
+  switch (state.kind) {
+    case "tmux":
+      await stopTmuxEnvironment(state);
+      return;
+    case "processes":
+      for (const capture of state.processes) {
+        await terminateOwnedProcessTree(capture.process, { graceMs: 1e3 });
+        if (ownedProcessTreeIsAlive(capture.process)) {
+          throw new Error(`Environment process ${capture.sourceId} did not stop.`);
+        }
+      }
+      return;
+    default: {
+      const exhaustiveState = state;
+      return exhaustiveState;
+    }
+  }
+}
+async function startProcessEnvironment(definitions, logs, sessionDir, startTimeMs, onState) {
+  const evidencePath = path9.join(sessionDir, "environment.ndjson");
+  const logsDir = path9.join(sessionDir, "logs");
+  fs13.mkdirSync(logsDir, { recursive: true });
+  fs13.writeFileSync(evidencePath, "", { flag: "a", mode: 384 });
+  const configuredSources = (logs.sources || []).filter(
+    (source) => source.kind === "process"
+  );
+  const sources = configuredSources.length > 0 ? configuredSources : definitions.map((definition) => ({
+    id: definition.id,
+    title: definition.title,
+    group: definition.group,
+    kind: "process",
+    processId: definition.id,
+    include: void 0,
+    exclude: void 0
+  }));
+  validateUniqueIds(sources.map((source) => source.id));
+  let state = {
+    kind: "processes",
+    evidencePath,
+    sources: [],
+    processes: []
+  };
+  onState(state);
+  try {
+    for (const sourceConfig of sources) {
+      const definition = definitions.find(
+        (candidate) => candidate.id === sourceConfig.processId
+      );
+      if (!definition) {
+        throw new Error(
+          `Log source ${sourceConfig.id} references unknown process ${sourceConfig.processId}.`
+        );
+      }
+      const source = {
+        id: sourceConfig.id,
+        title: sourceConfig.title || definition.title || definition.id,
+        group: sourceConfig.group || definition.group || "environment",
+        kind: "process",
+        stream: "stdout",
+        logPath: path9.join(logsDir, `${sourceConfig.id}.log`),
+        include: sourceConfig.include,
+        exclude: sourceConfig.exclude
+      };
+      const process2 = await startProcessCapture(
+        definition,
+        source,
+        evidencePath,
+        startTimeMs,
+        logs.maxBytesPerSource || 5 * 1024 * 1024,
+        logs.stripAnsi !== false
+      );
+      state = {
+        ...state,
+        sources: [...state.sources, source],
+        processes: [...state.processes, process2]
+      };
+      onState(state);
+    }
+    return state;
+  } catch (error) {
+    await stopOwnedEnvironment(state).catch(() => {
+    });
+    throw error;
+  }
+}
+async function attachFileSources(state, fileSources, logs, sessionDir, startTimeMs, onState) {
+  if (fileSources.length === 0) {
+    return state;
+  }
+  const knownIds = new Set(state.sources.map((source) => source.id));
+  const logsDir = path9.join(sessionDir, "logs");
+  for (const fileSource of fileSources) {
+    if (knownIds.has(fileSource.id)) {
+      throw new Error(`Duplicate log source id: ${fileSource.id}`);
+    }
+    knownIds.add(fileSource.id);
+    const source = {
+      id: fileSource.id,
+      title: fileSource.title || path9.basename(fileSource.path),
+      group: fileSource.group || "environment",
+      kind: "file",
+      stream: "file",
+      logPath: path9.join(logsDir, `${fileSource.id}.log`),
+      include: fileSource.include,
+      exclude: fileSource.exclude
+    };
+    const capture = await startFileCapture(
+      fileSource.path,
+      source,
+      state.evidencePath,
+      startTimeMs,
+      logs.maxBytesPerSource || 5 * 1024 * 1024,
+      logs.stripAnsi !== false
+    );
+    state = state.kind === "tmux" ? {
+      ...state,
+      sources: [...state.sources, source],
+      captures: [...state.captures, capture]
+    } : {
+      ...state,
+      sources: [...state.sources, source],
+      processes: [...state.processes, capture]
+    };
+    onState(state);
+  }
+  return state;
+}
+async function waitForReadiness(checks) {
+  for (const check of checks) {
+    const timeoutMs = check.timeoutMs || 30 * 1e3;
+    const deadline = Date.now() + timeoutMs;
+    let lastError = "not ready";
+    while (Date.now() < deadline) {
+      try {
+        if (check.kind === "http") {
+          const response = await fetch(check.url, {
+            signal: AbortSignal.timeout(Math.min(2e3, timeoutMs))
+          });
+          if (response.ok) {
+            lastError = "";
+            break;
+          }
+          lastError = `HTTP ${response.status}`;
+        } else {
+          await connectTcp(check.host || "127.0.0.1", check.port);
+          lastError = "";
+          break;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      await new Promise((resolve11) => setTimeout(resolve11, 100));
+    }
+    if (lastError) {
+      const target = check.kind === "http" ? check.url : `${check.host || "127.0.0.1"}:${check.port}`;
+      throw new Error(`Environment readiness failed for ${target}: ${lastError}`);
+    }
+  }
+}
+function connectTcp(host, port) {
+  return new Promise((resolve11, reject) => {
+    const socket = net2.createConnection({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error("TCP readiness timed out"));
+    }, 2e3);
+    socket.once("connect", () => {
+      clearTimeout(timer);
+      socket.end();
+      resolve11();
+    });
+    socket.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+function validateUniqueIds(ids) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const id of ids) {
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+      throw new Error(`Invalid log source id: ${id}`);
+    }
+    if (seen.has(id)) {
+      throw new Error(`Duplicate log source id: ${id}`);
+    }
+    seen.add(id);
+  }
+}
+
 // src/session/lifecycle.ts
 function resolveOwnedBrowserIdentity(session) {
   return session.browserProcess || (session.agentBrowserSocketDir ? captureAgentBrowserProcessIdentity(
@@ -1304,6 +2467,11 @@ async function cleanupFailedStart(session) {
     }
   }
   try {
+    await stopOwnedEnvironment(session.environment);
+  } catch (error) {
+    cleanupError ||= error;
+  }
+  try {
     await stopOwnedServer(session);
   } catch (error) {
     cleanupError ||= error;
@@ -1312,14 +2480,14 @@ async function cleanupFailedStart(session) {
 }
 
 // src/session/registry.ts
-import * as fs10 from "fs";
+import * as fs14 from "fs";
 import * as os4 from "os";
-import * as path7 from "path";
+import * as path10 from "path";
 import { randomUUID as randomUUID2 } from "crypto";
 var SESSION_REGISTRY_DIRECTORY = "sessions";
 function getSessionRegistryDir(env = process.env, homeDir = os4.homedir()) {
-  const stateHome = env.XDG_STATE_HOME || path7.join(homeDir, ".local", "state");
-  return path7.join(stateHome, "proofshot", SESSION_REGISTRY_DIRECTORY);
+  const stateHome = env.XDG_STATE_HOME || path10.join(homeDir, ".local", "state");
+  return path10.join(stateHome, "proofshot", SESSION_REGISTRY_DIRECTORY);
 }
 function registerSession(session, registryDir = getSessionRegistryDir()) {
   validateSessionName(session.sessionName);
@@ -1327,40 +2495,40 @@ function registerSession(session, registryDir = getSessionRegistryDir()) {
   const registryPath = getRegistryPath(session.sessionName, registryDir);
   const temporaryPath = `${registryPath}.${process.pid}.${randomUUID2()}.tmp`;
   try {
-    fs10.writeFileSync(temporaryPath, JSON.stringify(session, null, 2) + "\n", {
+    fs14.writeFileSync(temporaryPath, JSON.stringify(session, null, 2) + "\n", {
       mode: 384
     });
-    fs10.renameSync(temporaryPath, registryPath);
+    fs14.renameSync(temporaryPath, registryPath);
   } finally {
-    if (fs10.existsSync(temporaryPath)) {
-      fs10.unlinkSync(temporaryPath);
+    if (fs14.existsSync(temporaryPath)) {
+      fs14.unlinkSync(temporaryPath);
     }
   }
 }
 function unregisterSession(sessionName, registryDir = getSessionRegistryDir()) {
   validateSessionName(sessionName);
   const registryPath = getRegistryPath(sessionName, registryDir);
-  if (fs10.existsSync(registryPath)) {
-    fs10.unlinkSync(registryPath);
+  if (fs14.existsSync(registryPath)) {
+    fs14.unlinkSync(registryPath);
   }
 }
 function listRegisteredSessions(registryDir = getSessionRegistryDir()) {
-  if (!fs10.existsSync(registryDir)) {
+  if (!fs14.existsSync(registryDir)) {
     return [];
   }
   assertOwnedDirectory2(registryDir);
-  return fs10.readdirSync(registryDir).filter((fileName) => fileName.endsWith(".json")).map((fileName) => readRegisteredSession(path7.join(registryDir, fileName))).filter((session) => session !== null).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  return fs14.readdirSync(registryDir).filter((fileName) => fileName.endsWith(".json")).map((fileName) => readRegisteredSession(path10.join(registryDir, fileName))).filter((session) => session !== null).sort((left, right) => right.startedAt.localeCompare(left.startedAt));
 }
 function getRegisteredSession(sessionName, registryDir = getSessionRegistryDir()) {
   validateSessionName(sessionName);
   return readRegisteredSession(getRegistryPath(sessionName, registryDir));
 }
 function prepareRegistryDirectory(registryDir) {
-  fs10.mkdirSync(registryDir, { recursive: true, mode: 448 });
+  fs14.mkdirSync(registryDir, { recursive: true, mode: 448 });
   assertOwnedDirectory2(registryDir);
 }
 function assertOwnedDirectory2(directory) {
-  const stat = fs10.lstatSync(directory);
+  const stat = fs14.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error(`ProofShot session registry is not a real directory: ${directory}`);
   }
@@ -1370,13 +2538,13 @@ function assertOwnedDirectory2(directory) {
       `ProofShot session registry is owned by uid ${stat.uid}, expected ${uid}: ${directory}`
     );
   }
-  fs10.accessSync(directory, fs10.constants.R_OK | fs10.constants.W_OK | fs10.constants.X_OK);
+  fs14.accessSync(directory, fs14.constants.R_OK | fs14.constants.W_OK | fs14.constants.X_OK);
   if (uid !== void 0) {
-    fs10.chmodSync(directory, 448);
+    fs14.chmodSync(directory, 448);
   }
 }
 function getRegistryPath(sessionName, registryDir) {
-  return path7.join(registryDir, `${sessionName}.json`);
+  return path10.join(registryDir, `${sessionName}.json`);
 }
 function validateSessionName(sessionName) {
   if (!/^[a-zA-Z0-9_-]+$/.test(sessionName)) {
@@ -1385,11 +2553,11 @@ function validateSessionName(sessionName) {
 }
 function readRegisteredSession(registryPath) {
   try {
-    const stat = fs10.lstatSync(registryPath);
+    const stat = fs14.lstatSync(registryPath);
     if (!stat.isFile() || stat.isSymbolicLink()) {
       return null;
     }
-    const parsed = JSON.parse(fs10.readFileSync(registryPath, "utf-8"));
+    const parsed = JSON.parse(fs14.readFileSync(registryPath, "utf-8"));
     return isSessionState(parsed) ? parsed : null;
   } catch {
     return null;
@@ -1414,29 +2582,29 @@ function isOptionalProcessIdentity(value) {
 }
 
 // src/session/metadata.ts
-import * as fs11 from "fs";
-import * as path8 from "path";
+import * as fs15 from "fs";
+import * as path11 from "path";
 var METADATA_FILENAME = "metadata.json";
 function writeMetadata(sessionDir, metadata) {
-  const metadataPath = path8.join(sessionDir, METADATA_FILENAME);
-  fs11.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + "\n");
+  const metadataPath = path11.join(sessionDir, METADATA_FILENAME);
+  fs15.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + "\n");
 }
 function loadMetadata(sessionDir) {
-  const metadataPath = path8.join(sessionDir, METADATA_FILENAME);
-  if (!fs11.existsSync(metadataPath)) return null;
+  const metadataPath = path11.join(sessionDir, METADATA_FILENAME);
+  if (!fs15.existsSync(metadataPath)) return null;
   try {
-    return JSON.parse(fs11.readFileSync(metadataPath, "utf-8"));
+    return JSON.parse(fs15.readFileSync(metadataPath, "utf-8"));
   } catch {
     return null;
   }
 }
 function findSessionsForBranch(outputDir, branch) {
-  if (!fs11.existsSync(outputDir)) return [];
-  const entries = fs11.readdirSync(outputDir, { withFileTypes: true });
+  if (!fs15.existsSync(outputDir)) return [];
+  const entries = fs15.readdirSync(outputDir, { withFileTypes: true });
   const matches = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const sessionDir = path8.join(outputDir, entry.name);
+    const sessionDir = path11.join(outputDir, entry.name);
     const metadata = loadMetadata(sessionDir);
     if (metadata && metadata.branch === branch) {
       matches.push({ dir: sessionDir, startedAt: metadata.startedAt });
@@ -1473,10 +2641,10 @@ async function startCommand(options) {
   if (options.port) config.devServer.port = options.port;
   if (options.output) config.output = options.output;
   if (options.headed !== void 0) config.headless = !options.headed;
-  const outputDir = path9.resolve(config.output);
+  const outputDir = path12.resolve(config.output);
   const timestamp = generateTimestamp();
   const sessionDirName = generateSessionDirName(timestamp, options.description || null);
-  const sessionDir = path9.join(outputDir, sessionDirName);
+  const sessionDir = path12.join(outputDir, sessionDirName);
   const sessionName = generateAgentBrowserSessionName(timestamp);
   let socketDir;
   let browserExecutable;
@@ -1497,8 +2665,8 @@ async function startCommand(options) {
   setAgentBrowserDefaults({ configPath: config.browser.configPath, socketDir });
   ensureOutputDir(outputDir);
   ensureOutputDir(sessionDir);
-  const videoPath = path9.join(sessionDir, "session.webm");
-  const serverErrorLog = path9.join(sessionDir, "server.log");
+  const videoPath = path12.join(sessionDir, "session.webm");
+  const serverErrorLog = path12.join(sessionDir, "server.log");
   let branch = "";
   let commitSha = "";
   try {
@@ -1552,12 +2720,31 @@ async function startCommand(options) {
     agentBrowserConfigPath: config.browser.configPath,
     serverProcess: null,
     browserProcess: null,
+    environment: null,
     viewport: { width: config.viewport.width, height: config.viewport.height }
   };
   persistOwnedSession(session, controlDir);
   const signalHandlers = installStartSignalHandlers(session, controlDir);
   let failureContext = "start the session";
   try {
+    if (options.run && config.environment) {
+      throw new Error("Use either --run or config.environment, not both.");
+    }
+    if (config.environment || (config.logs?.sources || []).some((source) => source.kind === "file")) {
+      failureContext = "start environment";
+      session.environment = await startOwnedEnvironment(
+        config.environment,
+        config.logs || {},
+        sessionDir,
+        sessionName,
+        new Date(session.startedAt).getTime(),
+        (environmentState) => {
+          session.environment = environmentState;
+          persistOwnedSession(session, controlDir);
+        }
+      );
+      console.log(chalk2.green("\u2713") + " Environment and log capture started");
+    }
     if (options.run) {
       failureContext = "start dev server";
       console.log(chalk2.dim(`Starting: ${options.run}`));
@@ -1577,7 +2764,7 @@ async function startCommand(options) {
       persistOwnedSession(session, controlDir);
       console.log(chalk2.green("\u2713") + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk2.dim(`  Server logs \u2192 ${serverErrorLog}`));
-    } else {
+    } else if (!config.environment) {
       console.log(chalk2.dim("No --run provided, assuming server is already running"));
     }
     failureContext = "open browser";
@@ -1610,7 +2797,7 @@ async function startCommand(options) {
           console.log(
             chalk2.yellow("\u26A0") + ` Recording failed (attempt ${attempt}/${RECORDING_RETRIES}), retrying in ${RETRY_DELAY_MS / 1e3}s...`
           );
-          await new Promise((resolve10) => setTimeout(resolve10, RETRY_DELAY_MS));
+          await new Promise((resolve11) => setTimeout(resolve11, RETRY_DELAY_MS));
         }
       }
     }
@@ -1727,15 +2914,15 @@ function getTerminationSignal(error) {
 }
 
 // src/commands/stop.ts
-import * as fs15 from "fs";
-import * as path13 from "path";
+import * as fs19 from "fs";
+import * as path16 from "path";
 import { randomUUID as randomUUID3 } from "crypto";
-import { execFileSync as execFileSync2 } from "child_process";
+import { execFileSync as execFileSync3 } from "child_process";
 import chalk3 from "chalk";
 
 // src/artifacts/viewer.ts
-import * as fs12 from "fs";
-import * as path10 from "path";
+import * as fs16 from "fs";
+import * as path13 from "path";
 var MAX_LOG_BYTES = 50 * 1024;
 function truncateLog(log, maxBytes) {
   if (log.length <= maxBytes) return { text: log, truncated: false };
@@ -3090,18 +4277,18 @@ ${stepsHtml}
 function writeViewer(outputDir, data) {
   let entries = data.entries;
   if (!entries) {
-    const logPath = path10.join(outputDir, "session-log.json");
-    if (!fs12.existsSync(logPath)) return null;
+    const logPath = path13.join(outputDir, "session-log.json");
+    if (!fs16.existsSync(logPath)) return null;
     try {
-      entries = JSON.parse(fs12.readFileSync(logPath, "utf-8"));
+      entries = JSON.parse(fs16.readFileSync(logPath, "utf-8"));
     } catch {
       return null;
     }
   }
   if (!entries || entries.length === 0) return null;
   const html = generateViewer({ ...data, entries });
-  const viewerPath = path10.join(outputDir, "viewer.html");
-  fs12.writeFileSync(viewerPath, html);
+  const viewerPath = path13.join(outputDir, "viewer.html");
+  fs16.writeFileSync(viewerPath, html);
   return viewerPath;
 }
 
@@ -3227,15 +4414,15 @@ function extractServerErrors(log) {
 }
 
 // src/commands/exec.ts
-import * as fs13 from "fs";
-import * as path11 from "path";
+import * as fs17 from "fs";
+import * as path14 from "path";
 import { execSync as execSync5 } from "child_process";
 var SESSION_LOG_FILENAME = "session-log.json";
 function loadSessionLog(sessionDir) {
-  const logPath = path11.join(sessionDir, SESSION_LOG_FILENAME);
-  if (!fs13.existsSync(logPath)) return [];
+  const logPath = path14.join(sessionDir, SESSION_LOG_FILENAME);
+  if (!fs17.existsSync(logPath)) return [];
   try {
-    return JSON.parse(fs13.readFileSync(logPath, "utf-8"));
+    return JSON.parse(fs17.readFileSync(logPath, "utf-8"));
   } catch {
     return [];
   }
@@ -3243,8 +4430,8 @@ function loadSessionLog(sessionDir) {
 function resolveScreenshotPath(args, sessionDir) {
   if (args[0] !== "screenshot" || args.length < 2) return args;
   const screenshotPath = args[args.length - 1];
-  if (path11.isAbsolute(screenshotPath)) return args;
-  const resolved = path11.join(sessionDir, screenshotPath);
+  if (path14.isAbsolute(screenshotPath)) return args;
+  const resolved = path14.join(sessionDir, screenshotPath);
   return [...args.slice(0, -1), resolved];
 }
 function buildShellCommand(args, sessionName) {
@@ -3384,10 +4571,10 @@ async function execCommand(args) {
     if (elementData) {
       entry.element = elementData;
     }
-    const logPath = path11.join(session.sessionDir, SESSION_LOG_FILENAME);
+    const logPath = path14.join(session.sessionDir, SESSION_LOG_FILENAME);
     const entries = loadSessionLog(session.sessionDir);
     entries.push(entry);
-    fs13.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+    fs17.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
   }
   const shellCmd = buildShellCommand(resolvedArgs, session?.sessionName);
   try {
@@ -3425,8 +4612,8 @@ async function execCommand(args) {
 }
 
 // src/utils/token-usage.ts
-import * as fs14 from "fs";
-import * as path12 from "path";
+import * as fs18 from "fs";
+import * as path15 from "path";
 import * as os5 from "os";
 function estimateTokenUsage(sessionDir, startTimeMs, endTimeMs) {
   const claudeUsage = tryClaudeCodeLogs(startTimeMs, endTimeMs);
@@ -3434,12 +4621,12 @@ function estimateTokenUsage(sessionDir, startTimeMs, endTimeMs) {
   return estimateFromContent(sessionDir);
 }
 function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
-  const claudeDir = path12.join(os5.homedir(), ".claude", "sessions");
-  if (!fs14.existsSync(claudeDir)) return null;
+  const claudeDir = path15.join(os5.homedir(), ".claude", "sessions");
+  if (!fs18.existsSync(claudeDir)) return null;
   try {
-    const files = fs14.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
+    const files = fs18.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
-      const data = JSON.parse(fs14.readFileSync(path12.join(claudeDir, file), "utf-8"));
+      const data = JSON.parse(fs18.readFileSync(path15.join(claudeDir, file), "utf-8"));
       const sessionStart = new Date(data.startedAt).getTime();
       if (sessionStart >= startTimeMs - 6e4 && sessionStart <= endTimeMs + 6e4) {
         if (data.totalInputTokens != null || data.totalOutputTokens != null || data.usage) {
@@ -3461,10 +4648,10 @@ function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
   return null;
 }
 function estimateFromContent(sessionDir) {
-  const logPath = path12.join(sessionDir, "session-log.json");
-  if (!fs14.existsSync(logPath)) return null;
+  const logPath = path15.join(sessionDir, "session-log.json");
+  if (!fs18.existsSync(logPath)) return null;
   try {
-    const entries = JSON.parse(fs14.readFileSync(logPath, "utf-8"));
+    const entries = JSON.parse(fs18.readFileSync(logPath, "utf-8"));
     if (!Array.isArray(entries) || entries.length === 0) return null;
     const actionCount = entries.length;
     const inputTokens = actionCount * 500;
@@ -3590,9 +4777,9 @@ async function stopCommand(options) {
   let consoleErrors = "";
   let consoleOutput = "";
   let consoleEntries = [];
-  const consoleErrorsPath = path13.join(session.sessionDir, "console-errors.log");
-  const consoleOutputPath = path13.join(session.sessionDir, "console-output.log");
-  const consoleEntriesPath = path13.join(session.sessionDir, "console-entries.json");
+  const consoleErrorsPath = path16.join(session.sessionDir, "console-errors.log");
+  const consoleOutputPath = path16.join(session.sessionDir, "console-output.log");
+  const consoleEntriesPath = path16.join(session.sessionDir, "console-entries.json");
   if (browserSessionAvailable) {
     try {
       consoleErrors = getConsoleErrors(session.sessionName);
@@ -3615,15 +4802,15 @@ async function stopCommand(options) {
     session.consoleErrorCount = capturedErrorLines.length > 0 && consoleErrors.trim() !== "" ? capturedErrorLines.length : 0;
     persistOwnedSession2(session, controlDir);
   } else if (priorConsoleEvidenceAvailable) {
-    if (fs15.existsSync(consoleErrorsPath)) {
-      consoleErrors = fs15.readFileSync(consoleErrorsPath, "utf-8");
+    if (fs19.existsSync(consoleErrorsPath)) {
+      consoleErrors = fs19.readFileSync(consoleErrorsPath, "utf-8");
     }
-    if (fs15.existsSync(consoleOutputPath)) {
-      consoleOutput = fs15.readFileSync(consoleOutputPath, "utf-8");
+    if (fs19.existsSync(consoleOutputPath)) {
+      consoleOutput = fs19.readFileSync(consoleOutputPath, "utf-8");
     }
-    if (fs15.existsSync(consoleEntriesPath)) {
+    if (fs19.existsSync(consoleEntriesPath)) {
       try {
-        const savedEntries = JSON.parse(fs15.readFileSync(consoleEntriesPath, "utf-8"));
+        const savedEntries = JSON.parse(fs19.readFileSync(consoleEntriesPath, "utf-8"));
         if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
       } catch {
       }
@@ -3644,6 +4831,16 @@ async function stopCommand(options) {
       cleanupError = error;
     }
   }
+  if (session.environment) {
+    console.log(chalk3.dim("Stopping environment..."));
+    try {
+      await stopOwnedEnvironment(session.environment);
+      session.environment = null;
+      persistOwnedSession2(session, controlDir);
+    } catch (error) {
+      cleanupError ||= error;
+    }
+  }
   if (session.serverProcess) {
     console.log(chalk3.dim("Stopping dev server..."));
     try {
@@ -3660,18 +4857,18 @@ async function stopCommand(options) {
   }
   let serverLog = "";
   let serverEntries = [];
-  if (fs15.existsSync(session.serverErrorLog)) {
-    const rawServerLog = fs15.readFileSync(session.serverErrorLog, "utf-8");
+  if (fs19.existsSync(session.serverErrorLog)) {
+    const rawServerLog = fs19.readFileSync(session.serverErrorLog, "utf-8");
     const parsed = parseTimestampedServerLog(rawServerLog, startTime);
     serverLog = parsed.cleanText;
     serverEntries = parsed.entries;
   }
   const sessionDir = session.sessionDir;
-  const screenshots = fs15.existsSync(sessionDir) ? fs15.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
+  const screenshots = fs19.existsSync(sessionDir) ? fs19.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
   const sessionLog = loadSessionLog(sessionDir);
   let trimOffsetSec = session.trimOffsetSec ?? 0;
   if (!session.videoTrimComplete) {
-    if (fs15.existsSync(session.videoPath)) {
+    if (fs19.existsSync(session.videoPath)) {
       trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
     } else if (recordingWasActive) {
       console.log(
@@ -3694,7 +4891,7 @@ async function stopCommand(options) {
   const serverErrorLines = extractServerErrors(serverLog);
   const serverErrorCount = serverErrorLines.length;
   const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
-  const summaryPath = path13.join(sessionDir, "SUMMARY.md");
+  const summaryPath = path16.join(sessionDir, "SUMMARY.md");
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),
     description: session.description,
@@ -3713,7 +4910,7 @@ async function stopCommand(options) {
     durationSec,
     outputDir: sessionDir
   });
-  if (!retryingStoppedSession || !fs15.existsSync(summaryPath)) {
+  if (!retryingStoppedSession || !fs19.existsSync(summaryPath)) {
     writeTextFileAtomically(summaryPath, summary);
   }
   let viewerEntries = sessionLog;
@@ -3724,7 +4921,7 @@ async function stopCommand(options) {
     }));
   }
   if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
-    const logPath = path13.join(sessionDir, "session-log.json");
+    const logPath = path16.join(sessionDir, "session-log.json");
     writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + "\n");
   }
   if (!session.sessionLogAdjusted) {
@@ -3738,7 +4935,7 @@ async function stopCommand(options) {
     description: session.description,
     serverCommand: session.serverCommand,
     durationSec,
-    videoFilename: fs15.existsSync(session.videoPath) ? path13.basename(session.videoPath) : null,
+    videoFilename: fs19.existsSync(session.videoPath) ? path16.basename(session.videoPath) : null,
     consoleErrorCount,
     consoleEvidenceAvailable,
     serverErrorCount,
@@ -3760,7 +4957,7 @@ async function stopCommand(options) {
   console.log("");
   console.log(chalk3.green.bold("\u2705 ProofShot verification complete"));
   console.log("");
-  if (fs15.existsSync(session.videoPath)) {
+  if (fs19.existsSync(session.videoPath)) {
     console.log(`\u{1F4F9} Video:         ${chalk3.dim(session.videoPath)} (${durationSec}s)`);
   }
   console.log(`\u{1F4F8} Screenshots:   ${screenshots.length} captured`);
@@ -3807,10 +5004,10 @@ async function stopCommand(options) {
 function writeTextFileAtomically(filePath, contents) {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID3()}.tmp`;
   try {
-    fs15.writeFileSync(temporaryPath, contents);
-    fs15.renameSync(temporaryPath, filePath);
+    fs19.writeFileSync(temporaryPath, contents);
+    fs19.renameSync(temporaryPath, filePath);
   } finally {
-    if (fs15.existsSync(temporaryPath)) fs15.unlinkSync(temporaryPath);
+    if (fs19.existsSync(temporaryPath)) fs19.unlinkSync(temporaryPath);
   }
 }
 function persistOwnedSession2(session, controlDir) {
@@ -3823,7 +5020,7 @@ function clearOwnedSession2(session, controlDir) {
 }
 function generateProofSummary(data) {
   const date = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").slice(0, 19);
-  const projectName = path13.basename(data.projectDirectory);
+  const projectName = path16.basename(data.projectDirectory);
   let md = `# ProofShot Verification Report
 
 **Date:** ${date}
@@ -3838,7 +5035,7 @@ ${data.description}
 
 `;
   }
-  const relativeVideo = path13.basename(data.videoPath);
+  const relativeVideo = path16.basename(data.videoPath);
   md += `## Video Recording
 
 Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationSec}s)
@@ -3918,7 +5115,7 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
   } else if (screenshots.length > 0) {
     const timestamps = screenshots.map((f) => {
       try {
-        return fs15.statSync(path13.join(outputDir, f)).birthtimeMs;
+        return fs19.statSync(path16.join(outputDir, f)).birthtimeMs;
       } catch {
         return null;
       }
@@ -3934,18 +5131,18 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
   const trimEndSec = lastActionSec + BUFFER_AFTER;
   if (trimEndSec - trimStartSec < 5) return 0;
   try {
-    execFileSync2("ffmpeg", ["-version"], { stdio: "pipe" });
+    execFileSync3("ffmpeg", ["-version"], { stdio: "pipe" });
   } catch {
     console.log(chalk3.dim("Tip: Install ffmpeg to auto-trim dead time from videos."));
     return 0;
   }
-  const dir = path13.dirname(videoPath);
-  const ext = path13.extname(videoPath);
-  const base = path13.basename(videoPath, ext);
-  const rawPath = path13.join(dir, `${base}-raw${ext}`);
+  const dir = path16.dirname(videoPath);
+  const ext = path16.extname(videoPath);
+  const base = path16.basename(videoPath, ext);
+  const rawPath = path16.join(dir, `${base}-raw${ext}`);
   try {
-    fs15.renameSync(videoPath, rawPath);
-    execFileSync2(
+    fs19.renameSync(videoPath, rawPath);
+    execFileSync3(
       "ffmpeg",
       [
         "-y",
@@ -3964,26 +5161,26 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
       { stdio: "pipe", timeout: 6e4 }
     );
     validateTrimmedVideo(videoPath);
-    fs15.unlinkSync(rawPath);
+    fs19.unlinkSync(rawPath);
     const trimmedDuration = Math.round(trimEndSec - trimStartSec);
     console.log(chalk3.dim(`Trimmed video to ${trimmedDuration}s (removed dead time)`));
     return trimStartSec;
   } catch {
-    if (fs15.existsSync(videoPath)) {
-      fs15.unlinkSync(videoPath);
+    if (fs19.existsSync(videoPath)) {
+      fs19.unlinkSync(videoPath);
     }
-    if (fs15.existsSync(rawPath)) {
-      fs15.renameSync(rawPath, videoPath);
+    if (fs19.existsSync(rawPath)) {
+      fs19.renameSync(rawPath, videoPath);
     }
     console.log(chalk3.dim("Video trimming failed, keeping original"));
     return 0;
   }
 }
 function validateTrimmedVideo(videoPath) {
-  if (!fs15.existsSync(videoPath) || fs15.statSync(videoPath).size === 0) {
+  if (!fs19.existsSync(videoPath) || fs19.statSync(videoPath).size === 0) {
     throw new Error("FFmpeg produced an empty video");
   }
-  execFileSync2(
+  execFileSync3(
     "ffmpeg",
     ["-v", "error", "-i", videoPath, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-"],
     { stdio: "pipe", timeout: 6e4 }
@@ -3991,39 +5188,39 @@ function validateTrimmedVideo(videoPath) {
 }
 
 // src/commands/diff.ts
-import * as fs16 from "fs";
-import * as path14 from "path";
+import * as fs20 from "fs";
+import * as path17 from "path";
 import chalk4 from "chalk";
 async function diffCommand(options) {
   const config = loadConfig();
-  const currentDir = path14.resolve(config.output);
-  const baselineDir = path14.resolve(options.baseline);
-  if (!fs16.existsSync(baselineDir)) {
+  const currentDir = path17.resolve(config.output);
+  const baselineDir = path17.resolve(options.baseline);
+  if (!fs20.existsSync(baselineDir)) {
     console.error(chalk4.red("\u2717") + ` Baseline directory not found: ${baselineDir}`);
     process.exit(1);
   }
-  if (!fs16.existsSync(currentDir)) {
+  if (!fs20.existsSync(currentDir)) {
     console.error(
       chalk4.red("\u2717") + ` Current artifacts not found: ${currentDir}
 ` + chalk4.dim('Run "proofshot verify" first to generate screenshots.')
     );
     process.exit(1);
   }
-  const baselineFiles = fs16.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
-  const currentFiles = fs16.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const baselineFiles = fs20.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const currentFiles = fs20.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
   if (baselineFiles.length === 0) {
     console.error(chalk4.red("\u2717") + " No baseline screenshots found (looking for page-*.png)");
     process.exit(1);
   }
-  const diffDir = path14.join(currentDir, "diffs");
-  fs16.mkdirSync(diffDir, { recursive: true });
+  const diffDir = path17.join(currentDir, "diffs");
+  fs20.mkdirSync(diffDir, { recursive: true });
   console.log(chalk4.dim("Comparing screenshots...\n"));
   let hasChanges = false;
   for (const file of baselineFiles) {
-    const baselinePath = path14.join(baselineDir, file);
-    const currentPath = path14.join(currentDir, file);
-    const diffPath = path14.join(diffDir, `diff-${file}`);
-    if (!fs16.existsSync(currentPath)) {
+    const baselinePath = path17.join(baselineDir, file);
+    const currentPath = path17.join(currentDir, file);
+    const diffPath = path17.join(diffDir, `diff-${file}`);
+    if (!fs20.existsSync(currentPath)) {
       console.log(chalk4.yellow("\u26A0") + ` ${file}: no matching current screenshot (page removed?)`);
       continue;
     }
@@ -4054,13 +5251,13 @@ async function diffCommand(options) {
 }
 
 // src/commands/clean.ts
-import * as fs17 from "fs";
-import * as path15 from "path";
+import * as fs21 from "fs";
+import * as path18 from "path";
 import chalk5 from "chalk";
 async function cleanCommand() {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
-  const outputDir = path15.resolve(config.output);
+  const outputDir = path18.resolve(config.output);
   if (hasActiveSession(controlDir)) {
     console.error(
       chalk5.red("\u2717") + " Cannot clean while a ProofShot session owns browser or server processes.\n" + chalk5.dim('Run "proofshot stop" first so exact cleanup metadata is preserved.')
@@ -4068,23 +5265,23 @@ async function cleanCommand() {
     process.exit(1);
     return;
   }
-  if (!fs17.existsSync(outputDir)) {
+  if (!fs21.existsSync(outputDir)) {
     console.log(chalk5.dim("Nothing to clean \u2014 no artifacts directory found."));
     return;
   }
-  fs17.rmSync(outputDir, { recursive: true, force: true });
+  fs21.rmSync(outputDir, { recursive: true, force: true });
   console.log(chalk5.green("\u2713") + ` Removed ${chalk5.dim(outputDir)}`);
 }
 
 // src/commands/pr.ts
-import * as fs19 from "fs";
-import * as path17 from "path";
+import * as fs23 from "fs";
+import * as path20 from "path";
 import { execSync as execSync7 } from "child_process";
 import chalk6 from "chalk";
 
 // src/utils/github.ts
-import * as fs18 from "fs";
-import * as path16 from "path";
+import * as fs22 from "fs";
+import * as path19 from "path";
 import { execSync as execSync6 } from "child_process";
 var GITHUB_API_VERSION = "2022-11-28";
 var DEFAULT_ARTIFACTS_BRANCH = "proofshot-artifacts";
@@ -4155,7 +5352,7 @@ function getPRNumber(explicitPR) {
   }
 }
 function getContentType(filePath) {
-  const ext = path16.extname(filePath).toLowerCase();
+  const ext = path19.extname(filePath).toLowerCase();
   switch (ext) {
     case ".png":
       return "image/png";
@@ -4175,8 +5372,8 @@ function getContentType(filePath) {
   }
 }
 async function uploadAsset(filePath, token, repoId) {
-  const fileName = path16.basename(filePath);
-  const fileSize = fs18.statSync(filePath).size;
+  const fileName = path19.basename(filePath);
+  const fileSize = fs22.statSync(filePath).size;
   const contentType = getContentType(filePath);
   const policyResponse = await fetch("https://github.com/upload/policies/assets", {
     method: "POST",
@@ -4210,7 +5407,7 @@ GitHub response: ${body}`
     );
   }
   const policy = await policyResponse.json();
-  const fileBuffer = fs18.readFileSync(filePath);
+  const fileBuffer = fs22.readFileSync(filePath);
   const formData = new FormData();
   for (const [key, value] of Object.entries(policy.form)) {
     formData.append(key, value);
@@ -4242,7 +5439,7 @@ async function uploadAssetsToWebAttachments(options) {
   const { filePaths, token, repo, onProgress } = options;
   for (let i = 0; i < filePaths.length; i += 1) {
     const filePath = filePaths[i];
-    const fileName = path16.basename(filePath);
+    const fileName = path19.basename(filePath);
     onProgress?.(i + 1, filePaths.length, fileName);
     try {
       const asset = await uploadAsset(filePath, token, repo.id);
@@ -4259,13 +5456,13 @@ async function uploadAssetsToRepoContents(options) {
   await ensureArtifactsBranch(options.repo, artifactsBranch, options.token);
   for (let i = 0; i < options.filePaths.length; i += 1) {
     const filePath = options.filePaths[i];
-    const fileName = path16.basename(filePath);
+    const fileName = path19.basename(filePath);
     options.onProgress?.(i + 1, options.filePaths.length, fileName);
     try {
-      const content = fs18.readFileSync(filePath, "base64");
-      const uploadPath = path16.posix.join(
+      const content = fs22.readFileSync(filePath, "base64");
+      const uploadPath = path19.posix.join(
         options.uploadRoot,
-        path16.basename(path16.dirname(filePath)),
+        path19.basename(path19.dirname(filePath)),
         fileName
       );
       await githubApi(
@@ -4433,7 +5630,7 @@ function formatPRComment(data) {
 // src/commands/pr.ts
 async function prCommand(options) {
   const config = loadConfig();
-  const outputDir = path17.resolve(config.output);
+  const outputDir = path20.resolve(config.output);
   const uploadProvider = normalizeUploadProvider(options.uploadProvider);
   const artifactsBranch = options.artifactsBranch || "proofshot-artifacts";
   let branch;
@@ -4471,23 +5668,23 @@ async function prCommand(options) {
       if (!description && metadata.description) description = metadata.description;
       if (metadata.commitSha) latestCommitSha = metadata.commitSha;
     }
-    const files = fs19.readdirSync(sessionDir);
+    const files = fs23.readdirSync(sessionDir);
     for (const f of files) {
       if (f.endsWith(".png")) {
-        screenshotPaths.push(path17.join(sessionDir, f));
+        screenshotPaths.push(path20.join(sessionDir, f));
       }
     }
     if (!videoPath) {
       for (const f of files) {
         if (f === "session.webm" || f === "session.mp4") {
-          videoPath = path17.join(sessionDir, f);
+          videoPath = path20.join(sessionDir, f);
           break;
         }
       }
     }
-    const summaryPath = path17.join(sessionDir, "SUMMARY.md");
-    if (fs19.existsSync(summaryPath)) {
-      const summary = fs19.readFileSync(summaryPath, "utf-8");
+    const summaryPath = path20.join(sessionDir, "SUMMARY.md");
+    if (fs23.existsSync(summaryPath)) {
+      const summary = fs23.readFileSync(summaryPath, "utf-8");
       const errorMatch = summary.match(/(\d+)\s+error/gi);
       if (errorMatch) {
         for (const m of errorMatch) {
@@ -4499,7 +5696,7 @@ async function prCommand(options) {
   }
   if (videoPath && videoPath.endsWith(".webm")) {
     const mp4Path = videoPath.replace(/\.webm$/, ".mp4");
-    if (fs19.existsSync(mp4Path)) {
+    if (fs23.existsSync(mp4Path)) {
       videoPath = mp4Path;
     } else {
       try {
@@ -4527,7 +5724,7 @@ async function prCommand(options) {
       sessionCount: sessionDirs.length,
       screenshots: screenshotMap2,
       video: videoPath ? {
-        url: `https://github.com/user-attachments/assets/<${path17.basename(videoPath)}>`,
+        url: `https://github.com/user-attachments/assets/<${path20.basename(videoPath)}>`,
         renderMode: "embed"
       } : null,
       errorCount,
@@ -4612,15 +5809,15 @@ async function prCommand(options) {
   );
 }
 function screenshotLabel(ssPath) {
-  const sessionDir = path17.basename(path17.dirname(ssPath));
-  const fileName = path17.basename(ssPath);
+  const sessionDir = path20.basename(path20.dirname(ssPath));
+  const fileName = path20.basename(ssPath);
   return `${sessionDir}/${fileName}`;
 }
 function buildUploadRoot(branch, prNumber, commitSha) {
   const sanitizedBranch = branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
   const sha = commitSha ? commitSha.slice(0, 7) : "unknown-sha";
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  return path17.posix.join("proofshot", `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
+  return path20.posix.join("proofshot", `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
 }
 function normalizeUploadProvider(provider) {
   if (!provider || provider === "repo-contents" || provider === "github-web-attachments") {

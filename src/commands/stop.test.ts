@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   canAddressOwnedBrowserSession: vi.fn(),
   registerSession: vi.fn(),
   unregisterSession: vi.fn(),
+  stopOwnedEnvironment: vi.fn(),
   writeViewer: vi.fn(),
   extractServerErrors: vi.fn(),
   loadSessionLog: vi.fn(),
@@ -46,6 +47,9 @@ vi.mock('../session/lifecycle.js', () => ({
 vi.mock('../session/registry.js', () => ({
   registerSession: mocks.registerSession,
   unregisterSession: mocks.unregisterSession,
+}));
+vi.mock('../environment/runtime.js', () => ({
+  stopOwnedEnvironment: mocks.stopOwnedEnvironment,
 }));
 vi.mock('../artifacts/viewer.js', () => ({ writeViewer: mocks.writeViewer }));
 vi.mock('../utils/error-patterns.js', () => ({ extractServerErrors: mocks.extractServerErrors }));
@@ -116,6 +120,7 @@ beforeEach(() => {
   mocks.execFileSync.mockReturnValue('');
   mocks.stopOwnedBrowser.mockResolvedValue(undefined);
   mocks.stopOwnedServer.mockResolvedValue(undefined);
+  mocks.stopOwnedEnvironment.mockResolvedValue(undefined);
   mocks.canAddressOwnedBrowserSession.mockReturnValue(true);
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
@@ -280,6 +285,25 @@ describe('stopCommand retryability', () => {
     expect(console.log).not.toHaveBeenCalledWith(
       expect.stringContaining('Retained browser closed'),
     );
+  });
+
+  it('retains environment ownership when exact stop fails', async () => {
+    session.environment = {
+      kind: 'processes',
+      evidencePath: path.join(session.sessionDir, 'environment.ndjson'),
+      sources: [],
+      processes: [],
+    };
+    mocks.stopOwnedEnvironment.mockRejectedValue(new Error('environment identity mismatch'));
+
+    await expect(stopCommand({})).rejects.toThrow('environment identity mismatch');
+
+    expect(session).toMatchObject({
+      lifecycleStatus: 'recovery',
+      cleanupError: 'environment identity mismatch',
+    });
+    expect(mocks.clearSession).not.toHaveBeenCalled();
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
   });
 });
 

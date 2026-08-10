@@ -24,6 +24,7 @@ import {
 import { cleanupFailedStart } from '../session/lifecycle.js';
 import { registerSession, unregisterSession } from '../session/registry.js';
 import { writeMetadata } from '../session/metadata.js';
+import { startOwnedEnvironment } from '../environment/runtime.js';
 
 interface StartOptions {
   description?: string;
@@ -158,6 +159,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     agentBrowserConfigPath: config.browser.configPath,
     serverProcess: null,
     browserProcess: null,
+    environment: null,
     viewport: { width: config.viewport.width, height: config.viewport.height },
   };
   persistOwnedSession(session, controlDir);
@@ -165,6 +167,24 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   let failureContext = 'start the session';
   try {
+    if (options.run && config.environment) {
+      throw new Error('Use either --run or config.environment, not both.');
+    }
+    if (config.environment || (config.logs?.sources || []).some((source) => source.kind === 'file')) {
+      failureContext = 'start environment';
+      session.environment = await startOwnedEnvironment(
+        config.environment,
+        config.logs || {},
+        sessionDir,
+        sessionName,
+        new Date(session.startedAt).getTime(),
+        (environmentState) => {
+          session.environment = environmentState;
+          persistOwnedSession(session, controlDir);
+        },
+      );
+      console.log(chalk.green('✓') + ' Environment and log capture started');
+    }
     if (options.run) {
       failureContext = 'start dev server';
       console.log(chalk.dim(`Starting: ${options.run}`));
@@ -184,7 +204,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       persistOwnedSession(session, controlDir);
       console.log(chalk.green('✓') + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk.dim(`  Server logs → ${serverErrorLog}`));
-    } else {
+    } else if (!config.environment) {
       console.log(chalk.dim('No --run provided, assuming server is already running'));
     }
 

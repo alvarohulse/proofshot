@@ -1,5 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type {
+  EnvironmentConfig,
+  LogsConfig,
+  LogSourceConfig,
+} from '../environment/types.js';
 
 export interface DevServerConfig {
   port: number;
@@ -24,6 +29,8 @@ export interface ProofShotConfig {
   viewport: ViewportConfig;
   headless: boolean;
   browser: BrowserConfig;
+  environment?: EnvironmentConfig;
+  logs: LogsConfig;
 }
 
 const CONFIG_FILENAME = 'proofshot.config.json';
@@ -39,6 +46,11 @@ const DEFAULT_CONFIG: ProofShotConfig = {
   headless: true,
   browser: {
     ignoreHttpsErrors: false,
+  },
+  logs: {
+    stripAnsi: true,
+    maxBytesPerSource: 5 * 1024 * 1024,
+    sources: [],
   },
 };
 
@@ -74,6 +86,8 @@ export function loadConfig(startDir?: string): ProofShotConfig {
     if (resolvedBrowser.configPath) {
       resolvedBrowser.configPath = path.resolve(configDir, resolvedBrowser.configPath);
     }
+    const environment = resolveEnvironmentConfig(parsed.environment, configDir);
+    const logs = resolveLogsConfig(parsed.logs, configDir);
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
@@ -84,10 +98,72 @@ export function loadConfig(startDir?: string): ProofShotConfig {
       devServer: { ...DEFAULT_CONFIG.devServer, ...parsed.devServer },
       viewport: { ...DEFAULT_CONFIG.viewport, ...parsed.viewport },
       browser: resolvedBrowser,
+      environment,
+      logs,
     };
   } catch {
     return { ...DEFAULT_CONFIG };
   }
+}
+
+function resolveEnvironmentConfig(
+  value: unknown,
+  configDir: string,
+): EnvironmentConfig | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+  const environment = value as EnvironmentConfig;
+  if (environment.kind === 'tmux') {
+    const launch =
+      environment.launch.kind === 'panes'
+        ? {
+            ...environment.launch,
+            panes: environment.launch.panes.map((pane) => ({
+              ...pane,
+              cwd: path.resolve(configDir, pane.cwd || environment.cwd || '.'),
+            })),
+          }
+        : environment.launch;
+    return {
+      ...environment,
+      cwd: path.resolve(configDir, environment.cwd || '.'),
+      connection: environment.connection?.socket
+        ? {
+            ...environment.connection,
+            socket: path.resolve(configDir, environment.connection.socket),
+          }
+        : environment.connection,
+      launch,
+    };
+  }
+  if (environment.kind === 'processes') {
+    return {
+      ...environment,
+      commands: environment.commands.map((command) => ({
+        ...command,
+        cwd: path.resolve(configDir, command.cwd || '.'),
+      })),
+    };
+  }
+  return undefined;
+}
+
+function resolveLogsConfig(value: unknown, configDir: string): LogsConfig {
+  const logs =
+    typeof value === 'object' && value !== null
+      ? (value as LogsConfig)
+      : DEFAULT_CONFIG.logs;
+  const sources: LogSourceConfig[] = (logs.sources || []).map((source) =>
+    source.kind === 'file'
+      ? { ...source, path: path.resolve(configDir, source.path) }
+      : source,
+  );
+  return {
+    ...DEFAULT_CONFIG.logs,
+    ...logs,
+    sources,
+  };
 }
 
 /**

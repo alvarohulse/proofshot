@@ -20,6 +20,7 @@ import {
   stopOwnedServer,
 } from '../session/lifecycle.js';
 import { registerSession, unregisterSession } from '../session/registry.js';
+import { stopOwnedEnvironment } from '../environment/runtime.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { loadSessionLog, type SessionLogEntry } from './exec.js';
@@ -203,6 +204,17 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       await stopOwnedBrowser(session);
     } catch (error) {
       cleanupError = error;
+    }
+  }
+
+  if (session.environment) {
+    console.log(chalk.dim('Stopping environment...'));
+    try {
+      await stopOwnedEnvironment(session.environment);
+      session.environment = null;
+      persistOwnedSession(session, controlDir);
+    } catch (error) {
+      cleanupError ||= error;
     }
   }
 

@@ -36,6 +36,162 @@ interface ServerStartResult {
  */
 declare function ensureDevServer(command: string, port: number, startupTimeout: number, logPath: string, onStarted?: (result: ServerStartResult) => void): Promise<ServerStartResult>;
 
+type EnvironmentGroup = 'frontend' | 'backend' | string;
+type ReadinessCheck = {
+    kind: 'http';
+    url: string;
+    timeoutMs?: number;
+} | {
+    kind: 'tcp';
+    host?: string;
+    port: number;
+    timeoutMs?: number;
+};
+type TmuxPaneDefinition = {
+    id: string;
+    title?: string;
+    group?: EnvironmentGroup;
+    cwd?: string;
+    command: string;
+    env?: Record<string, string>;
+};
+type TmuxLaunchConfig = {
+    kind: 'panes';
+    panes: TmuxPaneDefinition[];
+    sessionName?: string;
+} | {
+    kind: 'external-command';
+    command: string;
+    stopCommand?: string;
+};
+type TmuxConnectionConfig = {
+    source?: 'stdout';
+    format: 'json' | 'tmux-attach-command';
+    socket?: string;
+};
+type TmuxEnvironmentConfig = {
+    kind: 'tmux';
+    launch: TmuxLaunchConfig;
+    cwd?: string;
+    connection?: TmuxConnectionConfig;
+    readiness?: ReadinessCheck[];
+};
+type ProcessDefinition = {
+    id: string;
+    title?: string;
+    group?: EnvironmentGroup;
+    cwd?: string;
+    command: string;
+    env?: Record<string, string>;
+};
+type ProcessesEnvironmentConfig = {
+    kind: 'processes';
+    commands: ProcessDefinition[];
+    readiness?: ReadinessCheck[];
+};
+type EnvironmentConfig = TmuxEnvironmentConfig | ProcessesEnvironmentConfig;
+type TmuxPaneMatch = {
+    connectionKey: string;
+} | {
+    tag: string;
+} | {
+    target: string;
+};
+type LogSourceConfig = {
+    id: string;
+    title?: string;
+    group?: EnvironmentGroup;
+    kind: 'tmux-pane';
+    match: TmuxPaneMatch;
+    include?: string[];
+    exclude?: string[];
+} | {
+    id: string;
+    title?: string;
+    group?: EnvironmentGroup;
+    kind: 'process';
+    processId: string;
+    include?: string[];
+    exclude?: string[];
+} | {
+    id: string;
+    title?: string;
+    group?: EnvironmentGroup;
+    kind: 'file';
+    path: string;
+    include?: string[];
+    exclude?: string[];
+};
+type LogsConfig = {
+    stripAnsi?: boolean;
+    maxBytesPerSource?: number;
+    sources?: LogSourceConfig[];
+};
+type SocketIdentity = {
+    path: string;
+    inode: number;
+    uid: number;
+};
+type CaptureProcessState = {
+    sourceId: string;
+    process: ProcessIdentity;
+    pidFile: string;
+};
+type TmuxPaneState = {
+    paneId: string;
+    paneIndex: number;
+    panePid: number;
+    sourceId: string;
+    title: string;
+    group: EnvironmentGroup;
+    target: string;
+};
+type TmuxEnvironmentState = {
+    kind: 'tmux';
+    evidencePath: string;
+    sources: ResolvedLogSourceState[];
+    socket: SocketIdentity;
+    serverProcess: ProcessIdentity;
+    sessionName: string;
+    ownsServer: boolean;
+    ownsSession: boolean;
+    panes: TmuxPaneState[];
+    captures: CaptureProcessState[];
+    stopCommand?: string;
+    stopCwd?: string;
+};
+type ProcessEnvironmentState = {
+    kind: 'processes';
+    evidencePath: string;
+    sources: ResolvedLogSourceState[];
+    processes: CaptureProcessState[];
+};
+type EnvironmentState = TmuxEnvironmentState | ProcessEnvironmentState;
+type ResolvedLogSourceState = {
+    id: string;
+    title: string;
+    group: EnvironmentGroup;
+    kind: LogSourceConfig['kind'];
+    stream: EvidenceEvent['stream'];
+    logPath: string;
+    include?: string[];
+    exclude?: string[];
+};
+type EvidenceEvent = {
+    version: 1;
+    origin: 'environment' | 'browser';
+    group: string;
+    sourceId: string;
+    sourceTitle: string;
+    stream: 'pty' | 'stdout' | 'stderr' | 'file' | 'console';
+    segment: 'history' | 'live';
+    timestamp: string | null;
+    relativeTimeSec: number | null;
+    text: string;
+    truncated?: boolean;
+    captureGap?: boolean;
+};
+
 interface DevServerConfig {
     port: number;
     startupTimeout: number;
@@ -56,6 +212,8 @@ interface ProofShotConfig {
     viewport: ViewportConfig;
     headless: boolean;
     browser: BrowserConfig;
+    environment?: EnvironmentConfig;
+    logs: LogsConfig;
 }
 /**
  * Load config from disk, merging with defaults.
@@ -122,6 +280,7 @@ interface SessionState {
     agentBrowserConfigPath?: string;
     serverProcess?: ProcessIdentity | null;
     browserProcess?: ProcessIdentity | null;
+    environment?: EnvironmentState | null;
     viewport?: {
         width: number;
         height: number;
@@ -234,4 +393,7 @@ interface PRCommentData {
  */
 declare function formatPRComment(data: PRCommentData): string;
 
-export { type PRCommentData, type ProofShotConfig, ProofShotError, type SessionLogEntry, type SessionMetadata, type SessionState, ab, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadConfig, loadMetadata, loadSession, saveSession, waitForPort, writeConfig, writeMetadata, writeViewer };
+declare function startOwnedEnvironment(environment: EnvironmentConfig | undefined, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<EnvironmentState | null>;
+declare function stopOwnedEnvironment(state: EnvironmentState | null | undefined): Promise<void>;
+
+export { type EnvironmentConfig, type EnvironmentState, type LogSourceConfig, type LogsConfig, type PRCommentData, type ProofShotConfig, ProofShotError, type SessionLogEntry, type SessionMetadata, type SessionState, ab, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadConfig, loadMetadata, loadSession, saveSession, startOwnedEnvironment, stopOwnedEnvironment, waitForPort, writeConfig, writeMetadata, writeViewer };

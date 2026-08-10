@@ -1,4 +1,5 @@
 import { stopRecording } from '../browser/capture.js';
+import { stopOwnedEnvironment } from '../environment/runtime.js';
 import {
   captureAgentBrowserProcessIdentity,
   waitForAgentBrowserProcessIdentity,
@@ -87,6 +88,11 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
     } catch (error) {
       cleanupError ||= error;
     }
+  }
+  try {
+    await stopOwnedEnvironment(session.environment);
+  } catch (error) {
+    cleanupError ||= error;
   }
   try {
     await stopOwnedServer(session);

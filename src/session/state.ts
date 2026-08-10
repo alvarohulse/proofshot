@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
+import type { EnvironmentState } from '../environment/types.js';
 import type { ProcessIdentity } from '../utils/process.js';
 
 const SESSION_FILENAME = '.session.json';
@@ -34,6 +35,7 @@ export interface SessionState {
   agentBrowserConfigPath?: string;
   serverProcess?: ProcessIdentity | null;
   browserProcess?: ProcessIdentity | null;
+  environment?: EnvironmentState | null;
   viewport?: { width: number; height: number };
 }
 
