@@ -1203,8 +1203,8 @@ Retry with: proofshot start --browser-executable ${JSON.stringify(resolved)}`
       );
     }
   } else {
-    candidates.push("/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser");
     for (const home of homes) candidates.push(...cachedBrowserCandidates(home));
+    candidates.push("/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser");
   }
   return candidates.find(isExecutable) ?? null;
 }

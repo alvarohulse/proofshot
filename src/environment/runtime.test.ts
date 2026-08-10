@@ -95,8 +95,12 @@ describe('owned environment capture', () => {
           sourceTitle: 'Vite',
           group: 'frontend',
           stream: 'pty',
-          segment: 'history',
           text: 'vite-history',
+        }),
+        expect.objectContaining({
+          sourceId: 'frontend-vite',
+          segment: 'history',
+          captureGap: true,
         }),
         expect.objectContaining({
           sourceId: 'frontend-vite',
