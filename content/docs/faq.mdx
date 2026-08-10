@@ -34,7 +34,7 @@ Yes. Session state (`.session.json`) lives in each project's configured/default 
 JavaScript/Node.js, Python, Ruby/Rails, Go, Java/Kotlin, Rust, PHP, C#/.NET, Elixir/Phoenix, plus generic patterns for `FATAL`, `CRITICAL`, and segfaults. See [How to add error patterns](/docs/guides/add-error-pattern) to extend support.
 
 **How does video trimming work?**
-When ffmpeg is available, `proofshot stop` cuts dead time from the video — keeping a 5-second buffer before the first action and a 3-second buffer after the last. All timestamps in `session-log.json` are adjusted by the trim offset to stay in sync with the trimmed video.
+When ffmpeg is available, `proofshot stop` cuts dead time from the video — keeping a 5-second buffer before the first action and a 3-second buffer after the last — then finalizes it as H.264 `session.mp4`. All timestamps in `session-log.json` are adjusted by the trim offset to stay in sync with the finalized video.
 
 ## Troubleshooting
 
@@ -57,7 +57,7 @@ Another process is using the port. Either stop that process, use a different por
 Install ffmpeg to enable automatic video trimming. Without it, you get the full uncut recording.
 
 **PR comment shows no video**
-GitHub markdown doesn't render `.webm` inline. Install ffmpeg so ProofShot can convert to `.mp4` before uploading.
+GitHub markdown doesn't render `.webm` inline. Install ffmpeg so `proofshot stop` can finalize the recording as `.mp4` before publication.
 
 ---
 

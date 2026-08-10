@@ -97,7 +97,7 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 
 | File | Description |
 |------|-------------|
-| `session.webm` | Video recording of the entire session |
+| `session.mp4` | Finalized H.264 video recording (`session.webm` is retained only when ffmpeg is unavailable) |
 | `viewer.html` | Standalone interactive viewer with scrub bar, canonical timeline, and grouped Environment/Browser source tabs |
 | `SUMMARY.md` | Markdown report with errors, screenshots, and video |
 | `step-*.png` | Screenshots captured at key moments |

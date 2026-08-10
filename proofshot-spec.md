@@ -166,8 +166,9 @@ Phase 3: proofshot stop
 4. proofshot calls: agent-browser close → closes browser
 5. proofshot reads server-errors.log for server-side errors
 6. proofshot collects all screenshots in the output dir
-7. proofshot generates SUMMARY.md with: description, video, screenshots, console errors, server errors
-8. proofshot outputs: proof artifact summary to stdout
+7. proofshot trims the WebM capture and converts it to H.264 session.mp4 with ffmpeg
+8. proofshot generates SUMMARY.md with: description, video, screenshots, console errors, server errors
+9. proofshot outputs: proof artifact summary to stdout
 ```
 
 ### What the Agent Sees (proofshot start output)
@@ -194,7 +195,7 @@ When done, run: proofshot stop
 ```
 ✅ ProofShot verification complete
 
-📹 Video:         ./proofshot-artifacts/session-2026-02-25.webm (45s)
+📹 Video:         ./proofshot-artifacts/session-2026-02-25.mp4 (45s)
 📸 Screenshots:   3 captured
 📝 Summary:       ./proofshot-artifacts/SUMMARY.md
 
@@ -221,7 +222,7 @@ Login form: fill credentials, submit, verify redirect to dashboard
 
 ## Video Recording
 
-Full session recording: [session-2026-02-25.webm](./session-2026-02-25.webm) (45s)
+Full session recording: [session-2026-02-25.mp4](./session-2026-02-25.mp4) (45s)
 
 ## Screenshots
 
@@ -384,6 +385,8 @@ ProofShot uses a `.session.json` file in the configured/default output directory
 ```
 
 `proofshot exec` and `proofshot stop` read this file from separate CLI processes. Cleanup verifies the immutable identities and signals only process groups inside the recorded process sessions; it never kills by command name or occupied port.
+
+While recording, `videoPath` points to the WebM capture. Successful finalization updates it to `session.mp4`.
 
 ---
 
@@ -611,6 +614,6 @@ The log file is included in the SUMMARY.md and can be fed back to the agent.
 ## 10. Open Questions (To Decide During Build)
 
 1. **Name:** "ProofShot" is a working name. Need to check npm availability.
-2. **Video format:** agent-browser records .webm. Plays natively in browsers and GitHub, so fine as-is.
+2. **Video format:** agent-browser captures WebM; `proofshot stop` finalizes it as H.264 MP4 with ffmpeg for portable playback and GitHub publication.
 3. **Monorepo support:** For now, assume single project root.
 4. **Server error log rotation:** For long sessions, the log could get large. Probably fine for v1.

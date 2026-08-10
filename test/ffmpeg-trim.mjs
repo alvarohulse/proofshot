@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { trimVideo } from '../dist/src/index.js';
+import { convertVideoToMp4, trimVideo } from '../dist/src/index.js';
 
 const temporaryDirectory = fs.mkdtempSync(
   path.join(os.tmpdir(), 'proofshot-ffmpeg-'),
@@ -41,6 +41,13 @@ try {
   if (trimOffset !== 7) {
     throw new Error(`Expected a 7-second timeline offset, received ${trimOffset}.`);
   }
+  const finalizedVideoPath = convertVideoToMp4(videoPath);
+  if (finalizedVideoPath !== path.join(temporaryDirectory, 'session.mp4')) {
+    throw new Error(`Expected finalized MP4 path, received ${finalizedVideoPath}.`);
+  }
+  if (fs.existsSync(videoPath)) {
+    throw new Error('WebM capture remained after successful MP4 finalization.');
+  }
   const probe = JSON.parse(
     execFileSync(
       'ffprobe',
@@ -48,10 +55,10 @@ try {
         '-v',
         'error',
         '-show_entries',
-        'format=start_time,duration',
+        'format=start_time,duration,format_name:stream=codec_name',
         '-of',
         'json',
-        videoPath,
+        finalizedVideoPath,
       ],
       { encoding: 'utf-8', timeout: 60_000 },
     ).trim(),
@@ -68,13 +75,19 @@ try {
       }s.`,
     );
   }
+  if (!probe.format?.format_name?.includes('mp4')) {
+    throw new Error(`Finalized media format is ${probe.format?.format_name}.`);
+  }
+  if (probe.streams?.[0]?.codec_name !== 'h264') {
+    throw new Error(`Finalized video codec is ${probe.streams?.[0]?.codec_name}.`);
+  }
   execFileSync(
     'ffmpeg',
     [
       '-v',
       'error',
       '-i',
-      videoPath,
+      finalizedVideoPath,
       '-map',
       '0:v:0',
       '-frames:v',

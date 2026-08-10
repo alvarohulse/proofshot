@@ -61,6 +61,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 import {
+  convertVideoToMp4,
   generateProofSummary,
   stopCommand,
   trimVideo,
@@ -146,11 +147,18 @@ describe('stopCommand retryability', () => {
       JSON.parse(fs.readFileSync(sessionLogPath, 'utf-8')),
     );
     let trimCalls = 0;
+    let conversionCalls = 0;
     mocks.execFileSync.mockImplementation((command: string, args: string[]) => {
       if (command === 'ffmpeg' && args[0] === '-version') return '';
       if (command === 'ffmpeg' && args.includes('-abort_on')) {
-        trimCalls += 1;
-        fs.writeFileSync(session.videoPath, `trimmed-video-${trimCalls}`);
+        const outputPath = args.at(-1);
+        if (outputPath?.endsWith('.webm')) {
+          trimCalls += 1;
+          fs.writeFileSync(outputPath, `trimmed-video-${trimCalls}`);
+        } else if (outputPath?.endsWith('.mp4')) {
+          conversionCalls += 1;
+          fs.writeFileSync(outputPath, `converted-video-${conversionCalls}`);
+        }
         return '';
       }
       if (command === 'ffmpeg' && args[0] === '-v') return '';
@@ -171,11 +179,14 @@ describe('stopCommand retryability', () => {
         videoTrimComplete: true,
         trimOffsetSec: 5,
         sessionLogAdjusted: true,
+        videoPath: path.join(session.sessionDir, 'session.mp4'),
       }),
       path.join(root, 'proofshot-artifacts'),
     );
     expect(trimCalls).toBe(1);
-    expect(fs.readFileSync(session.videoPath, 'utf-8')).toBe('trimmed-video-1');
+    expect(conversionCalls).toBe(1);
+    expect(fs.readFileSync(session.videoPath, 'utf-8')).toBe('converted-video-1');
+    expect(fs.existsSync(path.join(session.sessionDir, 'session.webm'))).toBe(false);
     expect(JSON.parse(fs.readFileSync(sessionLogPath, 'utf-8')).map((entry: any) => entry.relativeTimeSec)).toEqual([5, 15]);
 
     const summaryPath = path.join(session.sessionDir, 'SUMMARY.md');
@@ -188,7 +199,8 @@ describe('stopCommand retryability', () => {
 
     expect(mocks.writeViewer).toHaveBeenCalledTimes(2);
     expect(trimCalls).toBe(1);
-    expect(fs.readFileSync(session.videoPath, 'utf-8')).toBe('trimmed-video-1');
+    expect(conversionCalls).toBe(1);
+    expect(fs.readFileSync(session.videoPath, 'utf-8')).toBe('converted-video-1');
     expect(JSON.parse(fs.readFileSync(sessionLogPath, 'utf-8')).map((entry: any) => entry.relativeTimeSec)).toEqual([5, 15]);
     expect(mocks.writeViewer.mock.calls.at(-1)?.[1].entries.map((entry: any) => entry.relativeTimeSec)).toEqual([5, 15]);
     expect(mocks.writeViewer.mock.calls.at(-1)?.[1]).toMatchObject({
@@ -312,8 +324,71 @@ describe('stop artifacts', () => {
     const summary = generateProofSummary(buildSummaryData());
 
     expect(summary).toContain('**Project:** project');
+    expect(summary).toContain('[session.mp4](./session.mp4)');
     expect(summary).toContain('- Browser: Chromium (headed)');
     expect(summary).toContain('- Viewport: 2560x1440');
+  });
+
+  it('converts the finalized WebM recording to H.264 MP4', () => {
+    const videoPath = path.join(root, 'session.webm');
+    const mp4Path = path.join(root, 'session.mp4');
+    fs.writeFileSync(videoPath, 'webm-video');
+    let conversionArgs: string[] = [];
+
+    mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (args[0] === '-version' || args[0] === '-v') {
+        return '';
+      }
+      conversionArgs = args;
+      fs.writeFileSync(args.at(-1)!, 'mp4-video');
+      return '';
+    });
+
+    expect(convertVideoToMp4(videoPath)).toBe(mp4Path);
+    expect(conversionArgs).toEqual(
+      expect.arrayContaining([
+        '-c:v',
+        'libx264',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+      ]),
+    );
+    expect(fs.readFileSync(mp4Path, 'utf-8')).toBe('mp4-video');
+    expect(fs.existsSync(videoPath)).toBe(false);
+  });
+
+  it('keeps the WebM recording when MP4 conversion fails', () => {
+    const videoPath = path.join(root, 'session.webm');
+    fs.writeFileSync(videoPath, 'webm-video');
+
+    mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (args[0] === '-version') {
+        return '';
+      }
+      fs.writeFileSync(args.at(-1)!, 'partial-mp4');
+      throw new Error('conversion failed');
+    });
+
+    expect(convertVideoToMp4(videoPath)).toBe(videoPath);
+    expect(fs.readFileSync(videoPath, 'utf-8')).toBe('webm-video');
+    expect(fs.existsSync(path.join(root, 'session.mp4'))).toBe(false);
+    expect(
+      fs.readdirSync(root).some((entry) => entry.endsWith('.tmp.mp4')),
+    ).toBe(false);
+  });
+
+  it('adopts a completed MP4 left by interrupted finalization', () => {
+    const videoPath = path.join(root, 'session.webm');
+    const mp4Path = path.join(root, 'session.mp4');
+    fs.writeFileSync(videoPath, 'webm-video');
+    fs.writeFileSync(mp4Path, 'completed-mp4');
+
+    expect(convertVideoToMp4(videoPath)).toBe(mp4Path);
+    expect(fs.existsSync(videoPath)).toBe(false);
+    expect(fs.readFileSync(mp4Path, 'utf-8')).toBe('completed-mp4');
+    expect(mocks.execFileSync).not.toHaveBeenCalled();
   });
 
   it('restores the original video when trimming leaves partial output', () => {
@@ -432,7 +507,7 @@ function buildSummaryData(): SummaryData {
     port: 4173,
     headless: false,
     viewport: { width: 2560, height: 1440 },
-    videoPath: path.join(root, 'session.webm'),
+    videoPath: path.join(root, 'session.mp4'),
     screenshots: [],
     consoleErrors: '',
     consoleErrorCount: 0,

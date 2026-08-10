@@ -67,7 +67,7 @@ Edit `src/utils/error-patterns.ts` — add a new entry to the `PATTERNS` array:
 | File | Created by | Contains |
 |---|---|---|
 | `metadata.json` | `start` | Git branch, commit SHA, timestamp (persists after stop) |
-| `session.webm` | `start` | Video recording (Playwright screencast) |
+| `session.mp4` | `stop` | Finalized H.264 recording (`start` captures temporary `session.webm`) |
 | `session-log.json` | `exec` (appended each call) | Action timeline with relative timestamps |
 | `server.log` | `start` (piped stdout+stderr) | All dev server output |
 | `console-output.log` | `stop` | Browser console output |
