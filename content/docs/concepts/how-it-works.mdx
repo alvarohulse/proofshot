@@ -71,14 +71,14 @@ Each `proofshot exec` call:
 2. Stops video recording
 3. Closes the exact owned browser session
 4. Stops only the dev-server process session created by this run
-5. Trims video dead time using ffmpeg (5s buffer before first action, 3s after last). Adjusts all `session-log.json` timestamps by the trim offset.
+5. Trims video dead time using ffmpeg (5s buffer before first action, 3s after last), converts the finalized recording to H.264 `session.mp4`, and adjusts all `session-log.json` timestamps by the trim offset.
 6. Scans `server.log` with multi-language regex patterns for errors
 7. Generates `SUMMARY.md` and `viewer.html`
 8. Clears `.session.json` (or retains exact browser ownership after `--no-close`)
 
 ## Design principles
 
-**Graceful degradation.** Missing ffmpeg? Video trimming is skipped. Element data capture fails? Overlays are skipped. Browser already closed? Silent catch. Non-critical failures never abort a session.
+**Graceful degradation.** Missing ffmpeg? Video trimming and MP4 conversion are skipped, preserving the original `session.webm`. Element data capture fails? Overlays are skipped. Browser already closed? Silent catch. Non-critical failures never abort a session.
 
 **Minimal dependencies.** Three production dependencies: `commander`, `chalk`, `detect-port`. agent-browser is an optional peer dependency. Small install, small supply chain.
 

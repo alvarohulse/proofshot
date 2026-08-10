@@ -88,7 +88,7 @@ proofshot stop [options]
 2. Stops video recording
 3. Closes the exact owned browser session (unless `--no-close`)
 4. Stops only the tmux session/server, direct processes, capture helpers, and dev-server process identities created by this ProofShot start
-5. Trims video dead time (requires ffmpeg): 5s buffer before first action, 3s after last
+5. Trims video dead time and converts the finalized recording to H.264 `session.mp4` (requires ffmpeg): 5s buffer before first action, 3s after last
 6. Scans `server.log` for errors across 10+ languages
 7. Generates `SUMMARY.md`, canonical `evidence.json`, structured `verdict.json`, `viewer.html`, and a hashed provenance manifest
 8. Clears `.session.json`, or retains it after `--no-close` until a later plain `stop` closes that exact browser

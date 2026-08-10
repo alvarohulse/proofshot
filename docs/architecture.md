@@ -32,7 +32,7 @@ The choice of agent-browser as the browser automation layer is the most importan
 
 **Lightweight context.** agent-browser's snapshot output is ~93% smaller than Playwright MCP's equivalent. This matters because AI agents have context limits — smaller snapshots mean more room for reasoning.
 
-**Built-in recording.** Playwright's screencast API is exposed directly, so video recording comes free without ffmpeg during capture (ffmpeg is only used for optional post-processing trim).
+**Built-in recording.** Playwright's screencast API is exposed directly, so video capture works without ffmpeg. Finalization uses ffmpeg to trim the WebM capture and convert it to H.264 MP4.
 
 All browser commands in ProofShot go through a single function:
 
@@ -61,7 +61,7 @@ proofshot start --run "npm run dev" --port 3000 --description "Login flow"
 2. Spawn dev server as a detached process, pipe stdout/stderr to `server.log`
 3. Wait for port to become available (polls every 500ms, 30s timeout)
 4. Open headless Chromium via agent-browser
-5. Start video recording (Playwright screencast → `.webm`)
+5. Start video recording (Playwright screencast → temporary `.webm`)
 6. Write `.session.json` to the artifacts directory
 
 Recording is mandatory. If it fails after 3 retries, the session aborts. Video proof is the whole point.
@@ -95,7 +95,7 @@ proofshot stop
 1. Collect console errors and console output from the browser (point-in-time snapshots)
 2. Stop video recording
 3. Close browser (unless `--no-close`)
-4. **Trim video** — remove dead time before first action (5s buffer) and after last action (3s buffer) using ffmpeg. Adjust all `session-log.json` timestamps by the trim offset to stay in sync with the trimmed video.
+4. **Finalize video** — remove dead time before the first action (5s buffer) and after the last action (3s buffer), convert to H.264 `session.mp4`, and adjust all `session-log.json` timestamps by the trim offset.
 5. **Extract server errors** — scan `server.log` with multi-language regex patterns
 6. Generate `SUMMARY.md` — markdown report with description, video link, screenshots, and errors
 7. Generate `viewer.html` — standalone interactive viewer
@@ -209,4 +209,4 @@ src/
 
 **Config file walk-up.** `proofshot.config.json` is searched from cwd upward to filesystem root, supporting monorepo layouts where config lives at the repo root.
 
-**Graceful degradation everywhere.** Missing ffmpeg skips video trimming. Failed element data capture skips overlays. Browser already closed gets a silent catch. Console errors unavailable shows "0 errors". Non-critical failures never abort a session.
+**Graceful degradation everywhere.** Missing ffmpeg skips video trimming and MP4 conversion, preserving the original WebM capture. Failed element data capture skips overlays. Browser already closed gets a silent catch. Console errors unavailable shows "0 errors". Non-critical failures never abort a session.

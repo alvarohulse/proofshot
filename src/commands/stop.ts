@@ -314,7 +314,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         sessionLog,
         recordingStartOffsetSec,
       );
-    } else if (recordingWasActive) {
+    }
+    session.videoPath = convertVideoToMp4(session.videoPath);
+    if (!fs.existsSync(session.videoPath) && recordingWasActive) {
       console.log(
         chalk.yellow('⚠') +
           ' Recording was active but no video file was produced.\n' +
@@ -830,7 +832,7 @@ export function trimVideo(
       ],
       { stdio: 'pipe', timeout: 60000 },
     );
-    validateTrimmedVideo(videoPath);
+    validateVideo(videoPath);
 
     // Remove raw file on success
     fs.unlinkSync(rawPath);
@@ -850,7 +852,84 @@ export function trimVideo(
   }
 }
 
-function validateTrimmedVideo(videoPath: string): void {
+export function convertVideoToMp4(videoPath: string): string {
+  if (path.extname(videoPath).toLowerCase() === '.mp4') {
+    return videoPath;
+  }
+
+  const directory = path.dirname(videoPath);
+  const basename = path.basename(videoPath, path.extname(videoPath));
+  const mp4Path = path.join(directory, `${basename}.mp4`);
+
+  if (fs.existsSync(mp4Path)) {
+    if (fs.statSync(mp4Path).size > 0) {
+      if (fs.existsSync(videoPath)) {
+        fs.unlinkSync(videoPath);
+      }
+      return mp4Path;
+    }
+    fs.unlinkSync(mp4Path);
+  }
+
+  if (!fs.existsSync(videoPath)) {
+    return videoPath;
+  }
+
+  try {
+    execFileSync('ffmpeg', ['-version'], { stdio: 'pipe' });
+  } catch {
+    console.log(chalk.dim('Tip: Install ffmpeg to finalize recordings as MP4.'));
+    return videoPath;
+  }
+
+  const temporaryPath = path.join(
+    directory,
+    `${basename}.${process.pid}.${randomUUID()}.tmp.mp4`,
+  );
+  try {
+    execFileSync(
+      'ffmpeg',
+      [
+        '-y',
+        '-i',
+        videoPath,
+        '-map',
+        '0:v:0',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'medium',
+        '-crf',
+        '23',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        '-an',
+        '-abort_on',
+        'empty_output',
+        temporaryPath,
+      ],
+      { stdio: 'pipe', timeout: 60000 },
+    );
+    validateVideo(temporaryPath);
+    fs.renameSync(temporaryPath, mp4Path);
+    fs.unlinkSync(videoPath);
+    console.log(chalk.dim('Converted finalized video to MP4'));
+    return mp4Path;
+  } catch {
+    if (fs.existsSync(temporaryPath)) {
+      fs.unlinkSync(temporaryPath);
+    }
+    if (fs.existsSync(mp4Path)) {
+      fs.unlinkSync(mp4Path);
+    }
+    console.log(chalk.dim('MP4 conversion failed, keeping WebM recording'));
+    return videoPath;
+  }
+}
+
+function validateVideo(videoPath: string): void {
   if (!fs.existsSync(videoPath) || fs.statSync(videoPath).size === 0) {
     throw new Error('FFmpeg produced an empty video');
   }
