@@ -1054,8 +1054,31 @@ function buildOpenBrowserCommand(url, headless = true, browserConfig) {
   return `open ${url}${suffix}`;
 }
 function openBrowser(url, viewport, headless = true, sessionName, browserConfig) {
-  ab(buildOpenBrowserCommand(url, headless, browserConfig), { timeoutMs: 6e4, session: sessionName });
+  try {
+    ab(buildOpenBrowserCommand(url, headless, browserConfig), {
+      timeoutMs: 6e4,
+      session: sessionName
+    });
+  } catch (error) {
+    const currentUrl = getPageUrl(sessionName);
+    if (!isNavigationTimeout(error) || !urlsMatch(currentUrl, url)) {
+      throw error;
+    }
+    console.warn(
+      "Browser reached the target URL before its load event timed out; continuing with the active page."
+    );
+  }
   ab(`set viewport ${viewport.width} ${viewport.height}`, { session: sessionName });
+}
+function isNavigationTimeout(error) {
+  return error instanceof ProofShotError && error.message.toLowerCase().includes("operation timed out");
+}
+function urlsMatch(actual, expected) {
+  try {
+    return new URL(actual).href === new URL(expected).href;
+  } catch {
+    return actual === expected;
+  }
 }
 function closeBrowser(sessionName) {
   try {
@@ -1085,6 +1108,13 @@ function getConsoleOutputJson(sessionName) {
     return Array.isArray(messages) ? messages : [];
   } catch {
     return [];
+  }
+}
+function getPageUrl(sessionName) {
+  try {
+    return ab("get url", { session: sessionName });
+  } catch {
+    return "";
   }
 }
 

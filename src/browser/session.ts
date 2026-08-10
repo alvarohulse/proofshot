@@ -27,8 +27,36 @@ export function openBrowser(
   sessionName?: string,
   browserConfig?: BrowserConfig,
 ): void {
-  ab(buildOpenBrowserCommand(url, headless, browserConfig), { timeoutMs: 60000, session: sessionName });
+  try {
+    ab(buildOpenBrowserCommand(url, headless, browserConfig), {
+      timeoutMs: 60000,
+      session: sessionName,
+    });
+  } catch (error) {
+    const currentUrl = getPageUrl(sessionName);
+    if (!isNavigationTimeout(error) || !urlsMatch(currentUrl, url)) {
+      throw error;
+    }
+    console.warn(
+      'Browser reached the target URL before its load event timed out; continuing with the active page.',
+    );
+  }
   ab(`set viewport ${viewport.width} ${viewport.height}`, { session: sessionName });
+}
+
+function isNavigationTimeout(error: unknown): boolean {
+  return (
+    error instanceof ProofShotError &&
+    error.message.toLowerCase().includes('operation timed out')
+  );
+}
+
+function urlsMatch(actual: string, expected: string): boolean {
+  try {
+    return new URL(actual).href === new URL(expected).href;
+  } catch {
+    return actual === expected;
+  }
 }
 
 /**
