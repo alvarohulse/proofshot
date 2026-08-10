@@ -4,6 +4,7 @@ import { isPortOpen, waitForPort } from '../utils/port.js';
 import {
   captureProcessIdentity,
   getShellExecutable,
+  isDetachedProcessIdentity,
   terminateOwnedProcessTree,
   terminateProcessTree,
   type ProcessIdentity,
@@ -96,7 +97,7 @@ export async function ensureDevServer(
     processIdentity = proc.pid ? captureProcessIdentity(proc.pid) : null;
   }
 
-  if (!processIdentity || processIdentity.sessionId !== processIdentity.pid) {
+  if (!processIdentity || !isDetachedProcessIdentity(processIdentity)) {
     try {
       if (proc.pid) terminateProcessTree(proc.pid);
     } catch {

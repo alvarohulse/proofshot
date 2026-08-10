@@ -73,6 +73,44 @@ export function parseLinuxProcStat(stat: string): ProcessIdentity | null {
   return { pid, processGroupId, sessionId, startTime };
 }
 
+/** Parse the ownership fields emitted by BSD/POSIX ps implementations. */
+export function parseUnixProcessIdentity(
+  pid: number,
+  output: string,
+): ProcessIdentity | null {
+  const match = output.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+  if (!match) return null;
+
+  const processGroupId = Number(match[1]);
+  const sessionId = Number(match[2]);
+  const startTime = match[3];
+  if (
+    !Number.isInteger(processGroupId) ||
+    processGroupId <= 0 ||
+    !Number.isInteger(sessionId) ||
+    sessionId < 0 ||
+    !startTime
+  ) {
+    return null;
+  }
+
+  return { pid, processGroupId, sessionId, startTime };
+}
+
+/**
+ * Detached children are session leaders on Linux and process-group leaders on
+ * macOS, whose ps implementation reports a zero session id.
+ */
+export function isDetachedProcessIdentity(
+  identity: ProcessIdentity,
+  platform = process.platform,
+): boolean {
+  if (platform === 'darwin') {
+    return identity.processGroupId === identity.pid;
+  }
+  return identity.sessionId === identity.pid;
+}
+
 /**
  * Capture the current immutable identity for a process.
  * Returns null when the process is already gone or cannot be inspected.
@@ -90,19 +128,13 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
 
   if (process.platform !== 'win32') {
     try {
+      const sessionField = process.platform === 'darwin' ? 'sess=' : 'sid=';
       const output = execFileSync(
         'ps',
-        ['-o', 'pgid=', '-o', 'sid=', '-o', 'lstart=', '-p', String(pid)],
+        ['-o', 'pgid=', '-o', sessionField, '-o', 'lstart=', '-p', String(pid)],
         { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
-      ).trim();
-      const match = output.match(/^(\d+)\s+(\d+)\s+(.+)$/);
-      if (!match) return null;
-      return {
-        pid,
-        processGroupId: Number(match[1]),
-        sessionId: Number(match[2]),
-        startTime: match[3],
-      };
+      );
+      return parseUnixProcessIdentity(pid, output);
     } catch {
       return null;
     }
@@ -169,7 +201,8 @@ function listProcessGroupsInSession(sessionId: number): number[] {
 
   if (process.platform !== 'win32') {
     try {
-      const output = execFileSync('ps', ['-axo', 'pgid=,sid='], {
+      const sessionField = process.platform === 'darwin' ? 'sess=' : 'sid=';
+      const output = execFileSync('ps', ['-axo', `pgid=,${sessionField}`], {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -187,12 +220,24 @@ function listProcessGroupsInSession(sessionId: number): number[] {
   return [...groups];
 }
 
+function processGroupIsAlive(processGroupId: number): boolean {
+  try {
+    process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 export function ownedProcessTreeIsAlive(identity: ProcessIdentity): boolean {
   if (process.platform === 'win32') return processIdentityMatches(identity);
 
   const current = captureProcessIdentity(identity.pid);
   if (current && !identitiesMatch(current, identity)) return false;
 
+  if (process.platform === 'darwin') {
+    return processGroupIsAlive(identity.processGroupId);
+  }
   return listProcessGroupsInSession(identity.sessionId).length > 0;
 }
 
@@ -202,10 +247,20 @@ function signalOwnedTree(identity: ProcessIdentity, signal: NodeJS.Signals): boo
   const current = captureProcessIdentity(identity.pid);
   if (current && !identitiesMatch(current, identity)) return false;
 
+  if (!isDetachedProcessIdentity(identity)) return false;
+  if (process.platform === 'darwin') {
+    if (!processGroupIsAlive(identity.processGroupId)) return false;
+    try {
+      process.kill(-identity.processGroupId, signal);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Detached children created by ProofShot are session leaders. If that leader
   // has already exited, its session id cannot be reused while descendants from
   // that session remain, so scanning the recorded session stays ownership-safe.
-  if (identity.sessionId !== identity.pid) return false;
   const groups = listProcessGroupsInSession(identity.sessionId);
   if (groups.length === 0) return false;
 

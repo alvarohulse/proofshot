@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   captureProcessIdentity,
+  isDetachedProcessIdentity,
   type ProcessIdentity,
 } from '../utils/process.js';
 
@@ -52,7 +53,7 @@ export function prepareAgentBrowserSocketDir(
     ? path.resolve(explicit)
     : runtimeRoot === systemRuntime || runtimeRoot === env.XDG_RUNTIME_DIR
       ? path.join(runtimeRoot, 'proofshot', 'agent-browser')
-      : path.join(runtimeRoot, '.cache', 'proofshot', 'run', 'agent-browser');
+      : path.join('/tmp', `proofshot-${uid}`, 'agent-browser');
 
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertOwnedDirectory(directory);
@@ -81,7 +82,7 @@ export function captureAgentBrowserProcessIdentity(
     const pidPath = path.join(socketDir, `${sessionName}.pid`);
     const pid = Number(fs.readFileSync(pidPath, 'utf-8').trim());
     const identity = captureProcessIdentity(pid);
-    if (!identity || identity.sessionId !== identity.pid) return null;
+    if (!identity || !isDetachedProcessIdentity(identity)) return null;
     return identity;
   } catch {
     return null;

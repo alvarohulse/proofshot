@@ -4,7 +4,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { isPortOpen } from '../utils/port.js';
-import { terminateOwnedProcessTree, type ProcessIdentity } from '../utils/process.js';
+import {
+  isDetachedProcessIdentity,
+  terminateOwnedProcessTree,
+  type ProcessIdentity,
+} from '../utils/process.js';
 import { ensureDevServer } from './start.js';
 
 const roots: string[] = [];
@@ -82,8 +86,7 @@ describe('ensureDevServer', () => {
     );
     ownedProcesses.push(result.process);
 
-    expect(result.process.processGroupId).toBe(result.process.pid);
-    expect(result.process.sessionId).toBe(result.process.pid);
+    expect(isDetachedProcessIdentity(result.process)).toBe(true);
     expect(fs.readFileSync(logPath, 'utf-8')).toMatch(/^\d{13}\tserver-ready$/m);
 
     await terminateOwnedProcessTree(result.process, { graceMs: 300 });

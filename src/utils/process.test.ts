@@ -5,7 +5,9 @@ import {
   captureProcessIdentity,
   findExecutablePath,
   getShellExecutable,
+  isDetachedProcessIdentity,
   parseLinuxProcStat,
+  parseUnixProcessIdentity,
   parseWindowsNetstatOutput,
   readCommandVersion,
   terminateOwnedProcessTree,
@@ -95,6 +97,20 @@ describe('process ownership', () => {
     expect(identity?.startTime).toMatch(/^\d+$/);
   });
 
+  it('parses macOS process ownership fields', () => {
+    expect(
+      parseUnixProcessIdentity(
+        321,
+        '  321     0 Sun Aug  9 19:35:36 2026    \n',
+      ),
+    ).toEqual({
+      pid: 321,
+      processGroupId: 321,
+      sessionId: 0,
+      startTime: 'Sun Aug  9 19:35:36 2026',
+    });
+  });
+
   it('terminates only the exact detached process session it owns', async () => {
     if (process.platform === 'win32') return;
     const owned = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
@@ -110,8 +126,8 @@ describe('process ownership', () => {
 
     const ownedIdentity = captureProcessIdentity(owned.pid!);
     const unrelatedIdentity = captureProcessIdentity(unrelated.pid!);
-    expect(ownedIdentity?.sessionId).toBe(owned.pid);
-    expect(unrelatedIdentity?.sessionId).toBe(unrelated.pid);
+    expect(ownedIdentity && isDetachedProcessIdentity(ownedIdentity)).toBe(true);
+    expect(unrelatedIdentity && isDetachedProcessIdentity(unrelatedIdentity)).toBe(true);
 
     try {
       await expect(
