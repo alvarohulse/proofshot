@@ -130,6 +130,60 @@ describe('canonical evidence and verdicts', () => {
     expect(fs.existsSync(path.join(sessionDir, 'evidence.json'))).toBe(true);
     expect(fs.existsSync(path.join(sessionDir, 'verdict.json'))).toBe(true);
   });
+
+  it('does not treat pre-recording lifecycle time as truncated media', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-evidence-offset-'),
+    );
+    temporaryDirectories.push(sessionDir);
+    const evidencePath = path.join(sessionDir, 'environment.ndjson');
+    fs.writeFileSync(
+      evidencePath,
+      [
+        environmentEvent('startup before recording', 10),
+        environmentEvent('live after recording', 90),
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
+    );
+    const videoPath = path.join(sessionDir, 'recording.webm');
+    fs.writeFileSync(videoPath, 'video fixture');
+    fs.writeFileSync(path.join(sessionDir, 'proof.png'), VALID_PNG);
+
+    const { evidence, verdict } = writeCanonicalEvidence({
+      sessionId: 'proofshot-offset-fixture',
+      sessionDir,
+      durationSec: 66,
+      timelineOffsetSec: 83,
+      videoPath,
+      recordingWasActive: true,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'screenshot proof.png',
+          relativeTimeSec: 0.5,
+          timestamp: '2026-08-09T00:01:23.500Z',
+          outcome: 'passed',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+      environment: {
+        kind: 'processes',
+        evidencePath,
+        processes: [],
+        sources: [],
+      },
+    });
+
+    expect(evidence.mediaTruncated).toBe(false);
+    expect(evidence.mediaDivergenceSec).toBe(0);
+    expect(evidence.events.map((event) => event.relativeTimeSec)).toEqual([
+      null,
+      7,
+    ]);
+    expect(verdict.status).toBe('PASS');
+  });
 });
 
 function environmentEvent(

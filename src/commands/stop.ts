@@ -119,6 +119,13 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const retryingStoppedSession = !session.recordingActive;
   const recordingWasActive = session.recordingActive;
   const startTime = new Date(session.startedAt).getTime();
+  const recordingStartTime = session.recordingStartedAt
+    ? new Date(session.recordingStartedAt).getTime()
+    : startTime;
+  const recordingStartOffsetSec = Math.max(
+    0,
+    (recordingStartTime - startTime) / 1000,
+  );
   const durationMs = Date.now() - startTime;
   const durationSec = Math.round(durationMs / 1000);
   const browserSessionAvailable = canAddressOwnedBrowserSession(session);
@@ -259,10 +266,18 @@ export async function stopCommand(options: StopOptions): Promise<void> {
 
   // Step 5.5: Trim video dead time
   const sessionLog = loadSessionLog(sessionDir);
-  let trimOffsetSec = session.trimOffsetSec ?? 0;
+  let trimOffsetSec = session.trimOffsetSec ?? recordingStartOffsetSec;
   if (!session.videoTrimComplete) {
+    let videoTrimOffsetSec = 0;
     if (fs.existsSync(session.videoPath)) {
-      trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
+      videoTrimOffsetSec = trimVideo(
+        session.videoPath,
+        screenshots,
+        sessionDir,
+        startTime,
+        sessionLog,
+        recordingStartOffsetSec,
+      );
     } else if (recordingWasActive) {
       console.log(
         chalk.yellow('⚠') +
@@ -270,6 +285,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
           chalk.dim('  The screencast may have been interrupted. Screenshots and logs are still saved.'),
       );
     }
+    trimOffsetSec = recordingStartOffsetSec + videoTrimOffsetSec;
     session.videoTrimComplete = true;
     session.trimOffsetSec = trimOffsetSec;
     persistOwnedSession(session, controlDir);
@@ -353,10 +369,12 @@ export async function stopCommand(options: StopOptions): Promise<void> {
 
   const viewerConsoleEntries = consoleEntries.map(adjustTime);
   const viewerServerEntries = serverEntries.map(adjustTime);
+  const canonicalDurationSec = Math.max(0, durationSec - trimOffsetSec);
   const { evidence, verdict } = writeCanonicalEvidence({
     sessionId: session.sessionName,
     sessionDir,
-    durationSec,
+    durationSec: canonicalDurationSec,
+    timelineOffsetSec: trimOffsetSec,
     videoPath: session.videoPath,
     recordingWasActive,
     consoleEvidenceAvailable,
@@ -369,7 +387,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const viewerPath = writeViewer(sessionDir, {
     description: session.description,
     serverCommand: session.serverCommand,
-    durationSec,
+    durationSec: canonicalDurationSec,
     videoFilename: fs.existsSync(session.videoPath) ? path.basename(session.videoPath) : null,
     consoleErrorCount,
     consoleEvidenceAvailable,
@@ -602,16 +620,19 @@ export function trimVideo(
   videoPath: string,
   screenshots: string[],
   outputDir: string,
-  recordingStartMs: number,
+  sessionStartMs: number,
   sessionLog: SessionLogEntry[],
+  mediaStartOffsetSec = 0,
 ): number {
   let firstActionSec: number | null = null;
   let lastActionSec: number | null = null;
 
   // Prefer session log timestamps (precise, not affected by stale files)
   if (sessionLog.length > 0) {
-    firstActionSec = sessionLog[0].relativeTimeSec;
-    lastActionSec = sessionLog[sessionLog.length - 1].relativeTimeSec;
+    firstActionSec =
+      sessionLog[0].relativeTimeSec - mediaStartOffsetSec;
+    lastActionSec =
+      sessionLog[sessionLog.length - 1].relativeTimeSec - mediaStartOffsetSec;
   } else if (screenshots.length > 0) {
     // Fallback: use screenshot file birth times (only files created AFTER session start)
     const timestamps = screenshots
@@ -622,12 +643,20 @@ export function trimVideo(
           return null;
         }
       })
-      .filter((t): t is number => t !== null && t >= recordingStartMs);
+      .filter(
+        (timestamp): timestamp is number =>
+          timestamp !== null &&
+          timestamp >= sessionStartMs + mediaStartOffsetSec * 1000,
+      );
 
     if (timestamps.length === 0) return 0;
 
-    firstActionSec = (Math.min(...timestamps) - recordingStartMs) / 1000;
-    lastActionSec = (Math.max(...timestamps) - recordingStartMs) / 1000;
+    firstActionSec =
+      (Math.min(...timestamps) - sessionStartMs) / 1000 -
+      mediaStartOffsetSec;
+    lastActionSec =
+      (Math.max(...timestamps) - sessionStartMs) / 1000 -
+      mediaStartOffsetSec;
   }
 
   if (firstActionSec === null || lastActionSec === null) return 0;

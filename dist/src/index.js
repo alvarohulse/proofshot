@@ -3024,6 +3024,7 @@ async function startCommand(options) {
     for (let attempt = 1; attempt <= RECORDING_RETRIES; attempt++) {
       try {
         startRecording(videoPath, sessionName);
+        session.recordingStartedAt = (/* @__PURE__ */ new Date()).toISOString();
         recordingStarted = true;
         console.log(chalk2.green("\u2713") + " Recording started");
         break;
@@ -4677,7 +4678,7 @@ function writeCanonicalEvidence(options) {
   const mediaDurationSec = probeMediaDuration(options.videoPath);
   const actionDuration = options.actions.map((entry) => entry.relativeTimeSec).filter(Number.isFinite).reduce((maximum, current) => Math.max(maximum, current), 0);
   const timelineDurationSec = Math.max(options.durationSec, actionDuration);
-  const mediaDivergenceSec = mediaDurationSec === null ? null : timelineDurationSec - mediaDurationSec;
+  const mediaDivergenceSec = mediaDurationSec === null ? null : Math.max(0, actionDuration - mediaDurationSec);
   const mediaTruncated = mediaDivergenceSec !== null && mediaDivergenceSec > 1;
   const sources = buildSourceSummaries(
     events,
@@ -4709,7 +4710,12 @@ function writeCanonicalEvidence(options) {
   return { evidence, verdict };
 }
 function collectEvents(options) {
-  const environmentEvents = options.environment?.evidencePath && fs18.existsSync(options.environment.evidencePath) ? loadEvidenceEvents(options.environment.evidencePath) : [];
+  const environmentEvents = options.environment?.evidencePath && fs18.existsSync(options.environment.evidencePath) ? loadEvidenceEvents(options.environment.evidencePath).map(
+    (event) => adjustEnvironmentEventTime(
+      event,
+      options.timelineOffsetSec ?? 0
+    )
+  ) : [];
   if (environmentEvents.length === 0) {
     environmentEvents.push(
       ...options.serverEntries.map(
@@ -4737,6 +4743,16 @@ function collectEvents(options) {
     });
   });
   return [...environmentEvents, ...browserEvents];
+}
+function adjustEnvironmentEventTime(event, timelineOffsetSec) {
+  if (event.relativeTimeSec === null || timelineOffsetSec <= 0) {
+    return event;
+  }
+  const relativeTimeSec = event.relativeTimeSec - timelineOffsetSec;
+  return {
+    ...event,
+    relativeTimeSec: relativeTimeSec >= 0 ? parseFloat(relativeTimeSec.toFixed(3)) : null
+  };
 }
 function toEvidenceEvent(entry, source) {
   return {
@@ -5487,6 +5503,11 @@ async function stopCommand(options) {
   const retryingStoppedSession = !session.recordingActive;
   const recordingWasActive = session.recordingActive;
   const startTime = new Date(session.startedAt).getTime();
+  const recordingStartTime = session.recordingStartedAt ? new Date(session.recordingStartedAt).getTime() : startTime;
+  const recordingStartOffsetSec = Math.max(
+    0,
+    (recordingStartTime - startTime) / 1e3
+  );
   const durationMs = Date.now() - startTime;
   const durationSec = Math.round(durationMs / 1e3);
   const browserSessionAvailable = canAddressOwnedBrowserSession(session);
@@ -5594,15 +5615,24 @@ async function stopCommand(options) {
   const sessionDir = session.sessionDir;
   const screenshots = fs21.existsSync(sessionDir) ? fs21.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
   const sessionLog = loadSessionLog(sessionDir);
-  let trimOffsetSec = session.trimOffsetSec ?? 0;
+  let trimOffsetSec = session.trimOffsetSec ?? recordingStartOffsetSec;
   if (!session.videoTrimComplete) {
+    let videoTrimOffsetSec = 0;
     if (fs21.existsSync(session.videoPath)) {
-      trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
+      videoTrimOffsetSec = trimVideo(
+        session.videoPath,
+        screenshots,
+        sessionDir,
+        startTime,
+        sessionLog,
+        recordingStartOffsetSec
+      );
     } else if (recordingWasActive) {
       console.log(
         chalk3.yellow("\u26A0") + " Recording was active but no video file was produced.\n" + chalk3.dim("  The screencast may have been interrupted. Screenshots and logs are still saved.")
       );
     }
+    trimOffsetSec = recordingStartOffsetSec + videoTrimOffsetSec;
     session.videoTrimComplete = true;
     session.trimOffsetSec = trimOffsetSec;
     persistOwnedSession2(session, controlDir);
@@ -5659,10 +5689,12 @@ async function stopCommand(options) {
   const adjustTime = (e) => trimOffsetSec > 0 ? { ...e, relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1)) } : e;
   const viewerConsoleEntries = consoleEntries.map(adjustTime);
   const viewerServerEntries = serverEntries.map(adjustTime);
+  const canonicalDurationSec = Math.max(0, durationSec - trimOffsetSec);
   const { evidence, verdict } = writeCanonicalEvidence({
     sessionId: session.sessionName,
     sessionDir,
-    durationSec,
+    durationSec: canonicalDurationSec,
+    timelineOffsetSec: trimOffsetSec,
     videoPath: session.videoPath,
     recordingWasActive,
     consoleEvidenceAvailable,
@@ -5674,7 +5706,7 @@ async function stopCommand(options) {
   const viewerPath = writeViewer(sessionDir, {
     description: session.description,
     serverCommand: session.serverCommand,
-    durationSec,
+    durationSec: canonicalDurationSec,
     videoFilename: fs21.existsSync(session.videoPath) ? path18.basename(session.videoPath) : null,
     consoleErrorCount,
     consoleEvidenceAvailable,
@@ -5866,12 +5898,12 @@ ${data.serverLog.slice(0, 5e3)}
 `;
   return md;
 }
-function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionLog) {
+function trimVideo(videoPath, screenshots, outputDir, sessionStartMs, sessionLog, mediaStartOffsetSec = 0) {
   let firstActionSec = null;
   let lastActionSec = null;
   if (sessionLog.length > 0) {
-    firstActionSec = sessionLog[0].relativeTimeSec;
-    lastActionSec = sessionLog[sessionLog.length - 1].relativeTimeSec;
+    firstActionSec = sessionLog[0].relativeTimeSec - mediaStartOffsetSec;
+    lastActionSec = sessionLog[sessionLog.length - 1].relativeTimeSec - mediaStartOffsetSec;
   } else if (screenshots.length > 0) {
     const timestamps = screenshots.map((f) => {
       try {
@@ -5879,10 +5911,12 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
       } catch {
         return null;
       }
-    }).filter((t) => t !== null && t >= recordingStartMs);
+    }).filter(
+      (timestamp) => timestamp !== null && timestamp >= sessionStartMs + mediaStartOffsetSec * 1e3
+    );
     if (timestamps.length === 0) return 0;
-    firstActionSec = (Math.min(...timestamps) - recordingStartMs) / 1e3;
-    lastActionSec = (Math.max(...timestamps) - recordingStartMs) / 1e3;
+    firstActionSec = (Math.min(...timestamps) - sessionStartMs) / 1e3 - mediaStartOffsetSec;
+    lastActionSec = (Math.max(...timestamps) - sessionStartMs) / 1e3 - mediaStartOffsetSec;
   }
   if (firstActionSec === null || lastActionSec === null) return 0;
   const BUFFER_BEFORE = 5;

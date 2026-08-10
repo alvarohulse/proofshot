@@ -8,6 +8,7 @@ const SESSION_FILENAME = '.session.json';
 
 export interface SessionState {
   startedAt: string;
+  recordingStartedAt?: string;
   startDirectory?: string;
   lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
   cleanupError?: string | null;

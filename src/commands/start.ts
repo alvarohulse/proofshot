@@ -214,6 +214,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     for (let attempt = 1; attempt <= RECORDING_RETRIES; attempt++) {
       try {
         startRecording(videoPath, sessionName);
+        session.recordingStartedAt = new Date().toISOString();
         recordingStarted = true;
         console.log(chalk.green('✓') + ' Recording started');
         break;

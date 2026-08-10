@@ -73,6 +73,7 @@ export type EvidenceBuildOptions = {
   sessionId: string;
   sessionDir: string;
   durationSec: number;
+  timelineOffsetSec?: number;
   videoPath: string;
   recordingWasActive: boolean;
   consoleEvidenceAvailable: boolean;
@@ -96,7 +97,9 @@ export function writeCanonicalEvidence(
     .reduce((maximum, current) => Math.max(maximum, current), 0);
   const timelineDurationSec = Math.max(options.durationSec, actionDuration);
   const mediaDivergenceSec =
-    mediaDurationSec === null ? null : timelineDurationSec - mediaDurationSec;
+    mediaDurationSec === null
+      ? null
+      : Math.max(0, actionDuration - mediaDurationSec);
   const mediaTruncated =
     mediaDivergenceSec !== null && mediaDivergenceSec > 1;
   const sources = buildSourceSummaries(
@@ -130,10 +133,15 @@ export function writeCanonicalEvidence(
 }
 
 function collectEvents(options: EvidenceBuildOptions): EvidenceEvent[] {
-  const environmentEvents =
+  const environmentEvents: EvidenceEvent[] =
     options.environment?.evidencePath &&
     fs.existsSync(options.environment.evidencePath)
-      ? loadEvidenceEvents(options.environment.evidencePath)
+      ? loadEvidenceEvents(options.environment.evidencePath).map((event) =>
+          adjustEnvironmentEventTime(
+            event,
+            options.timelineOffsetSec ?? 0,
+          ),
+        )
       : [];
   if (environmentEvents.length === 0) {
     environmentEvents.push(
@@ -163,6 +171,23 @@ function collectEvents(options: EvidenceBuildOptions): EvidenceEvent[] {
     });
   });
   return [...environmentEvents, ...browserEvents];
+}
+
+function adjustEnvironmentEventTime(
+  event: EvidenceEvent,
+  timelineOffsetSec: number,
+): EvidenceEvent {
+  if (event.relativeTimeSec === null || timelineOffsetSec <= 0) {
+    return event;
+  }
+  const relativeTimeSec = event.relativeTimeSec - timelineOffsetSec;
+  return {
+    ...event,
+    relativeTimeSec:
+      relativeTimeSec >= 0
+        ? parseFloat(relativeTimeSec.toFixed(3))
+        : null,
+  };
 }
 
 function toEvidenceEvent(

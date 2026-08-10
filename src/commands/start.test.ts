@@ -297,5 +297,12 @@ describe('startCommand', () => {
     expect(mocks.registerSession).toHaveBeenCalledWith(
       expect.objectContaining({ environment: environmentState }),
     );
+    expect(mocks.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        recordingStartedAt: expect.any(String),
+        recordingActive: true,
+      }),
+      '/project/proofshot-artifacts',
+    );
   });
 });

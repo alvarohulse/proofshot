@@ -373,6 +373,40 @@ describe('stop artifacts', () => {
     expect(trimOffset).toBe(0);
     expect(fs.readFileSync(videoPath, 'utf-8')).toBe('original-video');
   });
+
+  it('converts session-relative actions to the recording timeline before trimming', () => {
+    const videoPath = path.join(root, 'session.webm');
+    fs.writeFileSync(videoPath, 'original-video');
+    let trimArgs: string[] = [];
+
+    mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (args[0] === '-version') {
+        return '';
+      }
+      if (args[0] === '-v') {
+        return '';
+      }
+      trimArgs = args;
+      fs.writeFileSync(videoPath, 'trimmed-video');
+      return '';
+    });
+
+    trimVideo(
+      videoPath,
+      [],
+      root,
+      0,
+      [
+        { action: 'open', relativeTimeSec: 83, timestamp: '2026-07-16T18:01:23.000Z' },
+        { action: 'click', relativeTimeSec: 93, timestamp: '2026-07-16T18:01:33.000Z' },
+      ],
+      83,
+    );
+
+    const seekIndex = trimArgs.indexOf('-ss');
+    expect(trimArgs[seekIndex + 1]).toBe('0.00');
+    expect(fs.readFileSync(videoPath, 'utf-8')).toBe('trimmed-video');
+  });
 });
 
 function buildSummaryData(): SummaryData {

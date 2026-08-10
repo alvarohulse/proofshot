@@ -257,6 +257,7 @@ declare function waitForPort(port: number, timeoutMs?: number, intervalMs?: numb
 
 interface SessionState {
     startedAt: string;
+    recordingStartedAt?: string;
     startDirectory?: string;
     lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
     cleanupError?: string | null;
@@ -378,6 +379,7 @@ type EvidenceBuildOptions = {
     sessionId: string;
     sessionDir: string;
     durationSec: number;
+    timelineOffsetSec?: number;
     videoPath: string;
     recordingWasActive: boolean;
     consoleEvidenceAvailable: boolean;
