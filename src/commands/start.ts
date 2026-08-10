@@ -12,8 +12,13 @@ import {
   hasActiveSession,
   clearSession,
   generateAgentBrowserSessionName,
+  type SessionState,
 } from '../session/state.js';
 import { writeMetadata } from '../session/metadata.js';
+import {
+  startOwnedEnvironment,
+  stopOwnedEnvironment,
+} from '../environment/runtime.js';
 
 interface StartOptions {
   description?: string;
@@ -46,6 +51,14 @@ export async function startCommand(options: StartOptions): Promise<void> {
       );
       return;
     }
+  }
+
+  if (options.run && config.environment) {
+    console.error(
+      chalk.red('✗') +
+        ' Use either --run or config.environment, not both.',
+    );
+    process.exit(1);
   }
 
   ensureOutputDir(outputDir);
@@ -85,6 +98,51 @@ export async function startCommand(options: StartOptions): Promise<void> {
   });
 
   let serverAlreadyRunning = true;
+  const session: SessionState = {
+    startedAt: new Date().toISOString(),
+    description: options.description || null,
+    outputDir,
+    sessionDir,
+    sessionName,
+    videoPath,
+    serverErrorLog,
+    port: config.devServer.port,
+    serverCommand: options.run || null,
+    serverAlreadyRunning,
+    recordingActive: false,
+    environment: null,
+    viewport: { width: config.viewport.width, height: config.viewport.height },
+  };
+  const capturesEnvironment =
+    config.environment !== undefined ||
+    (config.logs?.sources || []).some((source) => source.kind === 'file');
+
+  if (capturesEnvironment) {
+    saveSession(session);
+    try {
+      session.environment = await startOwnedEnvironment(
+        config.environment,
+        config.logs || {},
+        sessionDir,
+        sessionName,
+        new Date(session.startedAt).getTime(),
+        (environment) => {
+          session.environment = environment;
+          saveSession(session);
+        },
+      );
+      saveSession(session);
+      console.log(chalk.green('✓') + ' Environment and log capture started');
+    } catch (error) {
+      const cleanupError = await cleanupEnvironmentAfterFailedStart(session);
+      console.error(
+        chalk.red('✗') +
+          ` Failed to start environment capture: ${formatError(error)}`,
+      );
+      reportCleanupError(cleanupError);
+      process.exit(1);
+    }
+  }
 
   if (options.run) {
     console.log(chalk.dim(`Starting: ${options.run}`));
@@ -99,7 +157,9 @@ export async function startCommand(options: StartOptions): Promise<void> {
       console.log(chalk.green('✓') + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk.dim(`  Server logs → ${serverErrorLog}`));
     } catch (error: any) {
+      const cleanupError = await cleanupEnvironmentAfterFailedStart(session);
       console.error(chalk.red('✗') + ` Failed to start dev server: ${error.message}`);
+      reportCleanupError(cleanupError);
       process.exit(1);
     }
   } else {
@@ -114,12 +174,14 @@ export async function startCommand(options: StartOptions): Promise<void> {
     openBrowser(openUrl, config.viewport, config.headless, sessionName, config.browser);
     console.log(chalk.green('✓') + ' Browser ready');
   } catch (error: any) {
-    closeBrowser();
+    closeBrowserAfterFailedStart(sessionName);
+    const cleanupError = await cleanupEnvironmentAfterFailedStart(session);
     console.error(
       chalk.red('✗') +
         ` Failed to open browser: ${error.message}\n` +
         chalk.dim('Make sure agent-browser is installed: npm install -g agent-browser'),
     );
+    reportCleanupError(cleanupError);
     process.exit(1);
   }
 
@@ -147,7 +209,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
   }
 
   if (!recordingStarted) {
-    closeBrowser();
+    closeBrowserAfterFailedStart(sessionName);
+    const cleanupError = await cleanupEnvironmentAfterFailedStart(session);
     console.error(
       chalk.red('✗') +
         ` Failed to initialize recording after ${RECORDING_RETRIES} attempts: ${lastError?.message}\n` +
@@ -157,23 +220,13 @@ export async function startCommand(options: StartOptions): Promise<void> {
         chalk.dim('  2. Try "proofshot clean" then re-run "proofshot start"\n') +
         chalk.dim('  3. If the port was already in use, stop the old server first'),
     );
+    reportCleanupError(cleanupError);
     process.exit(1);
   }
 
-  saveSession({
-    startedAt: new Date().toISOString(),
-    description: options.description || null,
-    outputDir,
-    sessionDir,
-    sessionName,
-    videoPath,
-    serverErrorLog,
-    port: config.devServer.port,
-    serverCommand: options.run || null,
-    serverAlreadyRunning,
-    recordingActive: true,
-    viewport: { width: config.viewport.width, height: config.viewport.height },
-  });
+  session.serverAlreadyRunning = serverAlreadyRunning;
+  session.recordingActive = true;
+  saveSession(session);
 
   console.log('');
   console.log(chalk.green.bold('✅ ProofShot session started'));
@@ -196,4 +249,44 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log(chalk.dim('  proofshot exec screenshot step.png    # Capture a moment'));
   console.log('');
   console.log(`When done, run: ${chalk.white('proofshot stop')}`);
+}
+
+async function cleanupEnvironmentAfterFailedStart(
+  session: SessionState,
+): Promise<Error | null> {
+  try {
+    await stopOwnedEnvironment(session.environment);
+    clearSession(session.outputDir);
+    return null;
+  } catch (error) {
+    saveSession(session);
+    return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function reportCleanupError(error: Error | null): void {
+  if (!error) {
+    return;
+  }
+  console.error(
+    chalk.yellow('⚠') +
+      ` Recovery state retained because cleanup failed: ${error.message}`,
+  );
+  console.error(
+    chalk.dim(
+      '  Resolve the reported resource issue, then run "proofshot stop" again.',
+    ),
+  );
+}
+
+function closeBrowserAfterFailedStart(sessionName: string): void {
+  try {
+    closeBrowser(sessionName);
+  } catch {
+    // The browser may not have finished creating a session.
+  }
 }

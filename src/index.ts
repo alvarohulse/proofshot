@@ -10,3 +10,17 @@ export { writeViewer, generateViewer } from './artifacts/viewer.js';
 export type { SessionLogEntry } from './commands/exec.js';
 export { writeMetadata, loadMetadata, findSessionsForBranch, type SessionMetadata } from './session/metadata.js';
 export { formatPRComment, type PRCommentData } from './artifacts/pr-format.js';
+export {
+  startOwnedEnvironment,
+  stopOwnedEnvironment,
+} from './environment/runtime.js';
+export {
+  loadEvidenceEvents,
+  normalizeLogText,
+} from './environment/evidence.js';
+export type {
+  EnvironmentConfig,
+  EnvironmentState,
+  EvidenceEvent,
+  LogsConfig,
+} from './environment/types.js';

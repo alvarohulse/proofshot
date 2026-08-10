@@ -6,11 +6,13 @@ import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { closeBrowser, getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
-import { loadSession, clearSession } from '../session/state.js';
+import { loadSession, clearSession, saveSession } from '../session/state.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { loadSessionLog } from './exec.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
+import { stopOwnedEnvironment } from '../environment/runtime.js';
+import type { ResolvedLogSourceState } from '../environment/types.js';
 
 /**
  * Parse server.log lines with "epochMs\ttext" format.
@@ -72,6 +74,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const startTime = new Date(session.startedAt).getTime();
   const durationMs = Date.now() - startTime;
   const durationSec = Math.round(durationMs / 1000);
+  const environmentSources = session.environment?.sources || [];
+  const browserWasActive = session.recordingActive;
 
   // Step 1: Collect console errors and output
   console.log(chalk.dim('Collecting errors...'));
@@ -97,16 +101,42 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
 
   // Step 2: Stop recording
-  console.log(chalk.dim('Stopping recording...'));
-  stopRecording(session.sessionName);
+  if (session.recordingActive) {
+    console.log(chalk.dim('Stopping recording...'));
+    stopRecording(session.sessionName);
+    session.recordingActive = false;
+    saveSession(session);
+  }
 
   // Step 3: Close browser (unless --no-close)
-  if (!options.noClose) {
+  if (!options.noClose && browserWasActive) {
     console.log(chalk.dim('Closing browser...'));
     closeBrowser(session.sessionName);
   }
 
-  // Step 4: Read server log (with timestamp parsing)
+  // Step 4: Stop the owned environment and capture helpers.
+  if (session.environment) {
+    console.log(chalk.dim('Stopping environment capture...'));
+    try {
+      await stopOwnedEnvironment(session.environment);
+    } catch (error) {
+      saveSession(session);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(
+        chalk.red('✗') + ` Failed to stop environment capture: ${message}`,
+      );
+      console.error(
+        chalk.dim(
+          '  Recovery state was retained. Resolve the resource issue, then run "proofshot stop" again.',
+        ),
+      );
+      process.exit(1);
+    }
+    session.environment = null;
+    saveSession(session);
+  }
+
+  // Step 5: Read server log (with timestamp parsing)
   let serverLog = '';
   let serverEntries: TimestampedLogEntry[] = [];
   if (fs.existsSync(session.serverErrorLog)) {
@@ -165,6 +195,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     tokenUsage,
     durationSec,
     outputDir: sessionDir,
+    environmentSources,
   });
   fs.writeFileSync(summaryPath, summary);
 
@@ -220,6 +251,11 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     console.log(`📹 Video:         ${chalk.dim(session.videoPath)} (${durationSec}s)`);
   }
   console.log(`📸 Screenshots:   ${screenshots.length} captured`);
+  if (environmentSources.length > 0) {
+    console.log(
+      `📚 Environment:   ${environmentSources.length} source(s) → ${chalk.dim(path.join(sessionDir, 'logs'))}`,
+    );
+  }
   console.log(`📝 Summary:       ${chalk.dim(summaryPath)}`);
   if (viewerPath) {
     console.log(`🎬 Viewer:        ${chalk.dim(viewerPath)}`);
@@ -274,6 +310,7 @@ interface SummaryData {
   tokenUsage?: TokenUsage | null;
   durationSec: number;
   outputDir: string;
+  environmentSources: ResolvedLogSourceState[];
 }
 
 function generateProofSummary(data: SummaryData): string {
@@ -340,6 +377,14 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
   if (data.tokenUsage) {
     md += `## Token Usage (Estimated)\n\n`;
     md += formatTokenUsage(data.tokenUsage);
+    md += '\n';
+  }
+
+  if (data.environmentSources.length > 0) {
+    md += `## Environment Logs\n\n`;
+    for (const source of data.environmentSources) {
+      md += `- **${source.title}** (${source.group}/${source.kind}): [${path.basename(source.logPath)}](./logs/${path.basename(source.logPath)})\n`;
+    }
     md += '\n';
   }
 

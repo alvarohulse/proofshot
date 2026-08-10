@@ -15,6 +15,8 @@ Each ProofShot session creates a timestamped folder in your output directory (de
 | `session.webm` | `start` / `stop` | Video recording of the entire session (Playwright screencast). Trimmed by `stop` if ffmpeg is available. |
 | `session-log.json` | `exec` | Action timeline. Each entry records the command, relative timestamp, and element data (bounding box, label) for `@eN` targets. Appended with each `exec` call. |
 | `server.log` | `start` | Dev server stdout and stderr. Only created when ProofShot starts the server via `--run`. |
+| `environment.ndjson` | `start` | Canonical timestamped evidence from configured tmux panes, direct processes, and file tails. |
+| `logs/*.log` | `start` | One bounded plain-text log per configured environment source. |
 | `console-output.log` | `stop` | Browser console output collected at stop time. |
 | `step-*.png` | `exec screenshot` | Screenshots captured at key moments. Filenames come from the `exec screenshot` argument. |
 | `SUMMARY.md` | `stop` | Markdown report containing: session date, description, video link, screenshots, console error count and details, server error count and details, environment info. |
@@ -80,4 +82,5 @@ A text-based report for environments where the HTML viewer isn't practical (PR c
 - Embedded screenshots
 - Console error count and details
 - Server error count and log excerpt
+- Links to captured environment source logs
 - Environment info (browser, viewport, duration)

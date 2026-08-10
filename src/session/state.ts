@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import type { EnvironmentState } from '../environment/types.js';
 
 const SESSION_FILENAME = '.session.json';
 
@@ -15,6 +16,7 @@ export interface SessionState {
   serverCommand: string | null;
   serverAlreadyRunning: boolean;
   recordingActive: boolean;
+  environment?: EnvironmentState | null;
   viewport?: { width: number; height: number };
 }
 

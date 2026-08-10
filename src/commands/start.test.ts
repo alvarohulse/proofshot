@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   generateAgentBrowserSessionName: vi.fn(),
   writeMetadata: vi.fn(),
   execSync: vi.fn(),
+  startOwnedEnvironment: vi.fn(),
+  stopOwnedEnvironment: vi.fn(),
 }));
 
 vi.mock('../utils/config.js', () => ({
@@ -52,6 +54,11 @@ vi.mock('../session/metadata.js', () => ({
   writeMetadata: mocks.writeMetadata,
 }));
 
+vi.mock('../environment/runtime.js', () => ({
+  startOwnedEnvironment: mocks.startOwnedEnvironment,
+  stopOwnedEnvironment: mocks.stopOwnedEnvironment,
+}));
+
 vi.mock('child_process', () => ({
   execSync: mocks.execSync,
 }));
@@ -70,6 +77,7 @@ describe('startCommand', () => {
       headless: true,
       viewport: { width: 1280, height: 720 },
       browser: {},
+      logs: { sources: [] },
       devServer: {
         port: 3000,
         startupTimeout: 1000,
@@ -84,6 +92,7 @@ describe('startCommand', () => {
       if (command === 'git rev-parse HEAD') return 'deadbeef';
       throw new Error(`unexpected command: ${command}`);
     });
+    mocks.stopOwnedEnvironment.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -130,5 +139,85 @@ describe('startCommand', () => {
     expect(mocks.closeBrowser).toHaveBeenCalledTimes(1);
     expect(mocks.startRecording).not.toHaveBeenCalled();
     expect(mocks.saveSession).not.toHaveBeenCalled();
+  });
+
+  it('persists environment ownership before continuing browser startup', async () => {
+    const environment = {
+      kind: 'processes',
+      evidencePath: '/tmp/environment.ndjson',
+      sources: [],
+      processes: [],
+    };
+    mocks.loadConfig.mockReturnValue({
+      output: './proofshot-artifacts',
+      headless: true,
+      viewport: { width: 1280, height: 720 },
+      browser: {},
+      environment: {
+        kind: 'processes',
+        commands: [{ id: 'api', command: 'npm run api' }],
+      },
+      logs: { sources: [] },
+      devServer: {
+        port: 3000,
+        startupTimeout: 1000,
+      },
+    });
+    mocks.startOwnedEnvironment.mockImplementation(
+      async (_config, _logs, _sessionDir, _sessionName, _startTime, onState) => {
+        onState(environment);
+        return environment;
+      },
+    );
+
+    await startCommand({});
+
+    expect(mocks.startOwnedEnvironment).toHaveBeenCalledTimes(1);
+    expect(mocks.openBrowser).toHaveBeenCalledTimes(1);
+    expect(mocks.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        environment,
+        recordingActive: true,
+      }),
+    );
+  });
+
+  it('retains environment recovery state when failed startup cannot clean it', async () => {
+    const environment = {
+      kind: 'processes',
+      evidencePath: '/tmp/environment.ndjson',
+      sources: [],
+      processes: [],
+    };
+    mocks.loadConfig.mockReturnValue({
+      output: './proofshot-artifacts',
+      headless: true,
+      viewport: { width: 1280, height: 720 },
+      browser: {},
+      environment: {
+        kind: 'processes',
+        commands: [{ id: 'api', command: 'npm run api' }],
+      },
+      logs: { sources: [] },
+      devServer: {
+        port: 3000,
+        startupTimeout: 1000,
+      },
+    });
+    mocks.startOwnedEnvironment.mockImplementation(
+      async (_config, _logs, _sessionDir, _sessionName, _startTime, onState) => {
+        onState(environment);
+        throw new Error('readiness failed');
+      },
+    );
+    mocks.stopOwnedEnvironment.mockRejectedValue(new Error('process still alive'));
+
+    await expect(startCommand({})).rejects.toThrow('process.exit:1');
+
+    expect(mocks.clearSession).not.toHaveBeenCalled();
+    expect(mocks.saveSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ environment }),
+    );
+    expect(mocks.openBrowser).not.toHaveBeenCalled();
   });
 });

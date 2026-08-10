@@ -103,6 +103,8 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 | `session-log.json` | Action timeline with timestamps and element data |
 | `server.log` | Dev server stdout/stderr (when using `--run`) |
 | `console-output.log` | Browser console output |
+| `environment.ndjson` | Timestamped canonical evidence from configured tmux, process, and file sources |
+| `logs/*.log` | One bounded plain-text log per configured environment source |
 
 <p align="center">
   <img src="brand-assets/screenshots/artifacts-folder.png" alt="ProofShot artifacts folder" width="480" />
@@ -157,6 +159,30 @@ You can also configure browser launch behavior in `proofshot.config.json`:
 ```
 
 Set `browser.configPath` when you need ProofShot to run `agent-browser` against a project-specific config instead of inheriting `~/.agent-browser/config.json`. Relative paths are resolved from the directory that contains `proofshot.config.json`.
+
+For applications with multiple runners, configure ProofShot to own and capture tmux panes, direct processes, and file tails:
+
+```json
+{
+  "environment": {
+    "kind": "processes",
+    "commands": [
+      { "id": "web", "group": "frontend", "command": "npm run dev" },
+      { "id": "api", "group": "backend", "command": "npm run api" }
+    ],
+    "readiness": [
+      { "kind": "http", "url": "http://127.0.0.1:3000/health" }
+    ]
+  },
+  "logs": {
+    "sources": [
+      { "id": "worker", "kind": "file", "path": "./logs/worker.log" }
+    ]
+  }
+}
+```
+
+Direct process commands are captured automatically; declare `logs.sources` only for custom source identities or additional files. Use either `--run` or `environment`, not both. See the [configuration reference](content/docs/reference/configuration.mdx) for owned tmux sockets, external launcher contracts, source naming, and readiness checks.
 
 ### `proofshot stop`
 
