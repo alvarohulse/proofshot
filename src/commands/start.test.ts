@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   generateTimestamp: vi.fn(),
   generateSessionDirName: vi.fn(),
   saveSession: vi.fn(),
+  loadSession: vi.fn(),
   hasActiveSession: vi.fn(),
   clearSession: vi.fn(),
   generateAgentBrowserSessionName: vi.fn(),
@@ -45,6 +46,7 @@ vi.mock('../artifacts/bundle.js', () => ({
 
 vi.mock('../session/state.js', () => ({
   saveSession: mocks.saveSession,
+  loadSession: mocks.loadSession,
   hasActiveSession: mocks.hasActiveSession,
   clearSession: mocks.clearSession,
   generateAgentBrowserSessionName: mocks.generateAgentBrowserSessionName,
@@ -180,6 +182,48 @@ describe('startCommand', () => {
         recordingActive: true,
       }),
     );
+  });
+
+  it('refuses to override an active session whose environment cannot be stopped', async () => {
+    const session = {
+      outputDir: '/tmp/proofshot-force-override',
+      environment: {
+        kind: 'processes',
+        evidencePath: '/tmp/proofshot-force-override/environment.ndjson',
+        sources: [],
+        processes: [],
+      },
+    };
+    mocks.hasActiveSession.mockReturnValue(true);
+    mocks.loadSession.mockReturnValue(session);
+    mocks.stopOwnedEnvironment.mockRejectedValue(new Error('tmux server did not stop'));
+
+    await expect(startCommand({ force: true })).rejects.toThrow('process.exit:1');
+
+    expect(mocks.stopOwnedEnvironment).toHaveBeenCalledWith(session.environment);
+    expect(mocks.clearSession).not.toHaveBeenCalled();
+    expect(mocks.saveSession).toHaveBeenCalledWith(session);
+    expect(mocks.openBrowser).not.toHaveBeenCalled();
+  });
+
+  it('stops the recorded environment before clearing a forced session', async () => {
+    const session = {
+      outputDir: '/tmp/proofshot-force-override',
+      environment: {
+        kind: 'processes',
+        evidencePath: '/tmp/proofshot-force-override/environment.ndjson',
+        sources: [],
+        processes: [],
+      },
+    };
+    mocks.hasActiveSession.mockReturnValue(true);
+    mocks.loadSession.mockReturnValue(session);
+
+    await startCommand({ force: true });
+
+    expect(mocks.stopOwnedEnvironment).toHaveBeenCalledTimes(1);
+    expect(mocks.clearSession).toHaveBeenCalledTimes(1);
+    expect(mocks.openBrowser).toHaveBeenCalledTimes(1);
   });
 
   it('retains environment recovery state when failed startup cannot clean it', async () => {

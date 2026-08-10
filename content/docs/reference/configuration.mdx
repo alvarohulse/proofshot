@@ -139,6 +139,8 @@ Every source requires a stable `id`; optional `group` values preserve the source
 - `process`: select a direct environment command by `processId`.
 - `file`: capture an existing file, including `--url` attach workflows.
 
+`tmux-pane` sources require `environment.kind: "tmux"` and `process` sources require `environment.kind: "processes"`. A mismatch — or a declared source with no `environment` block — is rejected as a config error instead of being silently dropped from the evidence. `file` sources need no `environment`.
+
 Pane titles resolve in this order: launcher mapping title, non-empty tmux pane title, then `Pane <index>`. Duplicate display titles gain a pane-number suffix without changing source identity.
 
 Tmux panes are one PTY byte stream and are always recorded as `stream: "pty"`; stdout and stderr cannot be recovered after tmux multiplexes them. ProofShot installs `pipe-pane` before backfilling retained scrollback. Canonical evidence keeps untimed `history` and timestamped `live` segments plus their overlap/capture-gap boundary.

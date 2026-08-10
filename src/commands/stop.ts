@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
-import { loadConfig } from '../utils/config.js';
+import { loadConfigForTeardown } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { closeBrowser, getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
@@ -56,7 +56,13 @@ interface StopOptions {
 }
 
 export async function stopCommand(options: StopOptions): Promise<void> {
-  const config = loadConfig();
+  const { config, error: configError } = loadConfigForTeardown();
+  if (configError) {
+    console.error(chalk.yellow('⚠') + ` ${configError.message}`);
+    console.error(
+      chalk.dim('  Continuing teardown with the resolvable output directory.'),
+    );
+  }
   setAgentBrowserDefaults({ configPath: config.browser.configPath });
   const outputDir = path.resolve(config.output);
 
@@ -159,7 +165,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   let trimOffsetSec = 0;
   if (fs.existsSync(session.videoPath)) {
     trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
-  } else if (session.recordingActive) {
+  } else if (browserWasActive) {
     console.log(
       chalk.yellow('⚠') +
         ' Recording was active but no video file was produced.\n' +

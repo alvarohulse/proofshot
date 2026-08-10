@@ -231,11 +231,12 @@ export async function startProcessCapture(
   definition: ProcessDefinition,
   source: ResolvedLogSourceState,
   evidencePath: string,
+  captureDir: string,
   startTimeMs: number,
   maxBytes: number,
   stripAnsi: boolean,
 ): Promise<CaptureProcessState> {
-  const pidFile = `${source.logPath}.pid`;
+  const pidFile = path.join(captureDir, `${source.id}.pid`);
   const config: WorkerConfig = {
     evidencePath,
     logPath: source.logPath,
@@ -256,11 +257,12 @@ export async function startFileCapture(
   filePath: string,
   source: ResolvedLogSourceState,
   evidencePath: string,
+  captureDir: string,
   startTimeMs: number,
   maxBytes: number,
   stripAnsi: boolean,
 ): Promise<CaptureProcessState> {
-  const pidFile = `${source.logPath}.pid`;
+  const pidFile = path.join(captureDir, `${source.id}.pid`);
   let offset = 0;
   let fileDevice: number | undefined;
   let fileInode: number | undefined;
@@ -397,7 +399,7 @@ async function startDetachedWorker(
   workerSource: string,
   config: object,
 ): Promise<CaptureProcessState> {
-  fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+  fs.mkdirSync(path.dirname(pidFile), { recursive: true, mode: 0o700 });
   const errorFd = fs.openSync(`${pidFile}.stderr`, 'a', 0o600);
   const worker = spawn(process.execPath, ['-e', workerSource, encodeConfig(config)], {
     detached: true,

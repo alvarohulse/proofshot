@@ -113,6 +113,40 @@ export function isDetachedProcessIdentity(
   return identity.sessionId === identity.pid;
 }
 
+let cachedBootToken: string | null | undefined;
+
+/**
+ * The boot token is constant for the lifetime of this process, and identity
+ * capture runs inside termination poll loops, so read it only once.
+ */
+function readBootToken(): string | null {
+  if (cachedBootToken === undefined) {
+    cachedBootToken = captureBootToken();
+  }
+  return cachedBootToken;
+}
+
+function captureBootToken(): string | null {
+  try {
+    if (process.platform === 'linux') {
+      return (
+        fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim() || null
+      );
+    }
+    if (process.platform === 'darwin') {
+      return (
+        execFileSync('sysctl', ['-n', 'kern.boottime'], {
+          encoding: 'utf-8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }).trim() || null
+      );
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 /**
  * Capture the current immutable identity for a process.
  * Returns null when the process is already gone or cannot be inspected.
@@ -123,7 +157,7 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
   if (process.platform === 'linux') {
     try {
       const identity = parseLinuxProcStat(fs.readFileSync(`/proc/${pid}/stat`, 'utf-8'));
-      const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim();
+      const bootId = readBootToken();
       if (!identity || !bootId) return null;
       return { ...identity, bootId };
     } catch {
@@ -146,10 +180,7 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
       const identity = parseUnixProcessIdentity(pid, output);
       if (!identity) return null;
       if (process.platform !== 'darwin') return identity;
-      const bootId = execFileSync('sysctl', ['-n', 'kern.boottime'], {
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }).trim();
+      const bootId = readBootToken();
       return bootId ? { ...identity, bootId } : null;
     } catch {
       return null;

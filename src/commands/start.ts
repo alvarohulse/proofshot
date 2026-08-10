@@ -15,6 +15,7 @@ import {
   type SessionState,
 } from '../session/state.js';
 import { writeMetadata } from '../session/metadata.js';
+import { releaseActiveSessionEnvironment } from '../session/teardown.js';
 import {
   startOwnedEnvironment,
   stopOwnedEnvironment,
@@ -42,6 +43,15 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   if (hasActiveSession(outputDir)) {
     if (options.force) {
+      const cleanupError = await releaseActiveSessionEnvironment(outputDir);
+      if (cleanupError) {
+        console.error(
+          chalk.red('✗') +
+            ` Refusing to override the active session: ${cleanupError.message}`,
+        );
+        reportCleanupError(cleanupError);
+        process.exit(1);
+      }
       clearSession(outputDir);
       console.log(chalk.yellow('⚠') + chalk.dim(' Cleared stale session'));
     } else {
@@ -114,8 +124,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     viewport: { width: config.viewport.width, height: config.viewport.height },
   };
   const capturesEnvironment =
-    config.environment !== undefined ||
-    (config.logs?.sources || []).some((source) => source.kind === 'file');
+    config.environment !== undefined || (config.logs?.sources || []).length > 0;
 
   if (capturesEnvironment) {
     saveSession(session);

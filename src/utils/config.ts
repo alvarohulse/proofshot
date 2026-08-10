@@ -112,6 +112,55 @@ export function loadConfig(startDir?: string): ResolvedProofShotConfig {
   }
 }
 
+export interface TeardownConfig {
+  config: ResolvedProofShotConfig;
+  error: Error | null;
+}
+
+/**
+ * Resolve the configuration needed to tear an existing session down.
+ *
+ * Startup fails closed on an invalid config, but teardown must still be able to
+ * reach the recorded session and its owned resources, so validation failures are
+ * reported to the caller instead of thrown.
+ */
+export function loadConfigForTeardown(startDir?: string): TeardownConfig {
+  try {
+    return { config: loadConfig(startDir), error: null };
+  } catch (error) {
+    return {
+      config: resolveTeardownFallback(startDir),
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+}
+
+function resolveTeardownFallback(startDir?: string): ResolvedProofShotConfig {
+  const fallback: ResolvedProofShotConfig = {
+    ...DEFAULT_CONFIG,
+    browser: { ...DEFAULT_CONFIG.browser },
+    logs: { ...DEFAULT_CONFIG.logs, sources: [] },
+  };
+  const configPath = findConfigPath(startDir);
+  if (!configPath) return fallback;
+
+  const configDir = path.dirname(configPath);
+  let output = DEFAULT_CONFIG.output;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (typeof parsed?.output === 'string') {
+      output = parsed.output;
+    }
+    if (typeof parsed?.browser?.configPath === 'string') {
+      fallback.browser.configPath = path.resolve(configDir, parsed.browser.configPath);
+    }
+  } catch {
+    // An unreadable config still resolves the default output directory.
+  }
+  fallback.output = path.resolve(configDir, output);
+  return fallback;
+}
+
 function validateConfig(value: unknown): void {
   assertRecord(value, 'config');
   assertOptionalString(value.output, 'output');
@@ -139,6 +188,42 @@ function validateConfig(value: unknown): void {
   }
   validateEnvironment(value.environment);
   validateLogs(value.logs);
+  validateSourceEnvironmentAlignment(value.environment, value.logs);
+}
+
+/**
+ * A declared log source that the configured environment cannot capture would be
+ * silently dropped at runtime, so reject the combination while it is still a
+ * config error.
+ */
+function validateSourceEnvironmentAlignment(
+  environment: unknown,
+  logs: unknown,
+): void {
+  if (typeof logs !== 'object' || logs === null) return;
+  const sources = (logs as Record<string, unknown>).sources;
+  if (!Array.isArray(sources)) return;
+
+  const environmentKind =
+    typeof environment === 'object' && environment !== null
+      ? (environment as Record<string, unknown>).kind
+      : undefined;
+  const requiredKind =
+    environmentKind === 'tmux'
+      ? 'tmux-pane'
+      : environmentKind === 'processes'
+        ? 'process'
+        : undefined;
+
+  sources.forEach((source, index) => {
+    const kind = (source as Record<string, unknown>).kind;
+    if (kind === 'file' || kind === requiredKind) return;
+    throw new Error(
+      `logs.sources[${index}].kind "${String(kind)}" requires environment.kind ` +
+        `"${kind === 'tmux-pane' ? 'tmux' : 'processes'}", found ` +
+        `${environmentKind === undefined ? 'no environment' : `"${String(environmentKind)}"`}`,
+    );
+  });
 }
 
 function validateEnvironment(value: unknown): void {

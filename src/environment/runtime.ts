@@ -29,6 +29,7 @@ export async function startOwnedEnvironment(
   startTimeMs: number,
   onState: (state: EnvironmentState) => void,
 ): Promise<EnvironmentState | null> {
+  assertSourcesMatchEnvironment(environment, logs);
   const fileSources = (logs.sources || []).filter(
     (source): source is Extract<LogSourceConfig, { kind: 'file' }> =>
       source.kind === 'file',
@@ -73,6 +74,30 @@ export async function startOwnedEnvironment(
   } catch (error) {
     await stopOwnedEnvironment(state).catch(() => {});
     throw error;
+  }
+}
+
+/**
+ * Only the environment kind that owns a source can capture it, so a mismatch
+ * must fail closed instead of dropping declared evidence.
+ */
+function assertSourcesMatchEnvironment(
+  environment: EnvironmentConfig | undefined,
+  logs: LogsConfig,
+): void {
+  const requiredKind =
+    environment?.kind === 'tmux'
+      ? 'tmux-pane'
+      : environment?.kind === 'processes'
+        ? 'process'
+        : undefined;
+  for (const source of logs.sources || []) {
+    if (source.kind === 'file' || source.kind === requiredKind) continue;
+    throw new Error(
+      `Log source ${source.id} of kind "${source.kind}" cannot be captured by environment kind "${
+        environment?.kind || 'none'
+      }".`,
+    );
   }
 }
 
@@ -128,7 +153,9 @@ async function startProcessEnvironment(
 ): Promise<ProcessEnvironmentState> {
   const evidencePath = path.join(sessionDir, 'environment.ndjson');
   const logsDir = path.join(sessionDir, 'logs');
+  const captureDir = path.join(sessionDir, '.capture');
   fs.mkdirSync(logsDir, { recursive: true });
+  fs.mkdirSync(captureDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(evidencePath, '', { flag: 'a', mode: 0o600 });
 
   const configuredSources = (logs.sources || []).filter(
@@ -188,6 +215,7 @@ async function startProcessEnvironment(
         definition,
         source,
         evidencePath,
+        captureDir,
         startTimeMs,
         logs.maxBytesPerSource || 5 * 1024 * 1024,
         logs.stripAnsi !== false,
@@ -222,6 +250,8 @@ async function attachFileSources(
   }
   const knownIds = new Set(state.sources.map((source) => source.id));
   const logsDir = path.join(sessionDir, 'logs');
+  const captureDir = path.join(sessionDir, '.capture');
+  fs.mkdirSync(captureDir, { recursive: true, mode: 0o700 });
   for (const fileSource of fileSources) {
     if (knownIds.has(fileSource.id)) {
       throw new Error(`Duplicate log source id: ${fileSource.id}`);
@@ -239,6 +269,7 @@ async function attachFileSources(
       fileSource.path,
       source,
       state.evidencePath,
+      captureDir,
       startTimeMs,
       logs.maxBytesPerSource || 5 * 1024 * 1024,
       logs.stripAnsi !== false,

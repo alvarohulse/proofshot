@@ -3,7 +3,7 @@ import { stopCommand } from './stop.js';
 import type { SessionState } from '../session/state.js';
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
+  loadConfigForTeardown: vi.fn(),
   loadSession: vi.fn(),
   clearSession: vi.fn(),
   saveSession: vi.fn(),
@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../utils/config.js', () => ({
-  loadConfig: mocks.loadConfig,
+  loadConfigForTeardown: mocks.loadConfigForTeardown,
 }));
 
 vi.mock('../session/state.js', () => ({
@@ -45,9 +45,12 @@ describe('stopCommand environment cleanup', () => {
     vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
       throw new Error(`process.exit:${code ?? 0}`);
     }) as never);
-    mocks.loadConfig.mockReturnValue({
-      output: '/tmp/proofshot-environment-stop',
-      browser: {},
+    mocks.loadConfigForTeardown.mockReturnValue({
+      config: {
+        output: '/tmp/proofshot-environment-stop',
+        browser: {},
+      },
+      error: null,
     });
     mocks.getConsoleErrors.mockReturnValue('');
     mocks.getConsoleOutput.mockReturnValue('');

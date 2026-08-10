@@ -298,12 +298,40 @@ describe('owned environment capture', () => {
       ]),
     );
 
+    expect(
+      fs.readdirSync(path.join(sessionDir, 'logs')).sort(),
+    ).toEqual(['api.log', 'worker.log']);
+
     await stopOwnedEnvironment(state);
     expect(
       state.processes.every((capture) => !processIdentityMatches(capture.process)),
     ).toBe(true);
     states.pop();
   }, 15000);
+
+  it('refuses a log source the environment kind cannot capture', async () => {
+    const sessionDir = path.join(root, 'mismatched-session');
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    await expect(
+      startOwnedEnvironment(
+        {
+          kind: 'processes',
+          commands: [{ id: 'api', command: 'sleep 30' }],
+        },
+        {
+          sources: [
+            { id: 'vite', kind: 'tmux-pane', match: { tag: 'vite' } },
+          ],
+        },
+        sessionDir,
+        'ps-source-kind-mismatch',
+        Date.now(),
+        () => {},
+      ),
+    ).rejects.toThrow(/cannot be captured by environment kind "processes"/);
+    expect(fs.existsSync(path.join(sessionDir, 'logs'))).toBe(false);
+  });
 
   it('launches every process definition when only some sources are customized', async () => {
     const sessionDir = path.join(root, 'all-processes-session');
@@ -514,12 +542,12 @@ async function waitForEvidence(
   const raw = fs.existsSync(evidencePath)
     ? fs.readFileSync(evidencePath, 'utf-8')
     : '<missing evidence file>';
-  const logsDir = path.join(path.dirname(evidencePath), 'logs');
-  const helperErrors = fs.existsSync(logsDir)
+  const captureDir = path.join(path.dirname(evidencePath), '.capture');
+  const helperErrors = fs.existsSync(captureDir)
     ? fs
-        .readdirSync(logsDir)
+        .readdirSync(captureDir)
         .filter((file) => file.endsWith('.stderr'))
-        .map((file) => `${file}:\n${fs.readFileSync(path.join(logsDir, file), 'utf-8')}`)
+        .map((file) => `${file}:\n${fs.readFileSync(path.join(captureDir, file), 'utf-8')}`)
         .join('\n')
     : '';
   throw new Error(`Missing evidence: ${texts.join(', ')}\n${raw}\n${helperErrors}`);

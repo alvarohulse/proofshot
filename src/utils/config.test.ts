@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from './config.js';
+import { loadConfig, loadConfigForTeardown } from './config.js';
 
 describe('loadConfig', () => {
   it('merges nested browser config with defaults', () => {
@@ -117,5 +117,77 @@ describe('loadConfig', () => {
 
     fs.writeFileSync(configPath, '{not-json');
     expect(() => loadConfig(tempDir)).toThrow(/Invalid ProofShot config/);
+  });
+
+  it('rejects log sources the configured environment cannot capture', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-source-kind-'));
+    const configPath = path.join(tempDir, 'proofshot.config.json');
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        environment: { kind: 'processes', commands: [{ id: 'api', command: 'npm run api' }] },
+        logs: { sources: [{ id: 'vite', kind: 'tmux-pane', match: { tag: 'vite' } }] },
+      }),
+    );
+    expect(() => loadConfig(tempDir)).toThrow(/requires environment\.kind "tmux"/);
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        environment: {
+          kind: 'tmux',
+          launch: { kind: 'panes', panes: [{ id: 'vite', command: 'npm run dev' }] },
+        },
+        logs: { sources: [{ id: 'api', kind: 'process', processId: 'api' }] },
+      }),
+    );
+    expect(() => loadConfig(tempDir)).toThrow(/requires environment\.kind "processes"/);
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        logs: { sources: [{ id: 'api', kind: 'process', processId: 'api' }] },
+      }),
+    );
+    expect(() => loadConfig(tempDir)).toThrow(/no environment/);
+  });
+});
+
+describe('loadConfigForTeardown', () => {
+  it('resolves the recorded output directory when the config is invalid', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-teardown-config-'));
+    fs.writeFileSync(
+      path.join(tempDir, 'proofshot.config.json'),
+      JSON.stringify({
+        output: './project-proof',
+        environment: {
+          kind: 'tmux',
+          launch: {
+            kind: 'panes',
+            panes: [
+              { id: 'vite', command: 'npm run dev' },
+              { id: 'vite', command: 'npm run api' },
+            ],
+          },
+        },
+      }),
+    );
+
+    const { config, error } = loadConfigForTeardown(tempDir);
+    expect(error?.message).toMatch(/Duplicate environment\.launch\.panes id/);
+    expect(config.output).toBe(path.join(tempDir, 'project-proof'));
+  });
+
+  it('reports no error for a valid config', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-teardown-valid-'));
+    fs.writeFileSync(
+      path.join(tempDir, 'proofshot.config.json'),
+      JSON.stringify({ output: './proof' }),
+    );
+
+    const { config, error } = loadConfigForTeardown(tempDir);
+    expect(error).toBeNull();
+    expect(config.output).toBe(path.join(tempDir, 'proof'));
   });
 });

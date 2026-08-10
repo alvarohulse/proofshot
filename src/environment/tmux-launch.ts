@@ -51,9 +51,7 @@ export function startOwnedTmux(
     buildPaneCommand(pane);
   }
 
-  const uid = process.getuid?.() ?? process.pid;
-  const socketDir = path.join('/tmp', `proofshot-${uid}`, 'tmux');
-  fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
+  const socketDir = createOwnedSocketDir();
   const socketPath = path.join(socketDir, `${proofShotSessionName}.sock`);
   if (fs.existsSync(socketPath)) {
     throw new Error(`Refusing to reuse an existing tmux socket: ${socketPath}`);
@@ -197,6 +195,49 @@ export function createTmuxState(
         : undefined,
     stopCwd: config.cwd,
   };
+}
+
+/**
+ * Create the control-socket directory under a world-writable `/tmp`.
+ *
+ * `mkdir -p` follows a pre-existing symlink and never re-checks the ownership or
+ * permissions of components it did not create, which would let another local
+ * user host — and later substitute — the tmux socket. tmux skips its own socket
+ * directory check for `-S`, so every component is verified here instead.
+ */
+function createOwnedSocketDir(): string {
+  const uid = process.getuid?.() ?? process.pid;
+  const root = path.join('/tmp', `proofshot-${uid}`);
+  const socketDir = path.join(root, 'tmux');
+  createVerifiedDirectory(root, uid);
+  createVerifiedDirectory(socketDir, uid);
+  return socketDir;
+}
+
+function createVerifiedDirectory(directory: string, uid: number): void {
+  try {
+    fs.mkdirSync(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      throw error;
+    }
+  }
+  const stats = fs.lstatSync(directory);
+  if (!stats.isDirectory()) {
+    throw new Error(
+      `Refusing to use tmux socket directory ${directory}: not a directory.`,
+    );
+  }
+  if (process.getuid && stats.uid !== uid) {
+    throw new Error(
+      `Refusing to use tmux socket directory ${directory}: owned by uid ${stats.uid}.`,
+    );
+  }
+  if ((stats.mode & 0o077) !== 0) {
+    throw new Error(
+      `Refusing to use tmux socket directory ${directory}: permissions must be 0700.`,
+    );
+  }
 }
 
 function configurePane(

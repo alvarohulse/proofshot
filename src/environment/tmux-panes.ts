@@ -105,6 +105,7 @@ function resolvePane(
     const tag = sourceConfig.match.tag;
     const matches = tmuxExec(socketPath, [
       'list-panes',
+      '-s',
       '-t',
       sessionName,
       '-F',

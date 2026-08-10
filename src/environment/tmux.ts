@@ -8,7 +8,7 @@ import {
 } from './workers.js';
 import { appendEvidenceEvent } from './evidence.js';
 import { stopTmuxEnvironment } from './tmux-cleanup.js';
-import { assertTmuxAvailable, tmuxExec } from './tmux-command.js';
+import { assertTmuxAvailable, runCommand, tmuxExec } from './tmux-command.js';
 import {
   createTmuxState,
   startExternalTmux,
@@ -26,6 +26,36 @@ import type {
 import { terminateOwnedProcessTree } from '../utils/process.js';
 
 export { stopTmuxEnvironment };
+
+/**
+ * Release a tmux server ProofShot took ownership of before it could record an
+ * immutable identity. Without a captured identity the recorded-state teardown
+ * path cannot run, so the launcher's own stop command and the just-created
+ * socket are the only ownership-safe handles left.
+ */
+async function releaseUnverifiedTmux(
+  config: TmuxEnvironmentConfig,
+  connection: TmuxConnection | null,
+): Promise<void> {
+  const stopCommand =
+    config.launch.kind === 'external-command' ? config.launch.stopCommand : undefined;
+  if (stopCommand) {
+    await runCommand(stopCommand, config.cwd || process.cwd()).catch(() => {});
+  }
+  if (!connection || (!connection.ownsServer && !connection.ownsSession)) {
+    return;
+  }
+  try {
+    tmuxExec(
+      connection.socketPath,
+      connection.ownsServer
+        ? ['kill-server']
+        : ['kill-session', '-t', connection.sessionName],
+    );
+  } catch {
+    // The launcher's stop command may already have removed the server.
+  }
+}
 
 export async function startTmuxEnvironment(
   config: TmuxEnvironmentConfig,
@@ -45,11 +75,13 @@ export async function startTmuxEnvironment(
 
   let state: TmuxEnvironmentState | null = null;
   let pendingLauncher: LauncherEnvironmentState | null = null;
+  let unverifiedConnection: TmuxConnection | null = null;
   let connection: TmuxConnection;
   try {
     connection =
       config.launch.kind === 'panes'
         ? startOwnedTmux(config, proofShotSessionName, (startedConnection) => {
+            unverifiedConnection = startedConnection;
             const startedState = createTmuxState(
               config,
               startedConnection,
@@ -72,6 +104,7 @@ export async function startTmuxEnvironment(
             onState(pendingLauncher);
           });
     if (!state) {
+      unverifiedConnection = connection;
       const connectedState = createTmuxState(
         config,
         connection,
@@ -83,8 +116,11 @@ export async function startTmuxEnvironment(
   } catch (error) {
     if (state) {
       await stopTmuxEnvironment(state).catch(() => {});
-    } else if (pendingLauncher) {
-      await terminateOwnedProcessTree(pendingLauncher.launcher.process).catch(() => {});
+    } else {
+      if (pendingLauncher) {
+        await terminateOwnedProcessTree(pendingLauncher.launcher.process).catch(() => {});
+      }
+      await releaseUnverifiedTmux(config, unverifiedConnection);
     }
     throw error;
   }
