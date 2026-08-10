@@ -7018,20 +7018,29 @@ function getGitHubToken() {
     );
   }
 }
-async function getRepoInfo(token) {
+async function getRepoInfo(token, repository) {
   let nwo;
-  try {
-    nwo = execSync5("gh repo view --json nameWithOwner -q .nameWithOwner", {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"]
-    }).trim();
-  } catch (error) {
-    throw new ProofShotError(
-      "Could not determine GitHub repository. Are you in a git repo with a GitHub remote?",
-      error
-    );
+  if (repository) {
+    nwo = repository.replace(/^https?:\/\/github\.com\//, "").replace(/^github\.com\//, "").replace(/\.git$/, "");
+  } else {
+    try {
+      nwo = execSync5("gh repo view --json nameWithOwner -q .nameWithOwner", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"]
+      }).trim();
+    } catch (error) {
+      throw new ProofShotError(
+        "Could not determine GitHub repository. Are you in a git repo with a GitHub remote?",
+        error
+      );
+    }
   }
   const [owner, repo] = nwo.split("/");
+  if (!owner || !repo || nwo.split("/").length !== 2) {
+    throw new ProofShotError(
+      `Could not parse GitHub repository: ${repository || nwo}`
+    );
+  }
   const repoResponse = await githubApi(`repos/${owner}/${repo}`, token);
   return {
     owner,
@@ -7733,7 +7742,7 @@ async function prCommand(options) {
   }
   console.log(chalk6.dim(`Target PR: #${prNumber}`));
   const token = getGitHubToken();
-  const repoInfo = await getRepoInfo(token);
+  const repoInfo = await getRepoInfo(token, target.repository);
   assertTargetUnchanged(prNumber, target);
   const uploadRoot = buildUploadRoot(
     prNumber,

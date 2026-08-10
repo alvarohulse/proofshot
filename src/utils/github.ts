@@ -84,21 +84,36 @@ export function getGitHubToken(): string {
 /**
  * Get the current repo's owner, name, and numeric ID.
  */
-export async function getRepoInfo(token: string): Promise<GitHubRepo> {
+export async function getRepoInfo(
+  token: string,
+  repository?: string,
+): Promise<GitHubRepo> {
   let nwo: string;
-  try {
-    nwo = execSync('gh repo view --json nameWithOwner -q .nameWithOwner', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    throw new ProofShotError(
-      'Could not determine GitHub repository. Are you in a git repo with a GitHub remote?',
-      error,
-    );
+  if (repository) {
+    nwo = repository
+      .replace(/^https?:\/\/github\.com\//, '')
+      .replace(/^github\.com\//, '')
+      .replace(/\.git$/, '');
+  } else {
+    try {
+      nwo = execSync('gh repo view --json nameWithOwner -q .nameWithOwner', {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+    } catch (error) {
+      throw new ProofShotError(
+        'Could not determine GitHub repository. Are you in a git repo with a GitHub remote?',
+        error,
+      );
+    }
   }
 
   const [owner, repo] = nwo.split('/');
+  if (!owner || !repo || nwo.split('/').length !== 2) {
+    throw new ProofShotError(
+      `Could not parse GitHub repository: ${repository || nwo}`,
+    );
+  }
 
   const repoResponse = await githubApi<{
     id: number;

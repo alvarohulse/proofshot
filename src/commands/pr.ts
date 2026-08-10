@@ -188,7 +188,7 @@ export async function prCommand(options: PROptions): Promise<void> {
   console.log(chalk.dim(`Target PR: #${prNumber}`));
 
   const token = getGitHubToken();
-  const repoInfo = await getRepoInfo(token);
+  const repoInfo = await getRepoInfo(token, target.repository);
   assertTargetUnchanged(prNumber, target);
 
   const uploadRoot = buildUploadRoot(

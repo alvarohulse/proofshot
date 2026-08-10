@@ -3,7 +3,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatPRComment } from '../artifacts/pr-format.js';
-import { getGitHubToken, uploadAsset } from './github.js';
+import {
+  getGitHubToken,
+  getRepoInfo,
+  uploadAsset,
+} from './github.js';
 
 describe('getGitHubToken', () => {
   afterEach(() => {
@@ -21,6 +25,7 @@ describe('getGitHubToken', () => {
 describe('uploadAsset', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('surfaces a targeted message for auth-related web attachment failures', async () => {
@@ -39,6 +44,44 @@ describe('uploadAsset', () => {
 
     await expect(uploadAsset(filePath, 'token', 1)).rejects.toThrow(
       /github-web-attachments|repo-contents|GH_TOKEN/,
+    );
+  });
+});
+
+describe('getRepoInfo', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('resolves the validated target repository instead of the checkout parent', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 123,
+          default_branch: 'main',
+          private: false,
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      getRepoInfo('token', 'github.com/alvarohulse/proofshot'),
+    ).resolves.toEqual({
+      owner: 'alvarohulse',
+      repo: 'proofshot',
+      id: 123,
+      defaultBranch: 'main',
+      isPrivate: false,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.github.com/repos/alvarohulse/proofshot',
+      expect.any(Object),
     );
   });
 });
