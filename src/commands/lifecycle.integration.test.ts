@@ -2,7 +2,12 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { execFileSync, spawn, spawnSync } from 'child_process';
+import {
+  execFileSync,
+  spawn,
+  spawnSync,
+  type SpawnSyncReturns,
+} from 'child_process';
 import { fileURLToPath } from 'url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { isPortOpen } from '../utils/port.js';
@@ -230,7 +235,7 @@ function runCli(
   cwd: string,
   env: NodeJS.ProcessEnv,
   args: string[],
-): ReturnType<typeof spawnSync> {
+): SpawnSyncReturns<string> {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd,
     env,

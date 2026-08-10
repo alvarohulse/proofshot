@@ -345,8 +345,11 @@ function selectLegacyPublication(options: {
 }
 
 function normalizeUploadProvider(provider?: string): GitHubUploadProvider {
-  if (!provider || provider === 'repo-contents' || provider === 'github-web-attachments') {
-    return provider || 'repo-contents';
+  if (!provider || provider === 'repo-contents') {
+    return 'repo-contents';
+  }
+  if (provider === 'github-web-attachments') {
+    return 'github-web-attachments';
   }
 
   console.error(

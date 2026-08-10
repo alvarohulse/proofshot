@@ -1670,16 +1670,22 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
   let connection;
   try {
     connection = config.launch.kind === "panes" ? startOwnedTmux(config, proofShotSessionName, (startedConnection) => {
-      state = createTmuxState(
+      const startedState = createTmuxState(
         config,
         startedConnection,
         evidencePath
       );
-      onState(state);
+      state = startedState;
+      onState(startedState);
     }) : await startExternalTmux(config);
     if (!state) {
-      state = createTmuxState(config, connection, evidencePath);
-      onState(state);
+      const connectedState = createTmuxState(
+        config,
+        connection,
+        evidencePath
+      );
+      state = connectedState;
+      onState(connectedState);
     }
   } catch (error) {
     if (state) {
@@ -1689,6 +1695,10 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
     throw error;
   }
   try {
+    if (!state) {
+      throw new Error("tmux environment ownership state was not initialized.");
+    }
+    let activeState = state;
     const tmuxSources = resolveTmuxSources(config, logs, connection);
     const panes = tmuxSources.map(
       ({ config: sourceConfig, mapping }) => resolvePane(
@@ -1699,8 +1709,13 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
       )
     );
     disambiguateTitles(panes);
-    state = { ...state, panes, sources: panes.map((pane) => pane.source) };
-    onState(state);
+    activeState = {
+      ...activeState,
+      panes: panes.map(({ pane }) => pane),
+      sources: panes.map(({ source }) => source)
+    };
+    state = activeState;
+    onState(activeState);
     for (const pane of panes) {
       const pipeStatus = tmuxExec(connection.socketPath, [
         "display-message",
@@ -1730,6 +1745,15 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
         pane.pane.paneId,
         buildTmuxPipeCommand(workerConfig)
       ]);
+      pane.pane.captureAttached = true;
+      activeState = {
+        ...activeState,
+        panes: activeState.panes.map(
+          (ownedPane) => ownedPane.paneId === pane.pane.paneId ? { ...ownedPane, captureAttached: true } : ownedPane
+        )
+      };
+      state = activeState;
+      onState(activeState);
       const history = tmuxExec(connection.socketPath, [
         "capture-pane",
         "-p",
@@ -1760,13 +1784,19 @@ async function startTmuxEnvironment(config, logs, sessionDir, proofShotSessionNa
         captureGap: true
       });
       const capture = await waitForCaptureProcess(pane.source.id, pidFile);
-      state = { ...state, captures: [...state.captures, capture] };
-      onState(state);
+      activeState = {
+        ...activeState,
+        captures: [...activeState.captures, capture]
+      };
+      state = activeState;
+      onState(activeState);
     }
-    return state;
+    return activeState;
   } catch (error) {
-    await stopTmuxEnvironment(state).catch(() => {
-    });
+    if (state) {
+      await stopTmuxEnvironment(state).catch(() => {
+      });
+    }
     throw error;
   }
 }
@@ -1783,7 +1813,9 @@ async function stopTmuxEnvironment(state) {
   } else if (state.ownsSession && tmuxHasSession(state)) {
     tmuxExec(state.socket.path, ["kill-session", "-t", state.sessionName]);
   } else {
-    for (const pane of state.panes) {
+    for (const pane of state.panes.filter(
+      (candidate) => candidate.captureAttached
+    )) {
       try {
         tmuxExec(state.socket.path, ["pipe-pane", "-t", pane.paneId]);
       } catch {
@@ -1940,12 +1972,15 @@ function resolveTmuxSources(config, logs, connection) {
     (source) => source.kind === "tmux-pane"
   );
   if (configured.length > 0) {
-    return configured.map((source) => ({
-      config: source,
-      mapping: "connectionKey" in source.match ? connection.paneMappings.find(
-        (mapping) => mapping.key === source.match.connectionKey
-      ) : void 0
-    }));
+    return configured.map((source) => {
+      const connectionKey = "connectionKey" in source.match ? source.match.connectionKey : void 0;
+      return {
+        config: source,
+        mapping: connectionKey ? connection.paneMappings.find(
+          (mapping) => mapping.key === connectionKey
+        ) : void 0
+      };
+    });
   }
   if (config.launch.kind !== "panes") {
     return [];
@@ -1971,15 +2006,16 @@ function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
     }
     target = mapping.paneId;
   } else if ("tag" in sourceConfig.match) {
+    const tag = sourceConfig.match.tag;
     const matches = tmuxExec(socketPath, [
       "list-panes",
       "-a",
       "-F",
       "#{pane_id}	#{@proofshot-source}"
-    ]).split("\n").filter((line) => line.split("	")[1] === sourceConfig.match.tag);
+    ]).split("\n").filter((line) => line.split("	")[1] === tag);
     if (matches.length !== 1) {
       throw new Error(
-        `Expected one tmux pane tagged "${sourceConfig.match.tag}", found ${matches.length}.`
+        `Expected one tmux pane tagged "${tag}", found ${matches.length}.`
       );
     }
     target = matches[0].split("	")[0];
@@ -1998,7 +2034,7 @@ function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
   }
   const paneIndex = Number(fields[1]);
   const tmuxTitle = fields[3].trim();
-  const title = sourceConfig.title || mapping?.title || (tmuxTitle.length > 0 ? tmuxTitle : `Pane ${paneIndex}`);
+  const title = mapping?.title || (tmuxTitle.length > 0 ? tmuxTitle : `Pane ${paneIndex}`);
   const group = sourceConfig.group || mapping?.group || "environment";
   const source = {
     id: sourceConfig.id,
@@ -2019,7 +2055,8 @@ function resolvePane(socketPath, sourceConfig, mapping, logsDir) {
       sourceId: source.id,
       title,
       group,
-      target: fields[4]
+      target: fields[4],
+      captureAttached: false
     }
   };
 }
@@ -6693,8 +6730,11 @@ function selectLegacyPublication(options) {
   };
 }
 function normalizeUploadProvider(provider) {
-  if (!provider || provider === "repo-contents" || provider === "github-web-attachments") {
-    return provider || "repo-contents";
+  if (!provider || provider === "repo-contents") {
+    return "repo-contents";
+  }
+  if (provider === "github-web-attachments") {
+    return "github-web-attachments";
   }
   console.error(
     chalk6.red("\u2717") + ` Invalid upload provider "${provider}". Use "repo-contents" or "github-web-attachments".`

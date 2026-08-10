@@ -110,6 +110,7 @@ export type TmuxPaneState = {
   title: string;
   group: EnvironmentGroup;
   target: string;
+  captureAttached: boolean;
 };
 
 export type TmuxEnvironmentState = {

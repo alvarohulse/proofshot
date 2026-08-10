@@ -102,7 +102,7 @@ export function clearSession(controlDir: string): void {
  */
 export function generateAgentBrowserSessionName(
   seed: string,
-  nonce = randomUUID(),
+  nonce: string = randomUUID(),
 ): string {
   const normalized = seed
     .toLowerCase()

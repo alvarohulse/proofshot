@@ -145,6 +145,7 @@ type TmuxPaneState = {
     title: string;
     group: EnvironmentGroup;
     target: string;
+    captureAttached: boolean;
 };
 type TmuxEnvironmentState = {
     kind: 'tmux';
@@ -517,6 +518,9 @@ interface PRCommentData {
  */
 declare function formatPRComment(data: PRCommentData): string;
 
+declare function startOwnedEnvironment(environment: TmuxEnvironmentConfig, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<TmuxEnvironmentState>;
+declare function startOwnedEnvironment(environment: ProcessesEnvironmentConfig, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<ProcessEnvironmentState>;
+declare function startOwnedEnvironment(environment: undefined, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<ProcessEnvironmentState | null>;
 declare function startOwnedEnvironment(environment: EnvironmentConfig | undefined, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<EnvironmentState | null>;
 declare function stopOwnedEnvironment(state: EnvironmentState | null | undefined): Promise<void>;
 

@@ -12,12 +12,47 @@ import type {
   ProcessEnvironmentState,
   ReadinessCheck,
   ResolvedLogSourceState,
+  TmuxEnvironmentConfig,
+  TmuxEnvironmentState,
+  ProcessesEnvironmentConfig,
 } from './types.js';
 import {
   ownedProcessTreeIsAlive,
   terminateOwnedProcessTree,
 } from '../utils/process.js';
 
+export function startOwnedEnvironment(
+  environment: TmuxEnvironmentConfig,
+  logs: LogsConfig,
+  sessionDir: string,
+  sessionName: string,
+  startTimeMs: number,
+  onState: (state: EnvironmentState) => void,
+): Promise<TmuxEnvironmentState>;
+export function startOwnedEnvironment(
+  environment: ProcessesEnvironmentConfig,
+  logs: LogsConfig,
+  sessionDir: string,
+  sessionName: string,
+  startTimeMs: number,
+  onState: (state: EnvironmentState) => void,
+): Promise<ProcessEnvironmentState>;
+export function startOwnedEnvironment(
+  environment: undefined,
+  logs: LogsConfig,
+  sessionDir: string,
+  sessionName: string,
+  startTimeMs: number,
+  onState: (state: EnvironmentState) => void,
+): Promise<ProcessEnvironmentState | null>;
+export function startOwnedEnvironment(
+  environment: EnvironmentConfig | undefined,
+  logs: LogsConfig,
+  sessionDir: string,
+  sessionName: string,
+  startTimeMs: number,
+  onState: (state: EnvironmentState) => void,
+): Promise<EnvironmentState | null>;
 export async function startOwnedEnvironment(
   environment: EnvironmentConfig | undefined,
   logs: LogsConfig,

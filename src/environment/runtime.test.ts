@@ -5,7 +5,10 @@ import { execFileSync } from 'child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadEvidenceEvents } from './evidence.js';
 import { startOwnedEnvironment, stopOwnedEnvironment } from './runtime.js';
-import type { EnvironmentState } from './types.js';
+import type {
+  EnvironmentState,
+  ProcessEnvironmentState,
+} from './types.js';
 import { processIdentityMatches } from '../utils/process.js';
 
 let root: string;
@@ -355,12 +358,9 @@ describe('owned environment capture', () => {
       ),
     ).rejects.toThrow(/Environment readiness failed/);
 
-    expect(latestState).not.toBeNull();
-    if (!latestState || latestState.kind !== 'processes') {
-      throw new Error('expected process recovery state');
-    }
+    const recoveryState = requireProcessState(latestState);
     expect(
-      latestState.processes.every(
+      recoveryState.processes.every(
         (capture) => !processIdentityMatches(capture.process),
       ),
     ).toBe(true);
@@ -404,6 +404,15 @@ describe('owned environment capture', () => {
     states.pop();
   }, 15000);
 });
+
+function requireProcessState(
+  state: EnvironmentState | null,
+): ProcessEnvironmentState {
+  if (!state || state.kind !== 'processes') {
+    throw new Error('expected process state');
+  }
+  return state;
+}
 
 async function waitForEvidence(
   evidencePath: string,

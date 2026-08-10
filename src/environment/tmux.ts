@@ -62,17 +62,23 @@ export async function startTmuxEnvironment(
     connection =
       config.launch.kind === 'panes'
         ? startOwnedTmux(config, proofShotSessionName, (startedConnection) => {
-            state = createTmuxState(
+            const startedState = createTmuxState(
               config,
               startedConnection,
               evidencePath,
             );
-            onState(state);
+            state = startedState;
+            onState(startedState);
           })
         : await startExternalTmux(config);
     if (!state) {
-      state = createTmuxState(config, connection, evidencePath);
-      onState(state);
+      const connectedState = createTmuxState(
+        config,
+        connection,
+        evidencePath,
+      );
+      state = connectedState;
+      onState(connectedState);
     }
   } catch (error) {
     if (state) {
@@ -82,6 +88,10 @@ export async function startTmuxEnvironment(
   }
 
   try {
+    if (!state) {
+      throw new Error('tmux environment ownership state was not initialized.');
+    }
+    let activeState: TmuxEnvironmentState = state;
     const tmuxSources = resolveTmuxSources(config, logs, connection);
     const panes = tmuxSources.map(({ config: sourceConfig, mapping }) =>
       resolvePane(
@@ -92,8 +102,13 @@ export async function startTmuxEnvironment(
       ),
     );
     disambiguateTitles(panes);
-    state = { ...state, panes, sources: panes.map((pane) => pane.source) };
-    onState(state);
+    activeState = {
+      ...activeState,
+      panes: panes.map(({ pane }) => pane),
+      sources: panes.map(({ source }) => source),
+    };
+    state = activeState;
+    onState(activeState);
 
     for (const pane of panes) {
       const pipeStatus = tmuxExec(connection.socketPath, [
@@ -125,6 +140,17 @@ export async function startTmuxEnvironment(
         pane.pane.paneId,
         buildTmuxPipeCommand(workerConfig),
       ]);
+      pane.pane.captureAttached = true;
+      activeState = {
+        ...activeState,
+        panes: activeState.panes.map((ownedPane) =>
+          ownedPane.paneId === pane.pane.paneId
+            ? { ...ownedPane, captureAttached: true }
+            : ownedPane,
+        ),
+      };
+      state = activeState;
+      onState(activeState);
       const history = tmuxExec(connection.socketPath, [
         'capture-pane',
         '-p',
@@ -155,12 +181,18 @@ export async function startTmuxEnvironment(
         captureGap: true,
       });
       const capture = await waitForCaptureProcess(pane.source.id, pidFile);
-      state = { ...state, captures: [...state.captures, capture] };
-      onState(state);
+      activeState = {
+        ...activeState,
+        captures: [...activeState.captures, capture],
+      };
+      state = activeState;
+      onState(activeState);
     }
-    return state;
+    return activeState;
   } catch (error) {
-    await stopTmuxEnvironment(state).catch(() => {});
+    if (state) {
+      await stopTmuxEnvironment(state).catch(() => {});
+    }
     throw error;
   }
 }
@@ -185,7 +217,9 @@ export async function stopTmuxEnvironment(
   } else if (state.ownsSession && tmuxHasSession(state)) {
     tmuxExec(state.socket.path, ['kill-session', '-t', state.sessionName]);
   } else {
-    for (const pane of state.panes) {
+    for (const pane of state.panes.filter(
+      (candidate) => candidate.captureAttached,
+    )) {
       try {
         tmuxExec(state.socket.path, ['pipe-pane', '-t', pane.paneId]);
       } catch {
@@ -381,15 +415,20 @@ function resolveTmuxSources(
       source.kind === 'tmux-pane',
   );
   if (configured.length > 0) {
-    return configured.map((source) => ({
-      config: source,
-      mapping:
+    return configured.map((source) => {
+      const connectionKey =
         'connectionKey' in source.match
+          ? source.match.connectionKey
+          : undefined;
+      return {
+        config: source,
+        mapping: connectionKey
           ? connection.paneMappings.find(
-              (mapping) => mapping.key === source.match.connectionKey,
+              (mapping) => mapping.key === connectionKey,
             )
           : undefined,
-    }));
+      };
+    });
   }
   if (config.launch.kind !== 'panes') {
     return [];
@@ -421,6 +460,7 @@ function resolvePane(
     }
     target = mapping.paneId;
   } else if ('tag' in sourceConfig.match) {
+    const tag = sourceConfig.match.tag;
     const matches = tmuxExec(socketPath, [
       'list-panes',
       '-a',
@@ -428,10 +468,10 @@ function resolvePane(
       '#{pane_id}\t#{@proofshot-source}',
     ])
       .split('\n')
-      .filter((line) => line.split('\t')[1] === sourceConfig.match.tag);
+      .filter((line) => line.split('\t')[1] === tag);
     if (matches.length !== 1) {
       throw new Error(
-        `Expected one tmux pane tagged "${sourceConfig.match.tag}", found ${matches.length}.`,
+        `Expected one tmux pane tagged "${tag}", found ${matches.length}.`,
       );
     }
     target = matches[0].split('\t')[0];
@@ -452,7 +492,6 @@ function resolvePane(
   const paneIndex = Number(fields[1]);
   const tmuxTitle = fields[3].trim();
   const title =
-    sourceConfig.title ||
     mapping?.title ||
     (tmuxTitle.length > 0 ? tmuxTitle : `Pane ${paneIndex}`);
   const group = sourceConfig.group || mapping?.group || 'environment';
@@ -476,6 +515,7 @@ function resolvePane(
       title,
       group,
       target: fields[4],
+      captureAttached: false,
     },
   };
 }
