@@ -63,7 +63,7 @@ proofshot start --headed                                    # Show the browser w
 ```
 
 **What happens:**
-1. If `--run` is provided: fails without killing anything when the port is occupied; otherwise starts an owned dev-server process session, pipes timestamped output to `server.log`, and waits for the port
+1. Starts either `--run` or the configured owned `environment` (the two are mutually exclusive), attaches every configured log source, and completes readiness checks
 2. Opens headless Chromium via agent-browser
 3. Navigates to `--url` (or `http://localhost:<port>`)
 4. Starts video recording (retries up to 3 times)
@@ -87,10 +87,10 @@ proofshot stop [options]
 1. Collects console errors and output from the browser
 2. Stops video recording
 3. Closes the exact owned browser session (unless `--no-close`)
-4. Stops only the dev-server process session created by this ProofShot start
+4. Stops only the tmux session/server, direct processes, capture helpers, and dev-server process identities created by this ProofShot start
 5. Trims video dead time (requires ffmpeg): 5s buffer before first action, 3s after last
 6. Scans `server.log` for errors across 10+ languages
-7. Generates `SUMMARY.md` and `viewer.html`
+7. Generates `SUMMARY.md`, canonical `evidence.json`, structured `verdict.json`, `viewer.html`, and a hashed provenance manifest
 8. Clears `.session.json`, or retains it after `--no-close` until a later plain `stop` closes that exact browser
 
 Repeated `stop` calls are successful no-ops. If bundling fails, control state remains retryable; a later `stop` reuses already-collected artifacts instead of widening process cleanup.
@@ -110,6 +110,7 @@ proofshot exec <command> [args...]
 ```sh
 proofshot exec click @e3
 proofshot exec fill @e2 "user@example.com"
+proofshot exec assert-visible "#checkout-complete"
 proofshot exec screenshot step-checkout.png
 proofshot exec scroll down
 proofshot exec press Enter
@@ -118,6 +119,8 @@ proofshot exec press Enter
 Every `exec` call appends an entry to `session-log.json` with:
 - Relative timestamp from session start
 - The command and arguments
+- Passed/failed outcome and error text
+- Expected selector for `assert-visible`
 - Element bounding box and label (for `click`, `fill`, `type` targeting `@eN` refs)
 
 This data powers the interactive viewer's timeline and overlays.
@@ -158,6 +161,9 @@ proofshot pr [number] [options]
 |-----------------|-------------|
 | `[number]` | PR number. If omitted, auto-detected from current branch |
 | `--dry-run` | Print the markdown comment without posting |
+| `--session <id>` | Select one finalized session explicitly |
+| `--screenshot <artifact...>` | Publish only the selected screenshot IDs, paths, or unique basenames |
+| `--legacy-session` | Explicitly opt into one pre-manifest session; requires `--session` |
 | `--upload-provider <provider>` | Upload backend: `repo-contents` (default) or `github-web-attachments` |
 | `--artifacts-branch <branch>` | Git branch used by the `repo-contents` provider. Default: `proofshot-artifacts` |
 
@@ -166,6 +172,8 @@ proofshot pr [number] [options]
 ```sh
 proofshot pr               # Auto-detect PR from branch
 proofshot pr 42            # Post to PR #42
+proofshot pr --session proofshot-2026-08-09_19-00-00
+proofshot pr --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png
 proofshot pr --dry-run     # Preview without posting
 proofshot pr --upload-provider github-web-attachments
 ```
@@ -173,15 +181,28 @@ proofshot pr --upload-provider github-web-attachments
 **Requires:** [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated, or `GH_TOKEN` / `GITHUB_TOKEN`.
 
 **What happens:**
-1. Reads `metadata.json` from each session folder
-2. Selects sessions matching the current git branch
-3. Uploads screenshots and video to GitHub using the selected provider
-4. Converts `.webm` to `.mp4` if ffmpeg is available
-5. Posts a formatted markdown comment on the PR
+1. Resolves the target PR repository, branch, and exact head SHA
+2. Selects exactly one complete `PASS` or `FAIL` manifest compatible with that head, or requires `--session`
+3. Rejects source drift, mixed commits, unsafe paths/symlinks, hash mismatches, incomplete verdicts, and ambiguous screenshot choices
+4. Uploads only the selected manifest artifacts
+5. Posts only after every requested artifact uploads successfully
 
 `repo-contents` uses the official GitHub contents API and stores artifacts on a dedicated branch.
 
 `github-web-attachments` uses GitHub's internal web attachment upload endpoint and may reject browser-based `gh auth login` OAuth sessions.
+
+---
+
+## `proofshot session`
+
+Inspect durable recovery records and retry exact cleanup after an interrupted run.
+
+```sh
+proofshot session list
+proofshot session clean --session <session-id>
+```
+
+`clean` validates persisted process/session identities. Identity mismatches remain in recovery state and never widen cleanup to a port, process name, or default tmux socket.
 
 ---
 

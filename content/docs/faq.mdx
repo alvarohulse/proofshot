@@ -25,7 +25,7 @@ No. ffmpeg is optional. Without it, ProofShot skips video trimming (you get the 
 The skill file installed by `proofshot install` teaches your agent the three-step workflow, all browser commands, and when to take screenshots. You just prompt naturally — "verify this feature with proofshot" — and the agent handles the rest.
 
 **What are `@eN` references?**
-Stable handles to interactive elements on a page. When your agent runs `agent-browser snapshot -i`, it gets a list like `@e1: button "Submit"`, `@e2: input "Email"`. These references persist across commands within a session, so the agent can target elements reliably without CSS selectors.
+Stable handles to interactive elements on a page. When your agent runs `proofshot exec snapshot -i`, it gets a list like `@e1: button "Submit"`, `@e2: input "Email"`. These references persist across commands within a session, so the agent can target elements reliably without CSS selectors.
 
 **Can I run multiple sessions at the same time?**
 Yes. Session state (`.session.json`) lives in each project's configured/default output directory, not globally. Different projects can run concurrently. A one-run `--output` override moves evidence without changing where that project finds active control state.

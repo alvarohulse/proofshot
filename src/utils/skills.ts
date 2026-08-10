@@ -67,6 +67,7 @@ proofshot exec snapshot -i                                    # See interactive 
 proofshot exec open http://localhost:PORT/page                # Navigate to a page
 proofshot exec click @e3                                      # Click a button
 proofshot exec fill @e2 "test@example.com"                    # Fill a form field
+proofshot exec assert-visible "#expected-result"              # Record an expected selector
 proofshot exec screenshot step-NAME.png                       # Capture key moments
 \`\`\`
 
@@ -79,17 +80,18 @@ Verify what you expect to see by reading the snapshot output.
 proofshot stop
 \`\`\`
 
-This stops recording, collects console + server errors, and generates
-a SUMMARY.md with video, screenshots, and error report.
+This stops recording, collects canonical browser + environment evidence, and generates
+a SUMMARY.md, viewer, structured verdict, and provenance manifest.
 
 ### Step 4 (optional): Post proof to the PR
 
 \`\`\`bash
 proofshot pr              # Auto-detect PR from current branch
 proofshot pr 42           # Target a specific PR number
+proofshot pr 42 --session SESSION_ID --screenshot step-NAME.png
 \`\`\`
 
-This uploads screenshots and video to GitHub and posts a formatted comment on the PR with inline media. Requires \`gh\` CLI to be authenticated.
+This selects one finalized session compatible with the PR head, validates artifact hashes, uploads the selected screenshots/video, and posts only after every upload succeeds. Requires \`gh\` CLI to be authenticated.
 Default upload mode uses the official GitHub contents API on a \`proofshot-artifacts\` branch. For GitHub-hosted attachment URLs, use \`proofshot pr --upload-provider github-web-attachments\`.
 
 ## Tips
@@ -120,6 +122,7 @@ Key proofshot exec commands:
 - \`proofshot exec snapshot -i\` — see interactive elements
 - \`proofshot exec click @e3\` — click an element
 - \`proofshot exec fill @e2 "text"\` — fill a form field
+- \`proofshot exec assert-visible "#selector"\` — record an expected selector
 - \`proofshot exec screenshot step.png\` — capture a moment
 `;
   }
@@ -140,6 +143,7 @@ Key proofshot exec commands:
 - \`proofshot exec snapshot -i\` — see interactive elements
 - \`proofshot exec click @e3\` — click an element
 - \`proofshot exec fill @e2 "text"\` — fill a form field
+- \`proofshot exec assert-visible "#selector"\` — record an expected selector
 - \`proofshot exec screenshot step.png\` — capture a moment
 
 Artifacts saved to ./proofshot-artifacts/ including video, screenshots, errors, and summary.

@@ -11,7 +11,7 @@ Each ProofShot session creates a timestamped folder in your output directory (de
 
 | File | Created by | Description |
 |------|------------|-------------|
-| `metadata.json` | `start` | Git branch, commit SHA, timestamp, and session description. Persists after `stop` — used by `proofshot pr` to match sessions to branches. |
+| `metadata.json` | `start` | Repository, branch, commit/tree provenance, initial dirty state, timestamp, and description. |
 | `session.webm` | `start` / `stop` | Video recording of the entire session (Playwright screencast). Trimmed by `stop` if ffmpeg is available. |
 | `session-log.json` | `exec` | Action timeline. Each entry records the command, relative timestamp, and element data (bounding box, label) for `@eN` targets. Appended with each `exec` call. |
 | `server.log` | `start` | Dev server stdout and stderr. Only created when ProofShot starts the server via `--run`. |
@@ -19,50 +19,59 @@ Each ProofShot session creates a timestamped folder in your output directory (de
 | `step-*.png` | `exec screenshot` | Screenshots captured at key moments. Filenames come from the `exec screenshot` argument. |
 | `SUMMARY.md` | `stop` | Markdown report containing: session date, description, video link, screenshots, console error count and details, server error count and details, environment info. |
 | `viewer.html` | `stop` | Self-contained interactive HTML viewer. No external dependencies — open it in any browser. |
+| `evidence.json` | `stop` | Canonical action, browser, and environment evidence with source integrity and grouped incidents. |
+| `verdict.json` | `stop` | Machine-readable `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED` verdict and reasons. |
+| `artifact-manifest.json` | `stop` | Finalized session provenance plus stable, ordered artifact IDs, sizes, and SHA-256 hashes. |
+| `environment.ndjson` | environment capture | Bounded raw evidence events. Per-source logs live under `logs/`. |
 
 ## `metadata.json` format
 
 ```json
 {
+  "repository": "github.com/example/project",
   "branch": "feat/login-page",
-  "commitSha": "a1b2c3d",
+  "commitSha": "a1b2c3d...",
+  "treeHash": "e4f5g6...",
+  "sourceDirty": false,
   "startedAt": "2025-01-15T10:30:00.000Z",
   "description": "Login page verification"
 }
 ```
 
-This file persists after `stop` (unlike `.session.json` which is cleared). It allows `proofshot pr` to find sessions for the current branch even after the session has ended.
+This start-time record is finalized into `artifact-manifest.json`. Publication requires repository/branch/commit compatibility with the target PR head and rejects dirty or drifted source state.
 
 ## `session-log.json` format
 
 ```json
 [
   {
-    "timestamp": 0,
-    "command": "open",
-    "args": ["http://localhost:3000/login"],
-    "type": "navigate"
+    "timestamp": "2026-08-09T00:00:00.000Z",
+    "relativeTimeSec": 0,
+    "action": "open http://localhost:3000/login",
+    "outcome": "passed"
   },
   {
-    "timestamp": 3.2,
-    "command": "fill",
-    "args": ["@e2", "user@example.com"],
-    "type": "fill",
+    "timestamp": "2026-08-09T00:00:03.200Z",
+    "relativeTimeSec": 3.2,
+    "action": "fill @e2 user@example.com",
+    "outcome": "passed",
     "element": {
       "bbox": { "x": 120, "y": 340, "width": 280, "height": 40 },
       "label": "Email address"
     }
   },
   {
-    "timestamp": 5.1,
-    "command": "screenshot",
-    "args": ["step-login.png"],
-    "type": "screenshot"
+    "timestamp": "2026-08-09T00:00:05.100Z",
+    "relativeTimeSec": 5.1,
+    "action": "screenshot step-login.png",
+    "outcome": "passed"
   }
 ]
 ```
 
 Timestamps are relative to session start (in seconds). After video trimming, timestamps are adjusted by the trim offset to stay in sync with the trimmed video.
+
+Non-finite legacy timestamps remain explicit untimed, non-clickable rows. The canonical action timeline remains authoritative when media is shorter; viewer seeks clamp to the available recording.
 
 Element data (`bbox`, `label`) is captured before execution for `click`, `fill`, and `type` actions targeting `@eN` references. This data powers the viewer's click ripple overlays and action labels.
 

@@ -20,10 +20,10 @@ Run a verification session on your stable branch (e.g., `main`) and take screens
 
 ```sh
 proofshot start --run "npm run dev" --port 3000
-agent-browser open http://localhost:3000
-agent-browser screenshot homepage.png
-agent-browser open http://localhost:3000/dashboard
-agent-browser screenshot dashboard.png
+proofshot exec open http://localhost:3000
+proofshot exec screenshot homepage.png
+proofshot exec open http://localhost:3000/dashboard
+proofshot exec screenshot dashboard.png
 proofshot stop
 ```
 

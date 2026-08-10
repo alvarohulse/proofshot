@@ -78,11 +78,12 @@ Three-step workflow: **start**, **test**, **stop**.
 proofshot start --run "npm run dev" --port 3000 --description "Login form verification"
 
 # 2. Test — the AI agent drives the browser
-agent-browser snapshot -i                                    # See interactive elements
-agent-browser open http://localhost:3000/login               # Navigate
-agent-browser fill @e2 "test@example.com"                    # Fill form
-agent-browser click @e5                                      # Click submit
-agent-browser screenshot ./proofshot-artifacts/step-login.png # Capture proof
+proofshot exec snapshot -i                          # See interactive elements
+proofshot exec open http://localhost:3000/login     # Navigate
+proofshot exec fill @e2 "test@example.com"          # Fill form
+proofshot exec click @e5                            # Click submit
+proofshot exec assert-visible "#account-home"       # Record an expected selector
+proofshot exec screenshot step-login.png            # Capture proof
 
 # 3. Stop — bundle video + screenshots + errors into proof artifacts
 proofshot stop
@@ -97,12 +98,15 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 | File | Description |
 |------|-------------|
 | `session.webm` | Video recording of the entire session |
-| `viewer.html` | Standalone interactive viewer with scrub bar, timeline, and Console/Server log tabs |
+| `viewer.html` | Standalone interactive viewer with scrub bar, canonical timeline, and grouped Environment/Browser source tabs |
 | `SUMMARY.md` | Markdown report with errors, screenshots, and video |
 | `step-*.png` | Screenshots captured at key moments |
 | `session-log.json` | Action timeline with timestamps and element data |
 | `server.log` | Dev server stdout/stderr (when using `--run`) |
 | `console-output.log` | Browser console output |
+| `evidence.json` | Canonical browser/environment events, incidents, source integrity, and media timing |
+| `verdict.json` | Structured `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED` verdict |
+| `artifact-manifest.json` | Finalized repository/commit provenance and ordered artifact hashes |
 
 <p align="center">
   <img src="brand-assets/screenshots/artifacts-folder.png" alt="ProofShot artifacts folder" width="480" />
@@ -110,7 +114,7 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
   <em>Generated artifacts for a single verification session</em>
 </p>
 
-The viewer also includes tabs for browsing console and server logs, with error highlighting and timestamps synced to the video:
+The viewer includes grouped Environment and Browser evidence tabs, with incident highlighting and timed live rows synchronized to the video:
 
 <p align="center">
   <img src="brand-assets/screenshots/viewer-console.png" alt="ProofShot Viewer — console logs tab" width="100%" />
@@ -182,8 +186,11 @@ When a ProofShot session is active, `proofshot exec` reuses the same isolated `a
 
 ```bash
 proofshot exec click @e3
+proofshot exec assert-visible "#checkout-complete"
 proofshot exec screenshot step-checkout.png
 ```
+
+Failed `assert-visible` checks are recorded in `session-log.json` and contribute to the structured verdict.
 
 ### `proofshot diff`
 
@@ -195,20 +202,33 @@ proofshot diff --baseline ./previous-artifacts
 
 ### `proofshot pr`
 
-Upload session artifacts to GitHub and post a verification comment on the PR. Finds all sessions recorded on the current branch, uploads screenshots and video, and posts a formatted comment with embedded screenshots.
+Upload one finalized, provenance-compatible session to GitHub and post a verification comment. ProofShot validates the target PR head, source state, artifact paths, and hashes before upload; it never combines historical sessions.
 
 ```bash
 proofshot pr              # Auto-detect PR from current branch
 proofshot pr 42           # Target a specific PR
+proofshot pr --session proofshot-2026-08-09_19-00-00
+proofshot pr --session proofshot-2026-08-09_19-00-00 --screenshot checkout.png receipt.png
 proofshot pr --dry-run    # Preview the markdown without posting
 proofshot pr --upload-provider github-web-attachments  # Use GitHub's internal attachment flow
 ```
 
 By default, ProofShot uses the official GitHub repository contents API and uploads artifacts to a dedicated `proofshot-artifacts` branch. This works with normal `gh` authentication and `GH_TOKEN`.
 
+Auto-selection succeeds only when exactly one complete `PASS` or `FAIL` session matches the PR head. Use `--session` when several choices exist. Pre-manifest sessions require both `--session` and `--legacy-session`; that opt-in cannot bypass a present or invalid finalized manifest. A partial upload never posts a PR comment.
+
 The `github-web-attachments` provider is still available for inline GitHub-hosted media, but it relies on GitHub's internal web upload endpoint and may reject browser-based `gh auth login` OAuth sessions.
 
-Converts `.webm` video to `.mp4` if `ffmpeg` is available.
+### `proofshot session`
+
+Inspect and clean durable recovery records after an interrupted or incomplete cleanup:
+
+```bash
+proofshot session list
+proofshot session clean --session <session-id>
+```
+
+Cleanup validates persisted process identities and never widens to a name-, port-, or default-socket kill.
 
 ### `proofshot clean`
 
