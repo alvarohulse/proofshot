@@ -106,3 +106,27 @@ export async function waitForAgentBrowserProcessIdentity(
 
   return captureAgentBrowserProcessIdentity(socketDir, sessionName);
 }
+
+/** Remove only the socket and PID sidecars for one verified stopped session. */
+export function clearAgentBrowserSessionFiles(
+  socketDir: string,
+  sessionName: string,
+): void {
+  if (!/^[a-zA-Z0-9_-]+$/.test(sessionName)) {
+    throw new Error(`Unsafe agent-browser session name: ${sessionName}`);
+  }
+  assertOwnedDirectory(socketDir);
+  const uid = process.getuid?.();
+  for (const suffix of ['.pid', '.sock']) {
+    const filePath = path.join(socketDir, `${sessionName}${suffix}`);
+    try {
+      const stat = fs.lstatSync(filePath);
+      if (uid !== undefined && stat.uid !== uid) {
+        throw new Error(`Agent-browser sidecar is owned by uid ${stat.uid}: ${filePath}`);
+      }
+      fs.unlinkSync(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+}

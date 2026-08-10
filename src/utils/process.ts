@@ -22,6 +22,8 @@ export interface ProcessIdentity {
   processGroupId: number;
   sessionId: number;
   startTime: string;
+  /** Stable boot token preventing cross-boot PID/start-time collisions. */
+  bootId?: string;
 }
 
 export interface TerminateProcessTreeOptions {
@@ -120,7 +122,10 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
 
   if (process.platform === 'linux') {
     try {
-      return parseLinuxProcStat(fs.readFileSync(`/proc/${pid}/stat`, 'utf-8'));
+      const identity = parseLinuxProcStat(fs.readFileSync(`/proc/${pid}/stat`, 'utf-8'));
+      const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim();
+      if (!identity || !bootId) return null;
+      return { ...identity, bootId };
     } catch {
       return null;
     }
@@ -134,7 +139,14 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
         ['-o', 'pgid=', '-o', sessionField, '-o', 'lstart=', '-p', String(pid)],
         { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
       );
-      return parseUnixProcessIdentity(pid, output);
+      const identity = parseUnixProcessIdentity(pid, output);
+      if (!identity) return null;
+      if (process.platform !== 'darwin') return identity;
+      const bootId = execFileSync('sysctl', ['-n', 'kern.boottime'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim();
+      return bootId ? { ...identity, bootId } : null;
     } catch {
       return null;
     }
@@ -160,15 +172,19 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
 
 export function processIdentityMatches(identity: ProcessIdentity): boolean {
   const current = captureProcessIdentity(identity.pid);
-  return Boolean(current && identitiesMatch(current, identity));
+  return Boolean(current && processIdentitiesMatch(current, identity));
 }
 
-function identitiesMatch(left: ProcessIdentity, right: ProcessIdentity): boolean {
+export function processIdentitiesMatch(
+  left: ProcessIdentity,
+  right: ProcessIdentity,
+): boolean {
   return (
     left.pid === right.pid &&
     left.processGroupId === right.processGroupId &&
     left.sessionId === right.sessionId &&
-    left.startTime === right.startTime
+    left.startTime === right.startTime &&
+    left.bootId === right.bootId
   );
 }
 
@@ -233,7 +249,7 @@ export function ownedProcessTreeIsAlive(identity: ProcessIdentity): boolean {
   if (process.platform === 'win32') return processIdentityMatches(identity);
 
   const current = captureProcessIdentity(identity.pid);
-  if (current && !identitiesMatch(current, identity)) return false;
+  if (current && !processIdentitiesMatch(current, identity)) return false;
 
   if (process.platform === 'darwin') {
     return processGroupIsAlive(identity.processGroupId);
@@ -245,7 +261,7 @@ function signalOwnedTree(identity: ProcessIdentity, signal: NodeJS.Signals): boo
   if (process.platform === 'win32') return false;
 
   const current = captureProcessIdentity(identity.pid);
-  if (current && !identitiesMatch(current, identity)) return false;
+  if (current && !processIdentitiesMatch(current, identity)) return false;
 
   if (!isDetachedProcessIdentity(identity)) return false;
   if (process.platform === 'darwin') {

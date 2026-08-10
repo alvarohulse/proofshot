@@ -22,6 +22,8 @@ interface ProcessIdentity {
     processGroupId: number;
     sessionId: number;
     startTime: string;
+    /** Stable boot token preventing cross-boot PID/start-time collisions. */
+    bootId?: string;
 }
 
 interface ServerStartResult {
@@ -259,6 +261,7 @@ interface SessionState {
     startedAt: string;
     recordingStartedAt?: string;
     startDirectory?: string;
+    controlDir?: string;
     lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
     cleanupError?: string | null;
     description: string | null;

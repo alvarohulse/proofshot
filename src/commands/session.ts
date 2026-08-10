@@ -1,12 +1,19 @@
 import chalk from 'chalk';
 import { cleanupFailedStart } from '../session/lifecycle.js';
+import { setAgentBrowserDefaults } from '../utils/exec.js';
 import {
   getRegisteredSession,
   listRegisteredSessions,
   registerSession,
   unregisterSession,
 } from '../session/registry.js';
-import { clearSession, saveSession, type SessionState } from '../session/state.js';
+import {
+  clearSession,
+  hasActiveSession,
+  loadSession,
+  saveSession,
+  type SessionState,
+} from '../session/state.js';
 import { ownedProcessTreeIsAlive } from '../utils/process.js';
 
 type SessionStatus = 'active' | 'starting' | 'recovery' | 'stale';
@@ -62,16 +69,20 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
 
   let failures = 0;
   for (const session of sessions) {
+    setAgentBrowserDefaults({
+      configPath: session.agentBrowserConfigPath,
+      socketDir: session.agentBrowserSocketDir,
+    });
     try {
       await cleanupFailedStart(session);
-      clearSession(session.outputDir);
+      clearMatchingControlState(session);
       unregisterSession(session.sessionName);
       console.log(`${chalk.green('✓')} Cleaned ${session.sessionName}`);
     } catch (error) {
       failures += 1;
       session.lifecycleStatus = 'recovery';
       session.cleanupError = error instanceof Error ? error.message : String(error);
-      saveSession(session, session.outputDir);
+      persistMatchingControlState(session);
       registerSession(session);
       console.error(`${chalk.red('✗')} Kept ${session.sessionName}: ${session.cleanupError}`);
     }
@@ -79,6 +90,33 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
 
   if (failures > 0) {
     process.exitCode = 1;
+  }
+}
+
+function clearMatchingControlState(session: SessionState): void {
+  const controlDir = session.controlDir ?? session.outputDir;
+  const activeSession = loadControlSessionSafely(controlDir);
+  if (activeSession?.sessionName === session.sessionName) {
+    clearSession(controlDir);
+  }
+}
+
+function persistMatchingControlState(session: SessionState): void {
+  const controlDir = session.controlDir ?? session.outputDir;
+  const activeSession = loadControlSessionSafely(controlDir);
+  if (
+    !hasActiveSession(controlDir) ||
+    activeSession?.sessionName === session.sessionName
+  ) {
+    saveSession(session, controlDir);
+  }
+}
+
+function loadControlSessionSafely(controlDir: string): SessionState | null {
+  try {
+    return loadSession(controlDir);
+  } catch {
+    return null;
   }
 }
 

@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  clearAgentBrowserSessionFiles,
   prepareAgentBrowserSocketDir,
   UNIX_SOCKET_PATH_MAX_BYTES,
 } from './runtime.js';
@@ -53,5 +54,26 @@ describe('prepareAgentBrowserSocketDir', () => {
         accountHome,
       ),
     ).toThrow(/max 103/);
+  });
+
+  it('removes only one stopped session socket and PID sidecars', () => {
+    const accountHome = createAccountHome();
+    const socketDir = prepareAgentBrowserSocketDir(
+      'ps-audit-123456789abc',
+      { AGENT_BROWSER_SOCKET_DIR: path.join(accountHome, 'sockets') },
+      accountHome,
+    );
+    const sessionName = 'ps-audit-123456789abc';
+    const otherPath = path.join(socketDir, 'ps-other.pid');
+    for (const suffix of ['.pid', '.sock']) {
+      fs.writeFileSync(path.join(socketDir, `${sessionName}${suffix}`), 'owned');
+    }
+    fs.writeFileSync(otherPath, 'other');
+
+    clearAgentBrowserSessionFiles(socketDir, sessionName);
+
+    expect(fs.existsSync(path.join(socketDir, `${sessionName}.pid`))).toBe(false);
+    expect(fs.existsSync(path.join(socketDir, `${sessionName}.sock`))).toBe(false);
+    expect(fs.existsSync(otherPath)).toBe(true);
   });
 });

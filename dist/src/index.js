@@ -648,7 +648,10 @@ function captureProcessIdentity(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return null;
   if (process.platform === "linux") {
     try {
-      return parseLinuxProcStat(fs4.readFileSync(`/proc/${pid}/stat`, "utf-8"));
+      const identity = parseLinuxProcStat(fs4.readFileSync(`/proc/${pid}/stat`, "utf-8"));
+      const bootId = fs4.readFileSync("/proc/sys/kernel/random/boot_id", "utf-8").trim();
+      if (!identity || !bootId) return null;
+      return { ...identity, bootId };
     } catch {
       return null;
     }
@@ -661,7 +664,14 @@ function captureProcessIdentity(pid) {
         ["-o", "pgid=", "-o", sessionField, "-o", "lstart=", "-p", String(pid)],
         { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }
       );
-      return parseUnixProcessIdentity(pid, output);
+      const identity = parseUnixProcessIdentity(pid, output);
+      if (!identity) return null;
+      if (process.platform !== "darwin") return identity;
+      const bootId = execFileSync("sysctl", ["-n", "kern.boottime"], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "pipe"]
+      }).trim();
+      return bootId ? { ...identity, bootId } : null;
     } catch {
       return null;
     }
@@ -681,10 +691,10 @@ function captureProcessIdentity(pid) {
 }
 function processIdentityMatches(identity) {
   const current = captureProcessIdentity(identity.pid);
-  return Boolean(current && identitiesMatch(current, identity));
+  return Boolean(current && processIdentitiesMatch(current, identity));
 }
-function identitiesMatch(left, right) {
-  return left.pid === right.pid && left.processGroupId === right.processGroupId && left.sessionId === right.sessionId && left.startTime === right.startTime;
+function processIdentitiesMatch(left, right) {
+  return left.pid === right.pid && left.processGroupId === right.processGroupId && left.sessionId === right.sessionId && left.startTime === right.startTime && left.bootId === right.bootId;
 }
 function listProcessGroupsInSession(sessionId) {
   const groups = /* @__PURE__ */ new Set();
@@ -739,7 +749,7 @@ function processGroupIsAlive(processGroupId) {
 function ownedProcessTreeIsAlive(identity) {
   if (process.platform === "win32") return processIdentityMatches(identity);
   const current = captureProcessIdentity(identity.pid);
-  if (current && !identitiesMatch(current, identity)) return false;
+  if (current && !processIdentitiesMatch(current, identity)) return false;
   if (process.platform === "darwin") {
     return processGroupIsAlive(identity.processGroupId);
   }
@@ -748,7 +758,7 @@ function ownedProcessTreeIsAlive(identity) {
 function signalOwnedTree(identity, signal) {
   if (process.platform === "win32") return false;
   const current = captureProcessIdentity(identity.pid);
-  if (current && !identitiesMatch(current, identity)) return false;
+  if (current && !processIdentitiesMatch(current, identity)) return false;
   if (!isDetachedProcessIdentity(identity)) return false;
   if (process.platform === "darwin") {
     if (!processGroupIsAlive(identity.processGroupId)) return false;
@@ -1320,6 +1330,25 @@ async function waitForAgentBrowserProcessIdentity(socketDir, sessionName, timeou
   } while (Date.now() < deadline);
   return captureAgentBrowserProcessIdentity(socketDir, sessionName);
 }
+function clearAgentBrowserSessionFiles(socketDir, sessionName) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(sessionName)) {
+    throw new Error(`Unsafe agent-browser session name: ${sessionName}`);
+  }
+  assertOwnedDirectory(socketDir);
+  const uid = process.getuid?.();
+  for (const suffix of [".pid", ".sock"]) {
+    const filePath = path5.join(socketDir, `${sessionName}${suffix}`);
+    try {
+      const stat = fs7.lstatSync(filePath);
+      if (uid !== void 0 && stat.uid !== uid) {
+        throw new Error(`Agent-browser sidecar is owned by uid ${stat.uid}: ${filePath}`);
+      }
+      fs7.unlinkSync(filePath);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+}
 
 // src/artifacts/bundle.ts
 import * as fs8 from "fs";
@@ -1357,8 +1386,13 @@ function loadSession(controlDir) {
   if (!fs9.existsSync(sessionPath)) return null;
   try {
     return JSON.parse(fs9.readFileSync(sessionPath, "utf-8"));
-  } catch {
-    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `ProofShot session state is corrupt: ${sessionPath}
+${message}
+Use "proofshot session list" to inspect durable recovery records.`
+    );
   }
 }
 function hasActiveSession(controlDir) {
@@ -2517,6 +2551,12 @@ function canAddressOwnedBrowserSession(session) {
 }
 async function stopOwnedBrowser(session) {
   const identity = resolveOwnedBrowserIdentity(session);
+  if (!identity && session.browserLaunchAttempted) {
+    throw new Error(
+      `Could not recover exact browser ownership for ${session.sessionName}; cleanup state was retained.`
+    );
+  }
+  assertIdentityNotReused(identity, "browser");
   if (identity && processIdentityMatches(identity)) {
     closeBrowser(session.sessionName);
   }
@@ -2524,11 +2564,24 @@ async function stopOwnedBrowser(session) {
   if (identity && ownedProcessTreeIsAlive(identity)) {
     throw new Error(`Owned browser process session ${identity.sessionId} did not stop.`);
   }
+  if (session.agentBrowserSocketDir) {
+    clearAgentBrowserSessionFiles(session.agentBrowserSocketDir, session.sessionName);
+  }
 }
 async function stopOwnedServer(session) {
+  assertIdentityNotReused(session.serverProcess, "server");
   await terminateOwnedProcessTree(session.serverProcess);
   if (session.serverProcess && ownedProcessTreeIsAlive(session.serverProcess)) {
     throw new Error(`Owned server process session ${session.serverProcess.sessionId} did not stop.`);
+  }
+}
+function assertIdentityNotReused(identity, label) {
+  if (!identity) return;
+  const current = captureProcessIdentity(identity.pid);
+  if (current && !processIdentitiesMatch(current, identity)) {
+    throw new Error(
+      `Owned ${label} process identity no longer matches PID ${identity.pid}; cleanup state was retained.`
+    );
   }
 }
 async function cleanupFailedStart(session) {
@@ -2930,6 +2983,7 @@ async function startCommand(options) {
   const session = {
     startedAt: (/* @__PURE__ */ new Date()).toISOString(),
     startDirectory: process.cwd(),
+    controlDir,
     lifecycleStatus: "starting",
     cleanupError: null,
     description: options.description || null,
@@ -6911,22 +6965,47 @@ async function sessionCleanCommand(options) {
   }
   let failures = 0;
   for (const session of sessions) {
+    setAgentBrowserDefaults({
+      configPath: session.agentBrowserConfigPath,
+      socketDir: session.agentBrowserSocketDir
+    });
     try {
       await cleanupFailedStart(session);
-      clearSession(session.outputDir);
+      clearMatchingControlState(session);
       unregisterSession(session.sessionName);
       console.log(`${chalk8.green("\u2713")} Cleaned ${session.sessionName}`);
     } catch (error) {
       failures += 1;
       session.lifecycleStatus = "recovery";
       session.cleanupError = error instanceof Error ? error.message : String(error);
-      saveSession(session, session.outputDir);
+      persistMatchingControlState(session);
       registerSession(session);
       console.error(`${chalk8.red("\u2717")} Kept ${session.sessionName}: ${session.cleanupError}`);
     }
   }
   if (failures > 0) {
     process.exitCode = 1;
+  }
+}
+function clearMatchingControlState(session) {
+  const controlDir = session.controlDir ?? session.outputDir;
+  const activeSession = loadControlSessionSafely(controlDir);
+  if (activeSession?.sessionName === session.sessionName) {
+    clearSession(controlDir);
+  }
+}
+function persistMatchingControlState(session) {
+  const controlDir = session.controlDir ?? session.outputDir;
+  const activeSession = loadControlSessionSafely(controlDir);
+  if (!hasActiveSession(controlDir) || activeSession?.sessionName === session.sessionName) {
+    saveSession(session, controlDir);
+  }
+}
+function loadControlSessionSafely(controlDir) {
+  try {
+    return loadSession(controlDir);
+  } catch {
+    return null;
   }
 }
 function selectSessionsToClean(options) {

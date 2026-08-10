@@ -2,22 +2,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   captureAgentBrowserProcessIdentity: vi.fn(),
+  clearAgentBrowserSessionFiles: vi.fn(),
   waitForAgentBrowserProcessIdentity: vi.fn(),
   closeBrowser: vi.fn(),
   stopRecording: vi.fn(),
+  captureProcessIdentity: vi.fn(),
   ownedProcessTreeIsAlive: vi.fn(),
+  processIdentitiesMatch: vi.fn(),
   processIdentityMatches: vi.fn(),
   terminateOwnedProcessTree: vi.fn(),
 }));
 
 vi.mock('../browser/runtime.js', () => ({
   captureAgentBrowserProcessIdentity: mocks.captureAgentBrowserProcessIdentity,
+  clearAgentBrowserSessionFiles: mocks.clearAgentBrowserSessionFiles,
   waitForAgentBrowserProcessIdentity: mocks.waitForAgentBrowserProcessIdentity,
 }));
 vi.mock('../browser/session.js', () => ({ closeBrowser: mocks.closeBrowser }));
 vi.mock('../browser/capture.js', () => ({ stopRecording: mocks.stopRecording }));
 vi.mock('../utils/process.js', () => ({
+  captureProcessIdentity: mocks.captureProcessIdentity,
   ownedProcessTreeIsAlive: mocks.ownedProcessTreeIsAlive,
+  processIdentitiesMatch: mocks.processIdentitiesMatch,
   processIdentityMatches: mocks.processIdentityMatches,
   terminateOwnedProcessTree: mocks.terminateOwnedProcessTree,
 }));
@@ -26,6 +32,7 @@ import {
   canAddressOwnedBrowserSession,
   cleanupFailedStart,
   stopOwnedBrowser,
+  stopOwnedServer,
 } from './lifecycle.js';
 
 const persistedIdentity = {
@@ -47,6 +54,8 @@ function session(browserProcess: typeof persistedIdentity | null = persistedIden
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.processIdentityMatches.mockReturnValue(true);
+  mocks.processIdentitiesMatch.mockReturnValue(true);
+  mocks.captureProcessIdentity.mockReturnValue(null);
   mocks.ownedProcessTreeIsAlive.mockReturnValue(false);
   mocks.terminateOwnedProcessTree.mockResolvedValue(true);
   mocks.waitForAgentBrowserProcessIdentity.mockResolvedValue(null);
@@ -55,16 +64,22 @@ beforeEach(() => {
 describe('owned browser lifecycle', () => {
   it('does not address a recycled session name when the persisted identity mismatches', async () => {
     mocks.processIdentityMatches.mockReturnValue(false);
+    mocks.processIdentitiesMatch.mockReturnValue(false);
+    mocks.captureProcessIdentity.mockReturnValue({
+      ...persistedIdentity,
+      startTime: 'recycled-start',
+    });
     const state = session();
 
     expect(canAddressOwnedBrowserSession(state)).toBe(false);
-    await stopOwnedBrowser(state);
-    await cleanupFailedStart(state);
+    await expect(stopOwnedBrowser(state)).rejects.toThrow(/identity no longer matches/);
+    await expect(cleanupFailedStart(state)).rejects.toThrow(/identity no longer matches/);
 
     expect(mocks.captureAgentBrowserProcessIdentity).not.toHaveBeenCalled();
     expect(mocks.closeBrowser).not.toHaveBeenCalled();
     expect(mocks.stopRecording).not.toHaveBeenCalled();
-    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(persistedIdentity);
+    expect(mocks.terminateOwnedProcessTree).not.toHaveBeenCalledWith(persistedIdentity);
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
   });
 
   it('allows a matching persisted identity and legacy state captured from its PID file', async () => {
@@ -84,6 +99,7 @@ describe('owned browser lifecycle', () => {
     expect(mocks.closeBrowser).toHaveBeenNthCalledWith(2, 'ps-owned-session');
     expect(mocks.terminateOwnedProcessTree).toHaveBeenNthCalledWith(1, persistedIdentity);
     expect(mocks.terminateOwnedProcessTree).toHaveBeenNthCalledWith(2, legacyIdentity);
+    expect(mocks.clearAgentBrowserSessionFiles).toHaveBeenCalledTimes(2);
   });
 
   it('recovers a delayed daemon identity after a timed-out browser launch', async () => {
@@ -109,5 +125,20 @@ describe('owned browser lifecycle', () => {
     await expect(cleanupFailedStart(state)).rejects.toThrow(/cleanup state was retained/);
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledTimes(1);
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
+  });
+
+  it('retains recovery state instead of killing a reused server PID', async () => {
+    const state = {
+      ...session(null),
+      serverProcess: persistedIdentity,
+    };
+    mocks.captureProcessIdentity.mockReturnValue({
+      ...persistedIdentity,
+      startTime: 'recycled-start',
+    });
+    mocks.processIdentitiesMatch.mockReturnValue(false);
+
+    await expect(stopOwnedServer(state)).rejects.toThrow(/identity no longer matches/);
+    expect(mocks.terminateOwnedProcessTree).not.toHaveBeenCalled();
   });
 });

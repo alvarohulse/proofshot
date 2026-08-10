@@ -10,6 +10,7 @@ export interface SessionState {
   startedAt: string;
   recordingStartedAt?: string;
   startDirectory?: string;
+  controlDir?: string;
   lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
   cleanupError?: string | null;
   description: string | null;
@@ -76,8 +77,12 @@ export function loadSession(controlDir: string): SessionState | null {
   if (!fs.existsSync(sessionPath)) return null;
   try {
     return JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-  } catch {
-    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `ProofShot session state is corrupt: ${sessionPath}\n${message}\n` +
+        'Use "proofshot session list" to inspect durable recovery records.',
+    );
   }
 }
 

@@ -116,6 +116,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const session: SessionState = {
     startedAt: new Date().toISOString(),
     startDirectory: process.cwd(),
+    controlDir,
     lifecycleStatus: 'starting',
     cleanupError: null,
     description: options.description || null,

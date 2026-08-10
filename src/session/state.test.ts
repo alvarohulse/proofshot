@@ -1,5 +1,11 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { generateAgentBrowserSessionName } from './state.js';
+import {
+  generateAgentBrowserSessionName,
+  loadSession,
+} from './state.js';
 
 describe('generateAgentBrowserSessionName', () => {
   it('creates a short, deterministic name when a nonce is supplied', () => {
@@ -25,5 +31,15 @@ describe('generateAgentBrowserSessionName', () => {
     ).toMatch(
       /^ps-x{8}-[a-f0-9]{12}$/,
     );
+  });
+
+  it('reports corrupt control state instead of treating it as absence', () => {
+    const controlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-state-test-'));
+    try {
+      fs.writeFileSync(path.join(controlDir, '.session.json'), '{not-json');
+      expect(() => loadSession(controlDir)).toThrow(/session state is corrupt/i);
+    } finally {
+      fs.rmSync(controlDir, { recursive: true, force: true });
+    }
   });
 });

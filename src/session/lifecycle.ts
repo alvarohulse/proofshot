@@ -1,12 +1,15 @@
 import { stopRecording } from '../browser/capture.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import {
+  clearAgentBrowserSessionFiles,
   captureAgentBrowserProcessIdentity,
   waitForAgentBrowserProcessIdentity,
 } from '../browser/runtime.js';
 import { closeBrowser } from '../browser/session.js';
 import {
+  captureProcessIdentity,
   ownedProcessTreeIsAlive,
+  processIdentitiesMatch,
   processIdentityMatches,
   terminateOwnedProcessTree,
   type ProcessIdentity,
@@ -38,6 +41,12 @@ export function canAddressOwnedBrowserSession(session: SessionState): boolean {
 
 export async function stopOwnedBrowser(session: SessionState): Promise<void> {
   const identity = resolveOwnedBrowserIdentity(session);
+  if (!identity && session.browserLaunchAttempted) {
+    throw new Error(
+      `Could not recover exact browser ownership for ${session.sessionName}; cleanup state was retained.`,
+    );
+  }
+  assertIdentityNotReused(identity, 'browser');
 
   // The graceful CLI command is name/socket addressed, so issue it only while
   // the persisted immutable identity still matches. Exact tree termination
@@ -49,12 +58,29 @@ export async function stopOwnedBrowser(session: SessionState): Promise<void> {
   if (identity && ownedProcessTreeIsAlive(identity)) {
     throw new Error(`Owned browser process session ${identity.sessionId} did not stop.`);
   }
+  if (session.agentBrowserSocketDir) {
+    clearAgentBrowserSessionFiles(session.agentBrowserSocketDir, session.sessionName);
+  }
 }
 
 export async function stopOwnedServer(session: SessionState): Promise<void> {
+  assertIdentityNotReused(session.serverProcess, 'server');
   await terminateOwnedProcessTree(session.serverProcess);
   if (session.serverProcess && ownedProcessTreeIsAlive(session.serverProcess)) {
     throw new Error(`Owned server process session ${session.serverProcess.sessionId} did not stop.`);
+  }
+}
+
+function assertIdentityNotReused(
+  identity: ProcessIdentity | null | undefined,
+  label: string,
+): void {
+  if (!identity) return;
+  const current = captureProcessIdentity(identity.pid);
+  if (current && !processIdentitiesMatch(current, identity)) {
+    throw new Error(
+      `Owned ${label} process identity no longer matches PID ${identity.pid}; cleanup state was retained.`,
+    );
   }
 }
 
