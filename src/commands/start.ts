@@ -16,6 +16,7 @@ import {
 } from '../session/state.js';
 import { writeMetadata } from '../session/metadata.js';
 import { releaseActiveSessionEnvironment } from '../session/teardown.js';
+import { formatErrorDetail } from '../utils/errors.js';
 import {
   startOwnedEnvironment,
   stopOwnedEnvironment,
@@ -47,9 +48,13 @@ export async function startCommand(options: StartOptions): Promise<void> {
       if (cleanupError) {
         console.error(
           chalk.red('✗') +
-            ` Refusing to override the active session: ${cleanupError.message}`,
+            ` Refusing to override the active session: ${formatErrorDetail(cleanupError)}`,
         );
-        reportCleanupError(cleanupError);
+        console.error(
+          chalk.dim(
+            '  Recovery state was retained. Resolve the reported resource issue, then run "proofshot stop" again.',
+          ),
+        );
         process.exit(1);
       }
       clearSession(outputDir);
@@ -146,7 +151,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       const cleanupError = await cleanupEnvironmentAfterFailedStart(session);
       console.error(
         chalk.red('✗') +
-          ` Failed to start environment capture: ${formatError(error)}`,
+          ` Failed to start environment capture: ${formatErrorDetail(error)}`,
       );
       reportCleanupError(cleanupError);
       process.exit(1);
@@ -273,17 +278,13 @@ async function cleanupEnvironmentAfterFailedStart(
   }
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function reportCleanupError(error: Error | null): void {
   if (!error) {
     return;
   }
   console.error(
     chalk.yellow('⚠') +
-      ` Recovery state retained because cleanup failed: ${error.message}`,
+      ` Recovery state retained because cleanup failed: ${formatErrorDetail(error)}`,
   );
   console.error(
     chalk.dim(

@@ -84,7 +84,10 @@ describe('stopCommand environment cleanup', () => {
     };
     mocks.loadSession.mockReturnValue(session);
     mocks.stopOwnedEnvironment.mockRejectedValue(
-      new Error('environment process still alive'),
+      new AggregateError(
+        [new Error('Environment process api did not stop.')],
+        'One or more environment processes did not stop.',
+      ),
     );
 
     await expect(stopCommand({})).rejects.toThrow('process.exit:1');
@@ -92,5 +95,11 @@ describe('stopCommand environment cleanup', () => {
     expect(mocks.clearSession).not.toHaveBeenCalled();
     expect(mocks.saveSession).toHaveBeenCalledWith(session);
     expect(session.environment).not.toBeNull();
+    expect(
+      vi
+        .mocked(console.error)
+        .mock.calls.map((call) => call.join(' '))
+        .join('\n'),
+    ).toContain('Environment process api did not stop.');
   });
 });

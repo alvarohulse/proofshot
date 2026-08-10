@@ -3,6 +3,7 @@ import * as path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
 import { loadConfigForTeardown } from '../utils/config.js';
+import { formatErrorDetail } from '../utils/errors.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { closeBrowser, getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
@@ -127,9 +128,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       await stopOwnedEnvironment(session.environment);
     } catch (error) {
       saveSession(session);
-      const message = error instanceof Error ? error.message : String(error);
       console.error(
-        chalk.red('✗') + ` Failed to stop environment capture: ${message}`,
+        chalk.red('✗') +
+          ` Failed to stop environment capture: ${formatErrorDetail(error)}`,
       );
       console.error(
         chalk.dim(

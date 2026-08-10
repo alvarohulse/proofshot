@@ -196,7 +196,15 @@ describe('startCommand', () => {
     };
     mocks.hasActiveSession.mockReturnValue(true);
     mocks.loadSession.mockReturnValue(session);
-    mocks.stopOwnedEnvironment.mockRejectedValue(new Error('tmux server did not stop'));
+    mocks.stopOwnedEnvironment.mockRejectedValue(
+      new AggregateError(
+        [
+          new Error('Log helper for api did not stop.'),
+          new Error('Owned tmux server did not stop.'),
+        ],
+        'One or more tmux cleanup steps failed.',
+      ),
+    );
 
     await expect(startCommand({ force: true })).rejects.toThrow('process.exit:1');
 
@@ -204,6 +212,14 @@ describe('startCommand', () => {
     expect(mocks.clearSession).not.toHaveBeenCalled();
     expect(mocks.saveSession).toHaveBeenCalledWith(session);
     expect(mocks.openBrowser).not.toHaveBeenCalled();
+
+    const output = vi
+      .mocked(console.error)
+      .mock.calls.map((call) => call.join(' '))
+      .join('\n');
+    expect(output).toContain('Log helper for api did not stop.');
+    expect(output).toContain('Owned tmux server did not stop.');
+    expect(output.match(/One or more tmux cleanup steps failed\./g)).toHaveLength(1);
   });
 
   it('stops the recorded environment before clearing a forced session', async () => {

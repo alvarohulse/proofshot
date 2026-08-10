@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
 import { loadConfigForTeardown } from '../utils/config.js';
+import { formatErrorDetail } from '../utils/errors.js';
 import { releaseActiveSessionEnvironment } from '../session/teardown.js';
 
 export async function cleanCommand(): Promise<void> {
@@ -18,7 +19,7 @@ export async function cleanCommand(): Promise<void> {
   if (cleanupError) {
     console.error(
       chalk.red('✗') +
-        ` Refusing to remove ${outputDir}: ${cleanupError.message}`,
+        ` Refusing to remove ${outputDir}: ${formatErrorDetail(cleanupError)}`,
     );
     console.error(
       chalk.dim(
