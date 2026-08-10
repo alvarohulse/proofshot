@@ -23,6 +23,9 @@ export interface SessionLogEntry {
   action: string;
   relativeTimeSec: number;
   timestamp: string;
+  outcome?: 'passed' | 'failed';
+  expectedSelector?: string;
+  error?: string;
   element?: {
     label: string;
     bbox: { x: number; y: number; width: number; height: number };
@@ -81,6 +84,19 @@ export function buildShellCommand(args: string[], sessionName?: string): string 
     return arg;
   });
   return buildAgentBrowserCommand(quotedArgs.join(' '), { session: sessionName });
+}
+
+export function translateProofShotExecArgs(args: string[]): {
+  agentBrowserArgs: string[];
+  expectedSelector?: string;
+} {
+  if (args[0] === 'assert-visible' && args.length > 1) {
+    return {
+      agentBrowserArgs: ['is', 'visible', ...args.slice(1)],
+      expectedSelector: args.slice(1).join(' '),
+    };
+  }
+  return { agentBrowserArgs: args };
 }
 
 /**
@@ -189,6 +205,9 @@ function isRefTargetedAction(args: string[]): boolean {
  */
 export async function execCommand(args: string[]): Promise<void> {
   const action = args.join(' ');
+  const translated = translateProofShotExecArgs(args);
+  let loggedEntry: SessionLogEntry | null = null;
+  let sessionLogPath: string | null = null;
 
   // Load session state
   const config = loadConfig();
@@ -217,9 +236,12 @@ export async function execCommand(args: string[]): Promise<void> {
   }
 
   // Resolve args (screenshot path rewriting)
-  let resolvedArgs = args;
+  let resolvedArgs = translated.agentBrowserArgs;
   if (session) {
-    resolvedArgs = resolveScreenshotPath(args, session.sessionDir);
+    resolvedArgs = resolveScreenshotPath(
+      translated.agentBrowserArgs,
+      session.sessionDir,
+    );
   }
 
   // Capture element data BEFORE execution (element may be gone after click navigation)
@@ -241,6 +263,7 @@ export async function execCommand(args: string[]): Promise<void> {
       action,
       relativeTimeSec,
       timestamp: now.toISOString(),
+      expectedSelector: translated.expectedSelector,
     };
     if (elementData) {
       entry.element = elementData;
@@ -250,6 +273,8 @@ export async function execCommand(args: string[]): Promise<void> {
     const entries = loadSessionLog(session.sessionDir);
     entries.push(entry);
     fs.writeFileSync(logPath, JSON.stringify(entries, null, 2) + '\n');
+    loggedEntry = entry;
+    sessionLogPath = logPath;
   }
 
   // Build shell command with proper quoting
@@ -263,6 +288,16 @@ export async function execCommand(args: string[]): Promise<void> {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: getAgentBrowserEnvironment(),
     });
+    if (
+      translated.expectedSelector &&
+      result.trim().toLowerCase() !== 'true'
+    ) {
+      const assertionError = new Error(
+        `Expected selector to be visible: ${translated.expectedSelector}`,
+      ) as Error & { status: number };
+      assertionError.status = 1;
+      throw assertionError;
+    }
     if (result.trim()) {
       process.stdout.write(result);
       // Ensure trailing newline
@@ -270,12 +305,22 @@ export async function execCommand(args: string[]): Promise<void> {
         process.stdout.write('\n');
       }
     }
+    persistActionOutcome(loggedEntry, sessionLogPath, 'passed');
   } catch (error: any) {
     // Print stderr and exit with the same code
     const stderr = error?.stderr?.toString?.() || '';
     const stdout = error?.stdout?.toString?.() || '';
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
+    if (!stdout && !stderr && error?.message) {
+      process.stderr.write(`${error.message}\n`);
+    }
+    persistActionOutcome(
+      loggedEntry,
+      sessionLogPath,
+      'failed',
+      stderr.trim() || stdout.trim() || error?.message,
+    );
     process.exit(error?.status || 1);
   }
 
@@ -292,5 +337,35 @@ export async function execCommand(args: string[]): Promise<void> {
     } catch {
       // Non-critical — viewport cache stays stale
     }
+  }
+}
+
+function persistActionOutcome(
+  entry: SessionLogEntry | null,
+  logPath: string | null,
+  outcome: 'passed' | 'failed',
+  error?: string,
+): void {
+  if (!entry || !logPath) {
+    return;
+  }
+  entry.outcome = outcome;
+  if (error) {
+    entry.error = error;
+  }
+  const entries = loadSessionLog(path.dirname(logPath));
+  const matchingEntry = [...entries]
+    .reverse()
+    .find(
+      (candidate) =>
+        candidate.timestamp === entry.timestamp &&
+        candidate.action === entry.action,
+    );
+  if (matchingEntry) {
+    matchingEntry.outcome = outcome;
+    if (error) {
+      matchingEntry.error = error;
+    }
+    fs.writeFileSync(logPath, JSON.stringify(entries, null, 2) + '\n');
   }
 }

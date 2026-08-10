@@ -1,6 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { SessionLogEntry } from '../commands/exec.js';
+import type {
+  CanonicalEvidence,
+  EvidenceSourceSummary,
+  Verdict,
+} from './evidence.js';
+import type { EvidenceEvent } from '../environment/types.js';
 
 export interface TimestampedLogEntry {
   text: string;
@@ -20,6 +26,8 @@ interface ViewerData {
   serverLog?: string;
   consoleEntries?: TimestampedLogEntry[];
   serverEntries?: TimestampedLogEntry[];
+  evidence?: CanonicalEvidence;
+  verdict?: Verdict;
   tokenUsage?: {
     inputTokens: number;
     outputTokens: number;
@@ -71,8 +79,12 @@ function buildTimestampedLogLines(entries: TimestampedLogEntry[]): { html: strin
     .map((entry, i) => {
       const num = i + 1;
       const cls = isErrorLine(entry.text) ? 'log-line log-line-error' : 'log-line';
-      const time = formatTime(Math.max(0, entry.relativeTimeSec));
-      return `<span class="${cls}" data-time="${entry.relativeTimeSec}" onclick="seekTo(${entry.relativeTimeSec})"><span class="log-time">${time}</span><span class="log-ln">${num}</span>${escapeHtml(entry.text)}</span>`;
+      const timed = Number.isFinite(entry.relativeTimeSec);
+      const time = formatTime(timed ? Math.max(0, entry.relativeTimeSec) : Number.NaN);
+      const interaction = timed
+        ? ` data-time="${entry.relativeTimeSec}" onclick="seekTo(${entry.relativeTimeSec})"`
+        : '';
+      return `<span class="${cls}"${interaction}><span class="log-time">${time}</span><span class="log-ln">${num}</span>${escapeHtml(entry.text)}</span>`;
     })
     .join('\n');
   return { html, truncated };
@@ -109,9 +121,115 @@ function getActionIcon(action: string): string {
  * Format seconds as m:ss string.
  */
 function formatTime(sec: number): string {
+  if (!Number.isFinite(sec)) {
+    return 'untimed';
+  }
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+type EvidencePanel = {
+  key: string;
+  label: string;
+  summary: EvidenceSourceSummary | null;
+  events: EvidenceEvent[];
+};
+
+function buildEvidencePanels(evidence: CanonicalEvidence): EvidencePanel[] {
+  const panels: EvidencePanel[] = [];
+  for (const origin of ['environment', 'browser'] as const) {
+    const originEvents = evidence.events.filter(
+      (event) => event.origin === origin && !event.presentationHidden,
+    );
+    if (originEvents.length === 0) {
+      continue;
+    }
+    const originLabel = origin === 'environment' ? 'Environment' : 'Browser';
+    panels.push({
+      key: origin,
+      label: originLabel,
+      summary: null,
+      events: orderEvidenceEvents(originEvents),
+    });
+    const sources = evidence.sources
+      .filter((source) => source.origin === origin)
+      .sort(
+        (left, right) =>
+          left.group.localeCompare(right.group) ||
+          left.title.localeCompare(right.title),
+      );
+    for (const source of sources) {
+      panels.push({
+        key: `${origin}-${source.id}`,
+        label:
+          origin === 'environment'
+            ? `${titleCase(source.group)} · ${source.title}`
+            : source.title,
+        summary: source,
+        events: orderEvidenceEvents(
+          originEvents.filter((event) => event.sourceId === source.id),
+        ),
+      });
+    }
+  }
+  return panels;
+}
+
+function orderEvidenceEvents(events: EvidenceEvent[]): EvidenceEvent[] {
+  return [...events].sort((left, right) => {
+    if (left.segment !== right.segment) {
+      return left.segment === 'history' ? -1 : 1;
+    }
+    if (left.relativeTimeSec === null) {
+      return -1;
+    }
+    if (right.relativeTimeSec === null) {
+      return 1;
+    }
+    return left.relativeTimeSec - right.relativeTimeSec;
+  });
+}
+
+function buildEvidenceLogLines(events: EvidenceEvent[]): string {
+  if (events.length === 0) {
+    return '<p class="log-empty">No visible evidence for this source</p>';
+  }
+  return `<pre class="log-pre">${events
+    .slice(0, MAX_LOG_ENTRIES)
+    .map((event, index) => {
+      const timed =
+        event.relativeTimeSec !== null &&
+        Number.isFinite(event.relativeTimeSec);
+      const classes = [
+        'log-line',
+        isErrorLine(event.text) ? 'log-line-error' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      const interaction = timed
+        ? ` data-time="${event.relativeTimeSec}" onclick="seekTo(${event.relativeTimeSec})"`
+        : '';
+      const boundary = event.captureGap
+        ? '<span class="log-boundary">capture gap</span>'
+        : event.segment === 'history'
+          ? '<span class="log-boundary">history</span>'
+          : '';
+      return `<span class="${classes}"${interaction}><span class="log-time">${formatTime(timed ? event.relativeTimeSec! : Number.NaN)}</span><span class="log-ln">${index + 1}</span>${boundary}${escapeHtml(event.text)}</span>`;
+    })
+    .join('\n')}</pre>${
+    events.length > MAX_LOG_ENTRIES
+      ? '<p class="log-truncated">Viewer display truncated. Canonical evidence.json retains the bounded source evidence.</p>'
+      : ''
+  }`;
 }
 
 /**
@@ -137,13 +255,19 @@ function serializeEntries(entries: SessionLogEntry[]): string {
  */
 export function generateViewer(data: ViewerData): string {
   const date = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const timelineDurationSec =
+    data.evidence?.timelineDurationSec ?? data.durationSec;
 
   const stepsHtml = data.entries
     .map((entry, i) => {
       const icon = getActionIcon(entry.action);
       const time = formatTime(entry.relativeTimeSec);
       const action = escapeHtml(entry.action);
-      return `      <div class="step" data-time="${entry.relativeTimeSec}" data-index="${i}" onclick="seekTo(${entry.relativeTimeSec})">
+      const timed = Number.isFinite(entry.relativeTimeSec);
+      const interaction = timed
+        ? ` data-time="${entry.relativeTimeSec}" onclick="seekTo(${entry.relativeTimeSec})"`
+        : '';
+      return `      <div class="step${timed ? '' : ' untimed'}"${interaction} data-index="${i}">
         <span class="step-number">${i + 1}</span>
         <span class="icon">${icon}</span>
         <div class="step-content">
@@ -193,12 +317,14 @@ export function generateViewer(data: ViewerData): string {
 
   // Build marker data for the scrub bar
   const markersJson = JSON.stringify(
-    data.entries.map((entry, i) => ({
-      time: entry.relativeTimeSec,
-      icon: getActionIcon(entry.action),
-      action: entry.action,
-      index: i,
-    })),
+    data.entries
+      .map((entry, i) => ({
+        time: entry.relativeTimeSec,
+        icon: getActionIcon(entry.action),
+        action: entry.action,
+        index: i,
+      }))
+      .filter((marker) => Number.isFinite(marker.time)),
   );
 
   const scrubBarHtml = hasVideo
@@ -207,8 +333,12 @@ export function generateViewer(data: ViewerData): string {
           <div class="scrub-progress" id="scrubProgress"></div>
           <div class="scrub-playhead" id="scrubPlayhead"></div>
           ${data.entries
+            .filter((entry) => Number.isFinite(entry.relativeTimeSec))
             .map((entry, i) => {
-              const pct = data.durationSec > 0 ? (entry.relativeTimeSec / data.durationSec) * 100 : 0;
+              const pct =
+                timelineDurationSec > 0
+                  ? (entry.relativeTimeSec / timelineDurationSec) * 100
+                  : 0;
               const icon = getActionIcon(entry.action);
               return `<div class="scrub-marker" data-index="${i}" data-time="${entry.relativeTimeSec}" style="left:${pct}%"><span class="scrub-marker-icon">${icon}</span></div>`;
             })
@@ -264,6 +394,61 @@ export function generateViewer(data: ViewerData): string {
     data.serverEntries && data.serverEntries.length > 0
       ? data.serverEntries.length
       : (data.serverLog ?? '').split('\n').filter((l) => l.trim()).length;
+  const evidencePanels = data.evidence
+    ? buildEvidencePanels(data.evidence)
+    : [];
+  const evidenceTabsHtml = evidencePanels
+    .map(
+      (panel, index) =>
+        `<button class="panel-tab" data-tab="evidence-${index}" onclick="switchTab('evidence-${index}')">${escapeHtml(panel.label)} &middot; ${panel.events.length}</button>`,
+    )
+    .join('\n        ');
+  const evidenceContentsHtml = evidencePanels
+    .map((panel, index) => {
+      const sourceIds = new Set(panel.events.map((event) => event.sourceId));
+      const incidents =
+        data.evidence?.incidents.filter((incident) =>
+          incident.sourceIds.some((sourceId) => sourceIds.has(sourceId)),
+        ) || [];
+      const summary = panel.summary;
+      const status = summary
+        ? `${summary.hiddenLineCount} hidden · ${summary.truncationCount} truncated · ${summary.captureGapCount} capture gap(s)`
+        : `${incidents.length} grouped incident(s)`;
+      const incidentsHtml =
+        incidents.length > 0
+          ? `<div class="incident-list">${incidents
+              .map(
+                (incident) =>
+                  `<div class="incident ${incident.severity}"><strong>${incident.severity.toUpperCase()} × ${incident.count}</strong> ${escapeHtml(incident.message)}</div>`,
+              )
+              .join('')}</div>`
+          : '';
+      return `<div id="tab-evidence-${index}" class="panel-content" style="display:none">
+        <div class="log-tab-content">
+          <div class="log-tab-status"><span>${escapeHtml(status)}</span></div>
+          ${incidentsHtml}
+          ${buildEvidenceLogLines(panel.events)}
+        </div>
+      </div>`;
+    })
+    .join('\n      ');
+  const environmentTabIndex = evidencePanels.findIndex(
+    (panel) => panel.key === 'environment',
+  );
+  const browserTabIndex = evidencePanels.findIndex(
+    (panel) => panel.key === 'browser',
+  );
+  const canonicalTabs = evidencePanels.length > 0;
+  const verdictStatus = data.verdict?.status || 'INCOMPLETE';
+  const verdictBadgeClass =
+    verdictStatus === 'PASS'
+      ? 'clean'
+      : verdictStatus === 'FAIL'
+        ? 'has-errors'
+        : 'unavailable';
+  const mediaWarningHtml = data.evidence?.mediaTruncated
+    ? `<div class="media-warning">Media ends ${Math.max(0, data.evidence.mediaDivergenceSec || 0).toFixed(1)}s before the canonical action timeline. Timeline events remain authoritative; seeks clamp to available media.</div>`
+    : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -680,6 +865,7 @@ export function generateViewer(data: ViewerData): string {
       background: #161b22;
       z-index: 10;
       gap: 0;
+      overflow-x: auto;
     }
 
     .panel-tab {
@@ -772,6 +958,25 @@ export function generateViewer(data: ViewerData): string {
     .log-line-error { background: rgba(248, 81, 73, 0.1); color: #f85149; }
     .log-line-error .log-ln { color: rgba(248, 81, 73, 0.5); }
     .log-line-error .log-time { color: rgba(248, 81, 73, 0.5); }
+    .log-boundary {
+      display: inline-block;
+      margin-right: 8px;
+      padding: 0 5px;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      color: #8b949e;
+      font-size: 10px;
+    }
+    .incident-list { padding: 8px 16px; border-bottom: 1px solid #21262d; }
+    .incident { padding: 5px 0; font-size: 12px; color: #d29922; }
+    .incident.fatal { color: #f85149; }
+    .media-warning {
+      padding: 8px 16px;
+      border-bottom: 1px solid #9e6a03;
+      background: rgba(187, 128, 9, 0.12);
+      color: #d29922;
+      font-size: 12px;
+    }
 
     .log-empty {
       padding: 32px 16px;
@@ -803,6 +1008,7 @@ export function generateViewer(data: ViewerData): string {
     .step:hover {
       background: #1c2128;
     }
+    .step.untimed { cursor: default; }
 
     .step.active {
       background: #1f2a37;
@@ -952,10 +1158,16 @@ export function generateViewer(data: ViewerData): string {
   <div class="header">
     <h1><svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" style="width:24px;height:24px;vertical-align:middle;margin-right:8px"><path d="M8,24 L8,12 C8,8 12,8 12,8 L24,8" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M40,8 L52,8 C56,8 56,12 56,12 L56,24" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M8,40 L8,52 C8,56 12,56 12,56 L24,56" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M40,56 L52,56 C56,56 56,52 56,52 L56,40" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M20,34 L28,42 L44,22" fill="none" stroke="#22D3EE" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>ProofShot Verification</h1>
     ${descriptionHtml}
-    <p class="meta">${escapeHtml(date)} &middot; ${data.durationSec}s</p>
+    <p class="meta">${escapeHtml(date)} &middot; ${timelineDurationSec}s</p>
     <div class="error-badges">
-      <button class="error-badge ${consoleBadgeClass}" onclick="switchTab('console')"><span class="badge-dot"></span>${consoleBadgeText}</button>
-      <button class="error-badge ${serverBadgeClass}" onclick="switchTab('server')"><span class="badge-dot"></span>${serverBadgeText}</button>
+      <span class="error-badge ${verdictBadgeClass}"><span class="badge-dot"></span>Verdict: ${verdictStatus}</span>
+      ${
+        canonicalTabs
+          ? `${environmentTabIndex >= 0 ? `<button class="error-badge ${serverBadgeClass}" onclick="switchTab('evidence-${environmentTabIndex}')"><span class="badge-dot"></span>Environment</button>` : ''}
+      ${browserTabIndex >= 0 ? `<button class="error-badge ${consoleBadgeClass}" onclick="switchTab('evidence-${browserTabIndex}')"><span class="badge-dot"></span>${consoleBadgeText}</button>` : ''}`
+          : `<button class="error-badge ${consoleBadgeClass}" onclick="switchTab('console')"><span class="badge-dot"></span>${consoleBadgeText}</button>
+      <button class="error-badge ${serverBadgeClass}" onclick="switchTab('server')"><span class="badge-dot"></span>${serverBadgeText}</button>`
+      }
     </div>
     ${tokenUsageHtml}
   </div>
@@ -966,16 +1178,24 @@ export function generateViewer(data: ViewerData): string {
     <div class="timeline-panel">
       <div class="panel-tabs">
         <button class="panel-tab active" data-tab="timeline" onclick="switchTab('timeline')">Timeline &middot; ${data.entries.length}</button>
-        <button class="panel-tab" data-tab="console" onclick="switchTab('console')">Console${consoleLineCount > 0 ? ` &middot; ${consoleLineCount}` : ''}</button>
-        <button class="panel-tab" data-tab="server" onclick="switchTab('server')">Server${serverLineCount > 0 ? ` &middot; ${serverLineCount}` : ''}</button>
+        ${
+          canonicalTabs
+            ? evidenceTabsHtml
+            : `<button class="panel-tab" data-tab="console" onclick="switchTab('console')">Console${consoleLineCount > 0 ? ` &middot; ${consoleLineCount}` : ''}</button>
+        <button class="panel-tab" data-tab="server" onclick="switchTab('server')">Server${serverLineCount > 0 ? ` &middot; ${serverLineCount}` : ''}</button>`
+        }
         <div class="panel-tab-actions" id="tabActionsTimeline">
           <label class="overlay-toggle"><input type="checkbox" id="toggle-overlays" checked><span class="toggle-track"></span> Overlays<span class="tooltip">Show ripple animations and action labels on the video as each step plays.</span></label>
         </div>
       </div>
-      <div id="tabTimeline">
+      <div id="tabTimeline" class="panel-content" data-panel="timeline">
+${mediaWarningHtml}
 ${stepsHtml}
       </div>
-      <div id="tabConsole" style="display:none">
+      ${
+        canonicalTabs
+          ? evidenceContentsHtml
+          : `<div id="tabConsole" class="panel-content" data-panel="console" style="display:none">
         <div class="log-tab-content">
           <div class="log-tab-status">
             <span class="error-badge ${consoleBadgeClass}" style="cursor:default"><span class="badge-dot"></span>${consoleBadgeText}</span>
@@ -983,14 +1203,15 @@ ${stepsHtml}
           ${consoleLogBodyHtml}
         </div>
       </div>
-      <div id="tabServer" style="display:none">
+      <div id="tabServer" class="panel-content" data-panel="server" style="display:none">
         <div class="log-tab-content">
           <div class="log-tab-status">
             <span class="error-badge ${serverBadgeClass}" style="cursor:default"><span class="badge-dot"></span>${serverBadgeText}</span>
           </div>
           ${serverLogBodyHtml}
         </div>
-      </div>
+      </div>`
+      }
     </div>
   </div>
   <script>
@@ -1027,9 +1248,16 @@ ${stepsHtml}
       document.querySelectorAll('.panel-tab').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.tab === tab);
       });
-      document.getElementById('tabTimeline').style.display = tab === 'timeline' ? '' : 'none';
-      document.getElementById('tabConsole').style.display = tab === 'console' ? '' : 'none';
-      document.getElementById('tabServer').style.display = tab === 'server' ? '' : 'none';
+      var targetId = tab === 'timeline'
+        ? 'tabTimeline'
+        : tab === 'console'
+          ? 'tabConsole'
+          : tab === 'server'
+            ? 'tabServer'
+            : 'tab-' + tab;
+      document.querySelectorAll('.panel-content').forEach(function(panel) {
+        panel.style.display = panel.id === targetId ? '' : 'none';
+      });
       var actions = document.getElementById('tabActionsTimeline');
       if (actions) actions.style.display = tab === 'timeline' ? '' : 'none';
     }
@@ -1039,7 +1267,7 @@ ${stepsHtml}
     const timelinePanel = document.querySelector('.timeline-panel');
     const overlay = document.querySelector('.video-overlay');
     const entries = ${entriesJson};
-    let duration = ${data.durationSec};
+    let duration = ${timelineDurationSec};
     const markers = ${markersJson};
 
     // Scrub bar elements
@@ -1258,8 +1486,9 @@ ${stepsHtml}
     }
 
     function seekTo(time) {
-      if (video) {
-        video.currentTime = time;
+      if (video && Number.isFinite(time)) {
+        var mediaEnd = Number.isFinite(video.duration) ? video.duration : time;
+        video.currentTime = Math.max(0, Math.min(time, mediaEnd));
         video.play();
       }
     }
@@ -1303,14 +1532,14 @@ ${stepsHtml}
         if (e.target.closest('.scrub-marker')) return;
         isDragging = true;
         const t = getTimeFromEvent(e);
-        video.currentTime = t;
+        video.currentTime = Math.min(t, video.duration);
         updateScrubBar(t);
       });
 
       document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
         const t = getTimeFromEvent(e);
-        video.currentTime = t;
+        video.currentTime = Math.min(t, video.duration);
         updateScrubBar(t);
       });
 
@@ -1364,9 +1593,10 @@ ${stepsHtml}
       });
 
       // Auto-scroll the active log line in the currently visible tab
-      if (activeTab === 'console' || activeTab === 'server') {
-        var tabId = activeTab === 'console' ? 'tabConsole' : 'tabServer';
-        var tabEl = document.getElementById(tabId);
+      if (activeTab !== 'timeline') {
+        var tabEl = Array.from(document.querySelectorAll('.panel-content')).find(function(panel) {
+          return panel.style.display !== 'none';
+        });
         if (tabEl) {
           var activeLine = tabEl.querySelector('.log-line.active');
           if (activeLine && timelinePanel) {
@@ -1413,11 +1643,10 @@ ${stepsHtml}
         updateActiveMarker(t);
       });
 
-      // Sync scrub bar duration with actual video duration
+      // Preserve the canonical action timeline when media is shorter.
       video.addEventListener('loadedmetadata', () => {
         if (video.duration && isFinite(video.duration)) {
-          duration = video.duration;
-          // Reposition markers to match actual video duration
+          duration = Math.max(duration, video.duration);
           scrubMarkers.forEach(m => {
             const mTime = parseFloat(m.dataset.time);
             m.style.left = (duration > 0 ? (mTime / duration) * 100 : 0) + '%';

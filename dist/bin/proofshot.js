@@ -1361,6 +1361,18 @@ function normalizeLogText(text, stripAnsi = true) {
 function appendEvidenceEvent(filePath, event) {
   fs10.appendFileSync(filePath, JSON.stringify(event) + "\n");
 }
+function loadEvidenceEvents(filePath) {
+  if (!fs10.existsSync(filePath)) {
+    return [];
+  }
+  return fs10.readFileSync(filePath, "utf-8").split("\n").filter(Boolean).map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null;
+    }
+  }).filter((event) => event !== null);
+}
 
 // src/environment/workers.ts
 var COMMON_WORKER_SOURCE = String.raw`
@@ -2914,10 +2926,10 @@ function getTerminationSignal(error) {
 }
 
 // src/commands/stop.ts
-import * as fs19 from "fs";
-import * as path16 from "path";
+import * as fs20 from "fs";
+import * as path17 from "path";
 import { randomUUID as randomUUID3 } from "crypto";
-import { execFileSync as execFileSync3 } from "child_process";
+import { execFileSync as execFileSync4 } from "child_process";
 import chalk3 from "chalk";
 
 // src/artifacts/viewer.ts
@@ -2951,8 +2963,10 @@ function buildTimestampedLogLines(entries) {
   const html = capped.map((entry, i) => {
     const num = i + 1;
     const cls = isErrorLine(entry.text) ? "log-line log-line-error" : "log-line";
-    const time = formatTime(Math.max(0, entry.relativeTimeSec));
-    return `<span class="${cls}" data-time="${entry.relativeTimeSec}" onclick="seekTo(${entry.relativeTimeSec})"><span class="log-time">${time}</span><span class="log-ln">${num}</span>${escapeHtml(entry.text)}</span>`;
+    const timed = Number.isFinite(entry.relativeTimeSec);
+    const time = formatTime(timed ? Math.max(0, entry.relativeTimeSec) : Number.NaN);
+    const interaction = timed ? ` data-time="${entry.relativeTimeSec}" onclick="seekTo(${entry.relativeTimeSec})"` : "";
+    return `<span class="${cls}"${interaction}><span class="log-time">${time}</span><span class="log-ln">${num}</span>${escapeHtml(entry.text)}</span>`;
   }).join("\n");
   return { html, truncated };
 }
@@ -2987,9 +3001,76 @@ function getActionIcon(action) {
   }
 }
 function formatTime(sec) {
+  if (!Number.isFinite(sec)) {
+    return "untimed";
+  }
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+function titleCase(value) {
+  return value.split(/[-_\s]+/).filter(Boolean).map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");
+}
+function buildEvidencePanels(evidence) {
+  const panels = [];
+  for (const origin of ["environment", "browser"]) {
+    const originEvents = evidence.events.filter(
+      (event) => event.origin === origin && !event.presentationHidden
+    );
+    if (originEvents.length === 0) {
+      continue;
+    }
+    const originLabel = origin === "environment" ? "Environment" : "Browser";
+    panels.push({
+      key: origin,
+      label: originLabel,
+      summary: null,
+      events: orderEvidenceEvents(originEvents)
+    });
+    const sources = evidence.sources.filter((source) => source.origin === origin).sort(
+      (left, right) => left.group.localeCompare(right.group) || left.title.localeCompare(right.title)
+    );
+    for (const source of sources) {
+      panels.push({
+        key: `${origin}-${source.id}`,
+        label: origin === "environment" ? `${titleCase(source.group)} \xB7 ${source.title}` : source.title,
+        summary: source,
+        events: orderEvidenceEvents(
+          originEvents.filter((event) => event.sourceId === source.id)
+        )
+      });
+    }
+  }
+  return panels;
+}
+function orderEvidenceEvents(events) {
+  return [...events].sort((left, right) => {
+    if (left.segment !== right.segment) {
+      return left.segment === "history" ? -1 : 1;
+    }
+    if (left.relativeTimeSec === null) {
+      return -1;
+    }
+    if (right.relativeTimeSec === null) {
+      return 1;
+    }
+    return left.relativeTimeSec - right.relativeTimeSec;
+  });
+}
+function buildEvidenceLogLines(events) {
+  if (events.length === 0) {
+    return '<p class="log-empty">No visible evidence for this source</p>';
+  }
+  return `<pre class="log-pre">${events.slice(0, MAX_LOG_ENTRIES).map((event, index) => {
+    const timed = event.relativeTimeSec !== null && Number.isFinite(event.relativeTimeSec);
+    const classes = [
+      "log-line",
+      isErrorLine(event.text) ? "log-line-error" : ""
+    ].filter(Boolean).join(" ");
+    const interaction = timed ? ` data-time="${event.relativeTimeSec}" onclick="seekTo(${event.relativeTimeSec})"` : "";
+    const boundary = event.captureGap ? '<span class="log-boundary">capture gap</span>' : event.segment === "history" ? '<span class="log-boundary">history</span>' : "";
+    return `<span class="${classes}"${interaction}><span class="log-time">${formatTime(timed ? event.relativeTimeSec : Number.NaN)}</span><span class="log-ln">${index + 1}</span>${boundary}${escapeHtml(event.text)}</span>`;
+  }).join("\n")}</pre>${events.length > MAX_LOG_ENTRIES ? '<p class="log-truncated">Viewer display truncated. Canonical evidence.json retains the bounded source evidence.</p>' : ""}`;
 }
 function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -2999,11 +3080,14 @@ function serializeEntries(entries) {
 }
 function generateViewer(data) {
   const date = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").slice(0, 19);
+  const timelineDurationSec = data.evidence?.timelineDurationSec ?? data.durationSec;
   const stepsHtml = data.entries.map((entry, i) => {
     const icon = getActionIcon(entry.action);
     const time = formatTime(entry.relativeTimeSec);
     const action = escapeHtml(entry.action);
-    return `      <div class="step" data-time="${entry.relativeTimeSec}" data-index="${i}" onclick="seekTo(${entry.relativeTimeSec})">
+    const timed = Number.isFinite(entry.relativeTimeSec);
+    const interaction = timed ? ` data-time="${entry.relativeTimeSec}" onclick="seekTo(${entry.relativeTimeSec})"` : "";
+    return `      <div class="step${timed ? "" : " untimed"}"${interaction} data-index="${i}">
         <span class="step-number">${i + 1}</span>
         <span class="icon">${icon}</span>
         <div class="step-content">
@@ -3035,14 +3119,14 @@ function generateViewer(data) {
       icon: getActionIcon(entry.action),
       action: entry.action,
       index: i
-    }))
+    })).filter((marker) => Number.isFinite(marker.time))
   );
   const scrubBarHtml = hasVideo ? `<div class="scrub-bar">
         <div class="scrub-track" id="scrubTrack">
           <div class="scrub-progress" id="scrubProgress"></div>
           <div class="scrub-playhead" id="scrubPlayhead"></div>
-          ${data.entries.map((entry, i) => {
-    const pct = data.durationSec > 0 ? entry.relativeTimeSec / data.durationSec * 100 : 0;
+          ${data.entries.filter((entry) => Number.isFinite(entry.relativeTimeSec)).map((entry, i) => {
+    const pct = timelineDurationSec > 0 ? entry.relativeTimeSec / timelineDurationSec * 100 : 0;
     const icon = getActionIcon(entry.action);
     return `<div class="scrub-marker" data-index="${i}" data-time="${entry.relativeTimeSec}" style="left:${pct}%"><span class="scrub-marker-icon">${icon}</span></div>`;
   }).join("\n          ")}
@@ -3077,6 +3161,38 @@ function generateViewer(data) {
   }
   const consoleLineCount = data.consoleEntries && data.consoleEntries.length > 0 ? data.consoleEntries.length : (data.consoleOutput ?? "").split("\n").filter((l) => l.trim()).length;
   const serverLineCount = data.serverEntries && data.serverEntries.length > 0 ? data.serverEntries.length : (data.serverLog ?? "").split("\n").filter((l) => l.trim()).length;
+  const evidencePanels = data.evidence ? buildEvidencePanels(data.evidence) : [];
+  const evidenceTabsHtml = evidencePanels.map(
+    (panel, index) => `<button class="panel-tab" data-tab="evidence-${index}" onclick="switchTab('evidence-${index}')">${escapeHtml(panel.label)} &middot; ${panel.events.length}</button>`
+  ).join("\n        ");
+  const evidenceContentsHtml = evidencePanels.map((panel, index) => {
+    const sourceIds = new Set(panel.events.map((event) => event.sourceId));
+    const incidents = data.evidence?.incidents.filter(
+      (incident) => incident.sourceIds.some((sourceId) => sourceIds.has(sourceId))
+    ) || [];
+    const summary = panel.summary;
+    const status = summary ? `${summary.hiddenLineCount} hidden \xB7 ${summary.truncationCount} truncated \xB7 ${summary.captureGapCount} capture gap(s)` : `${incidents.length} grouped incident(s)`;
+    const incidentsHtml = incidents.length > 0 ? `<div class="incident-list">${incidents.map(
+      (incident) => `<div class="incident ${incident.severity}"><strong>${incident.severity.toUpperCase()} \xD7 ${incident.count}</strong> ${escapeHtml(incident.message)}</div>`
+    ).join("")}</div>` : "";
+    return `<div id="tab-evidence-${index}" class="panel-content" style="display:none">
+        <div class="log-tab-content">
+          <div class="log-tab-status"><span>${escapeHtml(status)}</span></div>
+          ${incidentsHtml}
+          ${buildEvidenceLogLines(panel.events)}
+        </div>
+      </div>`;
+  }).join("\n      ");
+  const environmentTabIndex = evidencePanels.findIndex(
+    (panel) => panel.key === "environment"
+  );
+  const browserTabIndex = evidencePanels.findIndex(
+    (panel) => panel.key === "browser"
+  );
+  const canonicalTabs = evidencePanels.length > 0;
+  const verdictStatus = data.verdict?.status || "INCOMPLETE";
+  const verdictBadgeClass = verdictStatus === "PASS" ? "clean" : verdictStatus === "FAIL" ? "has-errors" : "unavailable";
+  const mediaWarningHtml = data.evidence?.mediaTruncated ? `<div class="media-warning">Media ends ${Math.max(0, data.evidence.mediaDivergenceSec || 0).toFixed(1)}s before the canonical action timeline. Timeline events remain authoritative; seeks clamp to available media.</div>` : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3492,6 +3608,7 @@ function generateViewer(data) {
       background: #161b22;
       z-index: 10;
       gap: 0;
+      overflow-x: auto;
     }
 
     .panel-tab {
@@ -3584,6 +3701,25 @@ function generateViewer(data) {
     .log-line-error { background: rgba(248, 81, 73, 0.1); color: #f85149; }
     .log-line-error .log-ln { color: rgba(248, 81, 73, 0.5); }
     .log-line-error .log-time { color: rgba(248, 81, 73, 0.5); }
+    .log-boundary {
+      display: inline-block;
+      margin-right: 8px;
+      padding: 0 5px;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      color: #8b949e;
+      font-size: 10px;
+    }
+    .incident-list { padding: 8px 16px; border-bottom: 1px solid #21262d; }
+    .incident { padding: 5px 0; font-size: 12px; color: #d29922; }
+    .incident.fatal { color: #f85149; }
+    .media-warning {
+      padding: 8px 16px;
+      border-bottom: 1px solid #9e6a03;
+      background: rgba(187, 128, 9, 0.12);
+      color: #d29922;
+      font-size: 12px;
+    }
 
     .log-empty {
       padding: 32px 16px;
@@ -3615,6 +3751,7 @@ function generateViewer(data) {
     .step:hover {
       background: #1c2128;
     }
+    .step.untimed { cursor: default; }
 
     .step.active {
       background: #1f2a37;
@@ -3764,10 +3901,12 @@ function generateViewer(data) {
   <div class="header">
     <h1><svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" style="width:24px;height:24px;vertical-align:middle;margin-right:8px"><path d="M8,24 L8,12 C8,8 12,8 12,8 L24,8" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M40,8 L52,8 C56,8 56,12 56,12 L56,24" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M8,40 L8,52 C8,56 12,56 12,56 L24,56" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M40,56 L52,56 C56,56 56,52 56,52 L56,40" fill="none" stroke="#6366F1" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><path d="M20,34 L28,42 L44,22" fill="none" stroke="#22D3EE" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>ProofShot Verification</h1>
     ${descriptionHtml}
-    <p class="meta">${escapeHtml(date)} &middot; ${data.durationSec}s</p>
+    <p class="meta">${escapeHtml(date)} &middot; ${timelineDurationSec}s</p>
     <div class="error-badges">
-      <button class="error-badge ${consoleBadgeClass}" onclick="switchTab('console')"><span class="badge-dot"></span>${consoleBadgeText}</button>
-      <button class="error-badge ${serverBadgeClass}" onclick="switchTab('server')"><span class="badge-dot"></span>${serverBadgeText}</button>
+      <span class="error-badge ${verdictBadgeClass}"><span class="badge-dot"></span>Verdict: ${verdictStatus}</span>
+      ${canonicalTabs ? `${environmentTabIndex >= 0 ? `<button class="error-badge ${serverBadgeClass}" onclick="switchTab('evidence-${environmentTabIndex}')"><span class="badge-dot"></span>Environment</button>` : ""}
+      ${browserTabIndex >= 0 ? `<button class="error-badge ${consoleBadgeClass}" onclick="switchTab('evidence-${browserTabIndex}')"><span class="badge-dot"></span>${consoleBadgeText}</button>` : ""}` : `<button class="error-badge ${consoleBadgeClass}" onclick="switchTab('console')"><span class="badge-dot"></span>${consoleBadgeText}</button>
+      <button class="error-badge ${serverBadgeClass}" onclick="switchTab('server')"><span class="badge-dot"></span>${serverBadgeText}</button>`}
     </div>
     ${tokenUsageHtml}
   </div>
@@ -3778,16 +3917,17 @@ function generateViewer(data) {
     <div class="timeline-panel">
       <div class="panel-tabs">
         <button class="panel-tab active" data-tab="timeline" onclick="switchTab('timeline')">Timeline &middot; ${data.entries.length}</button>
-        <button class="panel-tab" data-tab="console" onclick="switchTab('console')">Console${consoleLineCount > 0 ? ` &middot; ${consoleLineCount}` : ""}</button>
-        <button class="panel-tab" data-tab="server" onclick="switchTab('server')">Server${serverLineCount > 0 ? ` &middot; ${serverLineCount}` : ""}</button>
+        ${canonicalTabs ? evidenceTabsHtml : `<button class="panel-tab" data-tab="console" onclick="switchTab('console')">Console${consoleLineCount > 0 ? ` &middot; ${consoleLineCount}` : ""}</button>
+        <button class="panel-tab" data-tab="server" onclick="switchTab('server')">Server${serverLineCount > 0 ? ` &middot; ${serverLineCount}` : ""}</button>`}
         <div class="panel-tab-actions" id="tabActionsTimeline">
           <label class="overlay-toggle"><input type="checkbox" id="toggle-overlays" checked><span class="toggle-track"></span> Overlays<span class="tooltip">Show ripple animations and action labels on the video as each step plays.</span></label>
         </div>
       </div>
-      <div id="tabTimeline">
+      <div id="tabTimeline" class="panel-content" data-panel="timeline">
+${mediaWarningHtml}
 ${stepsHtml}
       </div>
-      <div id="tabConsole" style="display:none">
+      ${canonicalTabs ? evidenceContentsHtml : `<div id="tabConsole" class="panel-content" data-panel="console" style="display:none">
         <div class="log-tab-content">
           <div class="log-tab-status">
             <span class="error-badge ${consoleBadgeClass}" style="cursor:default"><span class="badge-dot"></span>${consoleBadgeText}</span>
@@ -3795,14 +3935,14 @@ ${stepsHtml}
           ${consoleLogBodyHtml}
         </div>
       </div>
-      <div id="tabServer" style="display:none">
+      <div id="tabServer" class="panel-content" data-panel="server" style="display:none">
         <div class="log-tab-content">
           <div class="log-tab-status">
             <span class="error-badge ${serverBadgeClass}" style="cursor:default"><span class="badge-dot"></span>${serverBadgeText}</span>
           </div>
           ${serverLogBodyHtml}
         </div>
-      </div>
+      </div>`}
     </div>
   </div>
   <script>
@@ -3839,9 +3979,16 @@ ${stepsHtml}
       document.querySelectorAll('.panel-tab').forEach(function(btn) {
         btn.classList.toggle('active', btn.dataset.tab === tab);
       });
-      document.getElementById('tabTimeline').style.display = tab === 'timeline' ? '' : 'none';
-      document.getElementById('tabConsole').style.display = tab === 'console' ? '' : 'none';
-      document.getElementById('tabServer').style.display = tab === 'server' ? '' : 'none';
+      var targetId = tab === 'timeline'
+        ? 'tabTimeline'
+        : tab === 'console'
+          ? 'tabConsole'
+          : tab === 'server'
+            ? 'tabServer'
+            : 'tab-' + tab;
+      document.querySelectorAll('.panel-content').forEach(function(panel) {
+        panel.style.display = panel.id === targetId ? '' : 'none';
+      });
       var actions = document.getElementById('tabActionsTimeline');
       if (actions) actions.style.display = tab === 'timeline' ? '' : 'none';
     }
@@ -3851,7 +3998,7 @@ ${stepsHtml}
     const timelinePanel = document.querySelector('.timeline-panel');
     const overlay = document.querySelector('.video-overlay');
     const entries = ${entriesJson};
-    let duration = ${data.durationSec};
+    let duration = ${timelineDurationSec};
     const markers = ${markersJson};
 
     // Scrub bar elements
@@ -4070,8 +4217,9 @@ ${stepsHtml}
     }
 
     function seekTo(time) {
-      if (video) {
-        video.currentTime = time;
+      if (video && Number.isFinite(time)) {
+        var mediaEnd = Number.isFinite(video.duration) ? video.duration : time;
+        video.currentTime = Math.max(0, Math.min(time, mediaEnd));
         video.play();
       }
     }
@@ -4115,14 +4263,14 @@ ${stepsHtml}
         if (e.target.closest('.scrub-marker')) return;
         isDragging = true;
         const t = getTimeFromEvent(e);
-        video.currentTime = t;
+        video.currentTime = Math.min(t, video.duration);
         updateScrubBar(t);
       });
 
       document.addEventListener('mousemove', (e) => {
         if (!isDragging) return;
         const t = getTimeFromEvent(e);
-        video.currentTime = t;
+        video.currentTime = Math.min(t, video.duration);
         updateScrubBar(t);
       });
 
@@ -4176,9 +4324,10 @@ ${stepsHtml}
       });
 
       // Auto-scroll the active log line in the currently visible tab
-      if (activeTab === 'console' || activeTab === 'server') {
-        var tabId = activeTab === 'console' ? 'tabConsole' : 'tabServer';
-        var tabEl = document.getElementById(tabId);
+      if (activeTab !== 'timeline') {
+        var tabEl = Array.from(document.querySelectorAll('.panel-content')).find(function(panel) {
+          return panel.style.display !== 'none';
+        });
         if (tabEl) {
           var activeLine = tabEl.querySelector('.log-line.active');
           if (activeLine && timelinePanel) {
@@ -4225,11 +4374,10 @@ ${stepsHtml}
         updateActiveMarker(t);
       });
 
-      // Sync scrub bar duration with actual video duration
+      // Preserve the canonical action timeline when media is shorter.
       video.addEventListener('loadedmetadata', () => {
         if (video.duration && isFinite(video.duration)) {
-          duration = video.duration;
-          // Reposition markers to match actual video duration
+          duration = Math.max(duration, video.duration);
           scrubMarkers.forEach(m => {
             const mTime = parseFloat(m.dataset.time);
             m.style.left = (duration > 0 ? (mTime / duration) * 100 : 0) + '%';
@@ -4290,6 +4438,305 @@ function writeViewer(outputDir, data) {
   const viewerPath = path13.join(outputDir, "viewer.html");
   fs16.writeFileSync(viewerPath, html);
   return viewerPath;
+}
+
+// src/artifacts/evidence.ts
+import * as fs17 from "fs";
+import * as path14 from "path";
+import { createHash as createHash2 } from "crypto";
+import { execFileSync as execFileSync3 } from "child_process";
+function writeCanonicalEvidence(options) {
+  const events = collectEvents(options);
+  applyPresentationFilters(events, options.environment?.sources || []);
+  const incidents = buildIncidents(events);
+  const screenshots = inspectScreenshots(options.sessionDir);
+  const mediaDurationSec = probeMediaDuration(options.videoPath);
+  const actionDuration = options.actions.map((entry) => entry.relativeTimeSec).filter(Number.isFinite).reduce((maximum, current) => Math.max(maximum, current), 0);
+  const timelineDurationSec = Math.max(options.durationSec, actionDuration);
+  const mediaDivergenceSec = mediaDurationSec === null ? null : timelineDurationSec - mediaDurationSec;
+  const mediaTruncated = mediaDivergenceSec !== null && mediaDivergenceSec > 1;
+  const sources = buildSourceSummaries(
+    events,
+    incidents
+  );
+  const evidence = {
+    version: 1,
+    sessionId: options.sessionId,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    timelineDurationSec,
+    mediaDurationSec,
+    mediaDivergenceSec,
+    mediaTruncated,
+    actions: options.actions,
+    events,
+    sources,
+    incidents,
+    screenshots
+  };
+  const verdict = buildVerdict(options, evidence);
+  fs17.writeFileSync(
+    path14.join(options.sessionDir, "evidence.json"),
+    JSON.stringify(evidence, null, 2) + "\n"
+  );
+  fs17.writeFileSync(
+    path14.join(options.sessionDir, "verdict.json"),
+    JSON.stringify(verdict, null, 2) + "\n"
+  );
+  return { evidence, verdict };
+}
+function collectEvents(options) {
+  const environmentEvents = options.environment?.evidencePath && fs17.existsSync(options.environment.evidencePath) ? loadEvidenceEvents(options.environment.evidencePath) : [];
+  if (environmentEvents.length === 0) {
+    environmentEvents.push(
+      ...options.serverEntries.map(
+        (entry) => toEvidenceEvent(entry, {
+          origin: "environment",
+          group: "backend",
+          sourceId: "server",
+          sourceTitle: "Server",
+          stream: "stderr"
+        })
+      )
+    );
+  }
+  const navigations = buildNavigations(options.actions);
+  const browserEvents = options.consoleEntries.map((entry) => {
+    const navigation = findNavigation(navigations, entry.relativeTimeSec);
+    return toEvidenceEvent(entry, {
+      origin: "browser",
+      group: "browser",
+      sourceId: navigation.id,
+      sourceTitle: navigation.url,
+      navigationId: navigation.id,
+      pageUrl: navigation.url,
+      stream: "console"
+    });
+  });
+  return [...environmentEvents, ...browserEvents];
+}
+function toEvidenceEvent(entry, source) {
+  return {
+    version: 1,
+    ...source,
+    segment: "live",
+    timestamp: null,
+    relativeTimeSec: Number.isFinite(entry.relativeTimeSec) ? entry.relativeTimeSec : null,
+    text: entry.text
+  };
+}
+function buildNavigations(actions) {
+  const navigations = actions.map((entry) => {
+    const match = entry.action.match(/^(?:open|navigate)\s+(\S+)/i);
+    return match && Number.isFinite(entry.relativeTimeSec) ? { url: match[1], startTimeSec: entry.relativeTimeSec } : null;
+  }).filter(
+    (navigation) => navigation !== null
+  ).map((navigation, index) => ({
+    id: `browser-nav-${index + 1}`,
+    ...navigation
+  }));
+  return navigations.length > 0 ? navigations : [{ id: "browser-nav-1", url: "Browser", startTimeSec: 0 }];
+}
+function findNavigation(navigations, relativeTimeSec) {
+  const timed = Number.isFinite(relativeTimeSec) ? relativeTimeSec : 0;
+  return [...navigations].reverse().find((navigation) => navigation.startTimeSec <= timed) || navigations[0];
+}
+function buildIncidents(events) {
+  const incidents = /* @__PURE__ */ new Map();
+  for (const event of events) {
+    const severity = classifyIncident(event.text);
+    if (!severity) {
+      continue;
+    }
+    const message = normalizeIncident(event.text);
+    const key = `${event.group}\0${severity}\0${message}`;
+    const incident = incidents.get(key) || {
+      severity,
+      group: event.group,
+      message,
+      count: 0,
+      sourceIds: /* @__PURE__ */ new Set(),
+      times: []
+    };
+    incident.count += 1;
+    incident.sourceIds.add(event.sourceId);
+    if (event.relativeTimeSec !== null) {
+      incident.times.push(event.relativeTimeSec);
+    }
+    incidents.set(key, incident);
+  }
+  return [...incidents.values()].map((incident, index) => ({
+    id: `incident-${index + 1}`,
+    severity: incident.severity,
+    group: incident.group,
+    message: incident.message,
+    count: incident.count,
+    sourceIds: [...incident.sourceIds],
+    firstTimeSec: incident.times.length > 0 ? Math.min(...incident.times) : null,
+    lastTimeSec: incident.times.length > 0 ? Math.max(...incident.times) : null
+  }));
+}
+function classifyIncident(text) {
+  if (/\bFATAL\b|\bpanic:|uncaught exception|unhandled rejection/i.test(text)) {
+    return "fatal";
+  }
+  if (/\bError:|ERR[_!]|Exception:|Traceback/i.test(text)) {
+    return "error";
+  }
+  return null;
+}
+function normalizeIncident(text) {
+  return text.replace(/\b\d{4}-\d{2}-\d{2}T[\d:.]+Z\b/g, "<timestamp>").replace(/:\d+:\d+\b/g, ":<line>:<column>").replace(/\s+/g, " ").trim();
+}
+function buildSourceSummaries(events, incidents) {
+  const sourceKeys = /* @__PURE__ */ new Map();
+  for (const event of events) {
+    const existing = sourceKeys.get(event.sourceId) || {
+      title: event.sourceTitle,
+      origin: event.origin,
+      group: event.group,
+      events: []
+    };
+    existing.events.push(event);
+    sourceKeys.set(event.sourceId, existing);
+  }
+  return [...sourceKeys.entries()].map(([id, source]) => {
+    const hiddenLineCount = source.events.filter(
+      (event) => event.presentationHidden
+    ).length;
+    return {
+      id,
+      title: source.title,
+      origin: source.origin,
+      group: source.group,
+      lineCount: source.events.length,
+      hiddenLineCount,
+      truncationCount: source.events.filter((event) => event.truncated).length,
+      captureGapCount: source.events.filter((event) => event.captureGap).length,
+      incidentCount: incidents.filter(
+        (incident) => incident.sourceIds.includes(id)
+      ).length
+    };
+  });
+}
+function applyPresentationFilters(events, configuredSources) {
+  for (const event of events) {
+    const config = configuredSources.find(
+      (candidate) => candidate.id === event.sourceId
+    );
+    if (isHidden(event.text, config)) {
+      event.presentationHidden = true;
+    }
+  }
+}
+function isHidden(text, config) {
+  if (!config) {
+    return false;
+  }
+  if (config.include && config.include.length > 0 && !config.include.some((pattern) => text.includes(pattern))) {
+    return true;
+  }
+  return Boolean(config.exclude?.some((pattern) => text.includes(pattern)));
+}
+function inspectScreenshots(sessionDir) {
+  return fs17.readdirSync(sessionDir).filter((file) => file.endsWith(".png")).sort().map((file) => {
+    const contents = fs17.readFileSync(path14.join(sessionDir, file));
+    const validPng = isValidPng(contents);
+    return {
+      file,
+      sha256: createHash2("sha256").update(contents).digest("hex"),
+      validPng,
+      size: contents.length
+    };
+  });
+}
+function isValidPng(contents) {
+  if (contents.length < 33 || !contents.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || contents.subarray(12, 16).toString("ascii") !== "IHDR") {
+    return false;
+  }
+  return contents.includes(Buffer.from("IEND", "ascii"), contents.length - 16);
+}
+function buildVerdict(options, evidence) {
+  const missingArtifacts = [];
+  if (options.recordingWasActive && !fs17.existsSync(options.videoPath)) {
+    missingArtifacts.push(path14.basename(options.videoPath));
+  }
+  const screenshotFiles = new Set(
+    evidence.screenshots.map((screenshot) => screenshot.file)
+  );
+  for (const action of options.actions) {
+    const match = action.action.match(/^screenshot\s+(.+)$/);
+    if (match && !screenshotFiles.has(path14.basename(match[1]))) {
+      missingArtifacts.push(path14.basename(match[1]));
+    }
+  }
+  for (const screenshot of evidence.screenshots) {
+    if (!screenshot.validPng || screenshot.size === 0) {
+      missingArtifacts.push(screenshot.file);
+    }
+  }
+  const hashes = /* @__PURE__ */ new Map();
+  for (const screenshot of evidence.screenshots) {
+    if (screenshot.sha256 && screenshot.validPng) {
+      const files = hashes.get(screenshot.sha256) || [];
+      files.push(screenshot.file);
+      hashes.set(screenshot.sha256, files);
+    }
+  }
+  const duplicateScreenshotHashes = [...hashes.values()].filter(
+    (files) => files.length > 1
+  );
+  const expectedSelectorFailures = options.actions.filter(
+    (action) => action.expectedSelector && action.outcome === "failed"
+  ).map((action) => action.expectedSelector);
+  const fatalIncidentCount = evidence.incidents.filter(
+    (incident) => incident.severity === "fatal"
+  ).length;
+  const blockingReasons = options.consoleEvidenceAvailable ? [] : ["Browser console evidence was unavailable."];
+  const failureReasons = [
+    ...fatalIncidentCount > 0 ? [`${fatalIncidentCount} fatal incident(s) detected.`] : [],
+    ...expectedSelectorFailures.length > 0 ? [`${expectedSelectorFailures.length} expected selector assertion(s) failed.`] : [],
+    ...duplicateScreenshotHashes.length > 0 ? ["Duplicate key-frame screenshot hashes were detected."] : []
+  ];
+  const incompleteReasons = [
+    ...missingArtifacts.length > 0 ? [`${missingArtifacts.length} required artifact(s) were missing or invalid.`] : [],
+    ...evidence.mediaTruncated ? ["Recorded media ends before the canonical action timeline."] : [],
+    ...evidence.sources.some((source) => source.truncationCount > 0) ? ["One or more evidence sources were truncated."] : []
+  ];
+  const status = blockingReasons.length > 0 ? "BLOCKED" : failureReasons.length > 0 ? "FAIL" : incompleteReasons.length > 0 ? "INCOMPLETE" : "PASS";
+  return {
+    version: 1,
+    status,
+    reasons: [...blockingReasons, ...failureReasons, ...incompleteReasons],
+    fatalIncidentCount,
+    missingArtifacts: [...new Set(missingArtifacts)],
+    duplicateScreenshotHashes,
+    expectedSelectorFailures,
+    mediaTruncated: evidence.mediaTruncated
+  };
+}
+function probeMediaDuration(videoPath) {
+  if (!fs17.existsSync(videoPath)) {
+    return null;
+  }
+  try {
+    const output = execFileSync3(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        videoPath
+      ],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }
+    ).trim();
+    const duration = Number(output);
+    return Number.isFinite(duration) ? duration : null;
+  } catch {
+    return null;
+  }
 }
 
 // src/utils/error-patterns.ts
@@ -4414,15 +4861,15 @@ function extractServerErrors(log) {
 }
 
 // src/commands/exec.ts
-import * as fs17 from "fs";
-import * as path14 from "path";
+import * as fs18 from "fs";
+import * as path15 from "path";
 import { execSync as execSync5 } from "child_process";
 var SESSION_LOG_FILENAME = "session-log.json";
 function loadSessionLog(sessionDir) {
-  const logPath = path14.join(sessionDir, SESSION_LOG_FILENAME);
-  if (!fs17.existsSync(logPath)) return [];
+  const logPath = path15.join(sessionDir, SESSION_LOG_FILENAME);
+  if (!fs18.existsSync(logPath)) return [];
   try {
-    return JSON.parse(fs17.readFileSync(logPath, "utf-8"));
+    return JSON.parse(fs18.readFileSync(logPath, "utf-8"));
   } catch {
     return [];
   }
@@ -4430,8 +4877,8 @@ function loadSessionLog(sessionDir) {
 function resolveScreenshotPath(args, sessionDir) {
   if (args[0] !== "screenshot" || args.length < 2) return args;
   const screenshotPath = args[args.length - 1];
-  if (path14.isAbsolute(screenshotPath)) return args;
-  const resolved = path14.join(sessionDir, screenshotPath);
+  if (path15.isAbsolute(screenshotPath)) return args;
+  const resolved = path15.join(sessionDir, screenshotPath);
   return [...args.slice(0, -1), resolved];
 }
 function buildShellCommand(args, sessionName) {
@@ -4448,6 +4895,15 @@ function buildShellCommand(args, sessionName) {
     return arg;
   });
   return buildAgentBrowserCommand(quotedArgs.join(" "), { session: sessionName });
+}
+function translateProofShotExecArgs(args) {
+  if (args[0] === "assert-visible" && args.length > 1) {
+    return {
+      agentBrowserArgs: ["is", "visible", ...args.slice(1)],
+      expectedSelector: args.slice(1).join(" ")
+    };
+  }
+  return { agentBrowserArgs: args };
 }
 function parseElementRef(args) {
   for (const arg of args) {
@@ -4528,6 +4984,9 @@ function isRefTargetedAction(args) {
 }
 async function execCommand(args) {
   const action = args.join(" ");
+  const translated = translateProofShotExecArgs(args);
+  let loggedEntry = null;
+  let sessionLogPath = null;
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
   const session = loadSession(controlDir);
@@ -4548,9 +5007,12 @@ async function execCommand(args) {
     process.exit(1);
     return;
   }
-  let resolvedArgs = args;
+  let resolvedArgs = translated.agentBrowserArgs;
   if (session) {
-    resolvedArgs = resolveScreenshotPath(args, session.sessionDir);
+    resolvedArgs = resolveScreenshotPath(
+      translated.agentBrowserArgs,
+      session.sessionDir
+    );
   }
   let elementData;
   if (session && isRefTargetedAction(args)) {
@@ -4566,15 +5028,18 @@ async function execCommand(args) {
     const entry = {
       action,
       relativeTimeSec,
-      timestamp: now.toISOString()
+      timestamp: now.toISOString(),
+      expectedSelector: translated.expectedSelector
     };
     if (elementData) {
       entry.element = elementData;
     }
-    const logPath = path14.join(session.sessionDir, SESSION_LOG_FILENAME);
+    const logPath = path15.join(session.sessionDir, SESSION_LOG_FILENAME);
     const entries = loadSessionLog(session.sessionDir);
     entries.push(entry);
-    fs17.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+    fs18.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+    loggedEntry = entry;
+    sessionLogPath = logPath;
   }
   const shellCmd = buildShellCommand(resolvedArgs, session?.sessionName);
   try {
@@ -4584,17 +5049,35 @@ async function execCommand(args) {
       stdio: ["pipe", "pipe", "pipe"],
       env: getAgentBrowserEnvironment()
     });
+    if (translated.expectedSelector && result.trim().toLowerCase() !== "true") {
+      const assertionError = new Error(
+        `Expected selector to be visible: ${translated.expectedSelector}`
+      );
+      assertionError.status = 1;
+      throw assertionError;
+    }
     if (result.trim()) {
       process.stdout.write(result);
       if (!result.endsWith("\n")) {
         process.stdout.write("\n");
       }
     }
+    persistActionOutcome(loggedEntry, sessionLogPath, "passed");
   } catch (error) {
     const stderr = error?.stderr?.toString?.() || "";
     const stdout = error?.stdout?.toString?.() || "";
     if (stdout) process.stdout.write(stdout);
     if (stderr) process.stderr.write(stderr);
+    if (!stdout && !stderr && error?.message) {
+      process.stderr.write(`${error.message}
+`);
+    }
+    persistActionOutcome(
+      loggedEntry,
+      sessionLogPath,
+      "failed",
+      stderr.trim() || stdout.trim() || error?.message
+    );
     process.exit(error?.status || 1);
   }
   if (session && args[0] === "set" && args[1] === "viewport") {
@@ -4610,10 +5093,30 @@ async function execCommand(args) {
     }
   }
 }
+function persistActionOutcome(entry, logPath, outcome, error) {
+  if (!entry || !logPath) {
+    return;
+  }
+  entry.outcome = outcome;
+  if (error) {
+    entry.error = error;
+  }
+  const entries = loadSessionLog(path15.dirname(logPath));
+  const matchingEntry = [...entries].reverse().find(
+    (candidate) => candidate.timestamp === entry.timestamp && candidate.action === entry.action
+  );
+  if (matchingEntry) {
+    matchingEntry.outcome = outcome;
+    if (error) {
+      matchingEntry.error = error;
+    }
+    fs18.writeFileSync(logPath, JSON.stringify(entries, null, 2) + "\n");
+  }
+}
 
 // src/utils/token-usage.ts
-import * as fs18 from "fs";
-import * as path15 from "path";
+import * as fs19 from "fs";
+import * as path16 from "path";
 import * as os5 from "os";
 function estimateTokenUsage(sessionDir, startTimeMs, endTimeMs) {
   const claudeUsage = tryClaudeCodeLogs(startTimeMs, endTimeMs);
@@ -4621,12 +5124,12 @@ function estimateTokenUsage(sessionDir, startTimeMs, endTimeMs) {
   return estimateFromContent(sessionDir);
 }
 function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
-  const claudeDir = path15.join(os5.homedir(), ".claude", "sessions");
-  if (!fs18.existsSync(claudeDir)) return null;
+  const claudeDir = path16.join(os5.homedir(), ".claude", "sessions");
+  if (!fs19.existsSync(claudeDir)) return null;
   try {
-    const files = fs18.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
+    const files = fs19.readdirSync(claudeDir).filter((f) => f.endsWith(".json"));
     for (const file of files) {
-      const data = JSON.parse(fs18.readFileSync(path15.join(claudeDir, file), "utf-8"));
+      const data = JSON.parse(fs19.readFileSync(path16.join(claudeDir, file), "utf-8"));
       const sessionStart = new Date(data.startedAt).getTime();
       if (sessionStart >= startTimeMs - 6e4 && sessionStart <= endTimeMs + 6e4) {
         if (data.totalInputTokens != null || data.totalOutputTokens != null || data.usage) {
@@ -4648,10 +5151,10 @@ function tryClaudeCodeLogs(startTimeMs, endTimeMs) {
   return null;
 }
 function estimateFromContent(sessionDir) {
-  const logPath = path15.join(sessionDir, "session-log.json");
-  if (!fs18.existsSync(logPath)) return null;
+  const logPath = path16.join(sessionDir, "session-log.json");
+  if (!fs19.existsSync(logPath)) return null;
   try {
-    const entries = JSON.parse(fs18.readFileSync(logPath, "utf-8"));
+    const entries = JSON.parse(fs19.readFileSync(logPath, "utf-8"));
     if (!Array.isArray(entries) || entries.length === 0) return null;
     const actionCount = entries.length;
     const inputTokens = actionCount * 500;
@@ -4777,9 +5280,9 @@ async function stopCommand(options) {
   let consoleErrors = "";
   let consoleOutput = "";
   let consoleEntries = [];
-  const consoleErrorsPath = path16.join(session.sessionDir, "console-errors.log");
-  const consoleOutputPath = path16.join(session.sessionDir, "console-output.log");
-  const consoleEntriesPath = path16.join(session.sessionDir, "console-entries.json");
+  const consoleErrorsPath = path17.join(session.sessionDir, "console-errors.log");
+  const consoleOutputPath = path17.join(session.sessionDir, "console-output.log");
+  const consoleEntriesPath = path17.join(session.sessionDir, "console-entries.json");
   if (browserSessionAvailable) {
     try {
       consoleErrors = getConsoleErrors(session.sessionName);
@@ -4802,15 +5305,15 @@ async function stopCommand(options) {
     session.consoleErrorCount = capturedErrorLines.length > 0 && consoleErrors.trim() !== "" ? capturedErrorLines.length : 0;
     persistOwnedSession2(session, controlDir);
   } else if (priorConsoleEvidenceAvailable) {
-    if (fs19.existsSync(consoleErrorsPath)) {
-      consoleErrors = fs19.readFileSync(consoleErrorsPath, "utf-8");
+    if (fs20.existsSync(consoleErrorsPath)) {
+      consoleErrors = fs20.readFileSync(consoleErrorsPath, "utf-8");
     }
-    if (fs19.existsSync(consoleOutputPath)) {
-      consoleOutput = fs19.readFileSync(consoleOutputPath, "utf-8");
+    if (fs20.existsSync(consoleOutputPath)) {
+      consoleOutput = fs20.readFileSync(consoleOutputPath, "utf-8");
     }
-    if (fs19.existsSync(consoleEntriesPath)) {
+    if (fs20.existsSync(consoleEntriesPath)) {
       try {
-        const savedEntries = JSON.parse(fs19.readFileSync(consoleEntriesPath, "utf-8"));
+        const savedEntries = JSON.parse(fs20.readFileSync(consoleEntriesPath, "utf-8"));
         if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
       } catch {
       }
@@ -4831,6 +5334,7 @@ async function stopCommand(options) {
       cleanupError = error;
     }
   }
+  const finalizedEnvironment = session.environment;
   if (session.environment) {
     console.log(chalk3.dim("Stopping environment..."));
     try {
@@ -4857,18 +5361,18 @@ async function stopCommand(options) {
   }
   let serverLog = "";
   let serverEntries = [];
-  if (fs19.existsSync(session.serverErrorLog)) {
-    const rawServerLog = fs19.readFileSync(session.serverErrorLog, "utf-8");
+  if (fs20.existsSync(session.serverErrorLog)) {
+    const rawServerLog = fs20.readFileSync(session.serverErrorLog, "utf-8");
     const parsed = parseTimestampedServerLog(rawServerLog, startTime);
     serverLog = parsed.cleanText;
     serverEntries = parsed.entries;
   }
   const sessionDir = session.sessionDir;
-  const screenshots = fs19.existsSync(sessionDir) ? fs19.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
+  const screenshots = fs20.existsSync(sessionDir) ? fs20.readdirSync(sessionDir).filter((f) => f.endsWith(".png")) : [];
   const sessionLog = loadSessionLog(sessionDir);
   let trimOffsetSec = session.trimOffsetSec ?? 0;
   if (!session.videoTrimComplete) {
-    if (fs19.existsSync(session.videoPath)) {
+    if (fs20.existsSync(session.videoPath)) {
       trimOffsetSec = trimVideo(session.videoPath, screenshots, sessionDir, startTime, sessionLog);
     } else if (recordingWasActive) {
       console.log(
@@ -4891,7 +5395,7 @@ async function stopCommand(options) {
   const serverErrorLines = extractServerErrors(serverLog);
   const serverErrorCount = serverErrorLines.length;
   const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
-  const summaryPath = path16.join(sessionDir, "SUMMARY.md");
+  const summaryPath = path17.join(sessionDir, "SUMMARY.md");
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),
     description: session.description,
@@ -4910,7 +5414,7 @@ async function stopCommand(options) {
     durationSec,
     outputDir: sessionDir
   });
-  if (!retryingStoppedSession || !fs19.existsSync(summaryPath)) {
+  if (!retryingStoppedSession || !fs20.existsSync(summaryPath)) {
     writeTextFileAtomically(summaryPath, summary);
   }
   let viewerEntries = sessionLog;
@@ -4921,7 +5425,7 @@ async function stopCommand(options) {
     }));
   }
   if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
-    const logPath = path16.join(sessionDir, "session-log.json");
+    const logPath = path17.join(sessionDir, "session-log.json");
     writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + "\n");
   }
   if (!session.sessionLogAdjusted) {
@@ -4931,11 +5435,23 @@ async function stopCommand(options) {
   const adjustTime = (e) => trimOffsetSec > 0 ? { ...e, relativeTimeSec: parseFloat((e.relativeTimeSec - trimOffsetSec).toFixed(1)) } : e;
   const viewerConsoleEntries = consoleEntries.map(adjustTime);
   const viewerServerEntries = serverEntries.map(adjustTime);
+  const { evidence, verdict } = writeCanonicalEvidence({
+    sessionId: session.sessionName,
+    sessionDir,
+    durationSec,
+    videoPath: session.videoPath,
+    recordingWasActive,
+    consoleEvidenceAvailable,
+    actions: viewerEntries,
+    consoleEntries: viewerConsoleEntries,
+    serverEntries: viewerServerEntries,
+    environment: finalizedEnvironment
+  });
   const viewerPath = writeViewer(sessionDir, {
     description: session.description,
     serverCommand: session.serverCommand,
     durationSec,
-    videoFilename: fs19.existsSync(session.videoPath) ? path16.basename(session.videoPath) : null,
+    videoFilename: fs20.existsSync(session.videoPath) ? path17.basename(session.videoPath) : null,
     consoleErrorCount,
     consoleEvidenceAvailable,
     serverErrorCount,
@@ -4944,7 +5460,9 @@ async function stopCommand(options) {
     consoleEntries: viewerConsoleEntries.length > 0 ? viewerConsoleEntries : void 0,
     serverEntries: viewerServerEntries.length > 0 ? viewerServerEntries : void 0,
     entries: viewerEntries.length > 0 ? viewerEntries : void 0,
-    tokenUsage
+    tokenUsage,
+    evidence,
+    verdict
   });
   session.bundleComplete = true;
   session.browserRetained = Boolean(options.noClose);
@@ -4957,11 +5475,12 @@ async function stopCommand(options) {
   console.log("");
   console.log(chalk3.green.bold("\u2705 ProofShot verification complete"));
   console.log("");
-  if (fs19.existsSync(session.videoPath)) {
+  if (fs20.existsSync(session.videoPath)) {
     console.log(`\u{1F4F9} Video:         ${chalk3.dim(session.videoPath)} (${durationSec}s)`);
   }
   console.log(`\u{1F4F8} Screenshots:   ${screenshots.length} captured`);
   console.log(`\u{1F4DD} Summary:       ${chalk3.dim(summaryPath)}`);
+  console.log(`\u{1F9FE} Verdict:       ${verdict.status}`);
   if (viewerPath) {
     console.log(`\u{1F3AC} Viewer:        ${chalk3.dim(viewerPath)}`);
   } else {
@@ -5004,10 +5523,10 @@ async function stopCommand(options) {
 function writeTextFileAtomically(filePath, contents) {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID3()}.tmp`;
   try {
-    fs19.writeFileSync(temporaryPath, contents);
-    fs19.renameSync(temporaryPath, filePath);
+    fs20.writeFileSync(temporaryPath, contents);
+    fs20.renameSync(temporaryPath, filePath);
   } finally {
-    if (fs19.existsSync(temporaryPath)) fs19.unlinkSync(temporaryPath);
+    if (fs20.existsSync(temporaryPath)) fs20.unlinkSync(temporaryPath);
   }
 }
 function persistOwnedSession2(session, controlDir) {
@@ -5020,7 +5539,7 @@ function clearOwnedSession2(session, controlDir) {
 }
 function generateProofSummary(data) {
   const date = (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").slice(0, 19);
-  const projectName = path16.basename(data.projectDirectory);
+  const projectName = path17.basename(data.projectDirectory);
   let md = `# ProofShot Verification Report
 
 **Date:** ${date}
@@ -5035,7 +5554,7 @@ ${data.description}
 
 `;
   }
-  const relativeVideo = path16.basename(data.videoPath);
+  const relativeVideo = path17.basename(data.videoPath);
   md += `## Video Recording
 
 Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationSec}s)
@@ -5115,7 +5634,7 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
   } else if (screenshots.length > 0) {
     const timestamps = screenshots.map((f) => {
       try {
-        return fs19.statSync(path16.join(outputDir, f)).birthtimeMs;
+        return fs20.statSync(path17.join(outputDir, f)).birthtimeMs;
       } catch {
         return null;
       }
@@ -5131,18 +5650,18 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
   const trimEndSec = lastActionSec + BUFFER_AFTER;
   if (trimEndSec - trimStartSec < 5) return 0;
   try {
-    execFileSync3("ffmpeg", ["-version"], { stdio: "pipe" });
+    execFileSync4("ffmpeg", ["-version"], { stdio: "pipe" });
   } catch {
     console.log(chalk3.dim("Tip: Install ffmpeg to auto-trim dead time from videos."));
     return 0;
   }
-  const dir = path16.dirname(videoPath);
-  const ext = path16.extname(videoPath);
-  const base = path16.basename(videoPath, ext);
-  const rawPath = path16.join(dir, `${base}-raw${ext}`);
+  const dir = path17.dirname(videoPath);
+  const ext = path17.extname(videoPath);
+  const base = path17.basename(videoPath, ext);
+  const rawPath = path17.join(dir, `${base}-raw${ext}`);
   try {
-    fs19.renameSync(videoPath, rawPath);
-    execFileSync3(
+    fs20.renameSync(videoPath, rawPath);
+    execFileSync4(
       "ffmpeg",
       [
         "-y",
@@ -5161,26 +5680,26 @@ function trimVideo(videoPath, screenshots, outputDir, recordingStartMs, sessionL
       { stdio: "pipe", timeout: 6e4 }
     );
     validateTrimmedVideo(videoPath);
-    fs19.unlinkSync(rawPath);
+    fs20.unlinkSync(rawPath);
     const trimmedDuration = Math.round(trimEndSec - trimStartSec);
     console.log(chalk3.dim(`Trimmed video to ${trimmedDuration}s (removed dead time)`));
     return trimStartSec;
   } catch {
-    if (fs19.existsSync(videoPath)) {
-      fs19.unlinkSync(videoPath);
+    if (fs20.existsSync(videoPath)) {
+      fs20.unlinkSync(videoPath);
     }
-    if (fs19.existsSync(rawPath)) {
-      fs19.renameSync(rawPath, videoPath);
+    if (fs20.existsSync(rawPath)) {
+      fs20.renameSync(rawPath, videoPath);
     }
     console.log(chalk3.dim("Video trimming failed, keeping original"));
     return 0;
   }
 }
 function validateTrimmedVideo(videoPath) {
-  if (!fs19.existsSync(videoPath) || fs19.statSync(videoPath).size === 0) {
+  if (!fs20.existsSync(videoPath) || fs20.statSync(videoPath).size === 0) {
     throw new Error("FFmpeg produced an empty video");
   }
-  execFileSync3(
+  execFileSync4(
     "ffmpeg",
     ["-v", "error", "-i", videoPath, "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-"],
     { stdio: "pipe", timeout: 6e4 }
@@ -5188,39 +5707,39 @@ function validateTrimmedVideo(videoPath) {
 }
 
 // src/commands/diff.ts
-import * as fs20 from "fs";
-import * as path17 from "path";
+import * as fs21 from "fs";
+import * as path18 from "path";
 import chalk4 from "chalk";
 async function diffCommand(options) {
   const config = loadConfig();
-  const currentDir = path17.resolve(config.output);
-  const baselineDir = path17.resolve(options.baseline);
-  if (!fs20.existsSync(baselineDir)) {
+  const currentDir = path18.resolve(config.output);
+  const baselineDir = path18.resolve(options.baseline);
+  if (!fs21.existsSync(baselineDir)) {
     console.error(chalk4.red("\u2717") + ` Baseline directory not found: ${baselineDir}`);
     process.exit(1);
   }
-  if (!fs20.existsSync(currentDir)) {
+  if (!fs21.existsSync(currentDir)) {
     console.error(
       chalk4.red("\u2717") + ` Current artifacts not found: ${currentDir}
 ` + chalk4.dim('Run "proofshot verify" first to generate screenshots.')
     );
     process.exit(1);
   }
-  const baselineFiles = fs20.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
-  const currentFiles = fs20.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const baselineFiles = fs21.readdirSync(baselineDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
+  const currentFiles = fs21.readdirSync(currentDir).filter((f) => f.startsWith("page-") && f.endsWith(".png"));
   if (baselineFiles.length === 0) {
     console.error(chalk4.red("\u2717") + " No baseline screenshots found (looking for page-*.png)");
     process.exit(1);
   }
-  const diffDir = path17.join(currentDir, "diffs");
-  fs20.mkdirSync(diffDir, { recursive: true });
+  const diffDir = path18.join(currentDir, "diffs");
+  fs21.mkdirSync(diffDir, { recursive: true });
   console.log(chalk4.dim("Comparing screenshots...\n"));
   let hasChanges = false;
   for (const file of baselineFiles) {
-    const baselinePath = path17.join(baselineDir, file);
-    const currentPath = path17.join(currentDir, file);
-    const diffPath = path17.join(diffDir, `diff-${file}`);
-    if (!fs20.existsSync(currentPath)) {
+    const baselinePath = path18.join(baselineDir, file);
+    const currentPath = path18.join(currentDir, file);
+    const diffPath = path18.join(diffDir, `diff-${file}`);
+    if (!fs21.existsSync(currentPath)) {
       console.log(chalk4.yellow("\u26A0") + ` ${file}: no matching current screenshot (page removed?)`);
       continue;
     }
@@ -5251,13 +5770,13 @@ async function diffCommand(options) {
 }
 
 // src/commands/clean.ts
-import * as fs21 from "fs";
-import * as path18 from "path";
+import * as fs22 from "fs";
+import * as path19 from "path";
 import chalk5 from "chalk";
 async function cleanCommand() {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
-  const outputDir = path18.resolve(config.output);
+  const outputDir = path19.resolve(config.output);
   if (hasActiveSession(controlDir)) {
     console.error(
       chalk5.red("\u2717") + " Cannot clean while a ProofShot session owns browser or server processes.\n" + chalk5.dim('Run "proofshot stop" first so exact cleanup metadata is preserved.')
@@ -5265,23 +5784,23 @@ async function cleanCommand() {
     process.exit(1);
     return;
   }
-  if (!fs21.existsSync(outputDir)) {
+  if (!fs22.existsSync(outputDir)) {
     console.log(chalk5.dim("Nothing to clean \u2014 no artifacts directory found."));
     return;
   }
-  fs21.rmSync(outputDir, { recursive: true, force: true });
+  fs22.rmSync(outputDir, { recursive: true, force: true });
   console.log(chalk5.green("\u2713") + ` Removed ${chalk5.dim(outputDir)}`);
 }
 
 // src/commands/pr.ts
-import * as fs23 from "fs";
-import * as path20 from "path";
+import * as fs24 from "fs";
+import * as path21 from "path";
 import { execSync as execSync7 } from "child_process";
 import chalk6 from "chalk";
 
 // src/utils/github.ts
-import * as fs22 from "fs";
-import * as path19 from "path";
+import * as fs23 from "fs";
+import * as path20 from "path";
 import { execSync as execSync6 } from "child_process";
 var GITHUB_API_VERSION = "2022-11-28";
 var DEFAULT_ARTIFACTS_BRANCH = "proofshot-artifacts";
@@ -5352,7 +5871,7 @@ function getPRNumber(explicitPR) {
   }
 }
 function getContentType(filePath) {
-  const ext = path19.extname(filePath).toLowerCase();
+  const ext = path20.extname(filePath).toLowerCase();
   switch (ext) {
     case ".png":
       return "image/png";
@@ -5372,8 +5891,8 @@ function getContentType(filePath) {
   }
 }
 async function uploadAsset(filePath, token, repoId) {
-  const fileName = path19.basename(filePath);
-  const fileSize = fs22.statSync(filePath).size;
+  const fileName = path20.basename(filePath);
+  const fileSize = fs23.statSync(filePath).size;
   const contentType = getContentType(filePath);
   const policyResponse = await fetch("https://github.com/upload/policies/assets", {
     method: "POST",
@@ -5407,7 +5926,7 @@ GitHub response: ${body}`
     );
   }
   const policy = await policyResponse.json();
-  const fileBuffer = fs22.readFileSync(filePath);
+  const fileBuffer = fs23.readFileSync(filePath);
   const formData = new FormData();
   for (const [key, value] of Object.entries(policy.form)) {
     formData.append(key, value);
@@ -5439,7 +5958,7 @@ async function uploadAssetsToWebAttachments(options) {
   const { filePaths, token, repo, onProgress } = options;
   for (let i = 0; i < filePaths.length; i += 1) {
     const filePath = filePaths[i];
-    const fileName = path19.basename(filePath);
+    const fileName = path20.basename(filePath);
     onProgress?.(i + 1, filePaths.length, fileName);
     try {
       const asset = await uploadAsset(filePath, token, repo.id);
@@ -5456,13 +5975,13 @@ async function uploadAssetsToRepoContents(options) {
   await ensureArtifactsBranch(options.repo, artifactsBranch, options.token);
   for (let i = 0; i < options.filePaths.length; i += 1) {
     const filePath = options.filePaths[i];
-    const fileName = path19.basename(filePath);
+    const fileName = path20.basename(filePath);
     options.onProgress?.(i + 1, options.filePaths.length, fileName);
     try {
-      const content = fs22.readFileSync(filePath, "base64");
-      const uploadPath = path19.posix.join(
+      const content = fs23.readFileSync(filePath, "base64");
+      const uploadPath = path20.posix.join(
         options.uploadRoot,
-        path19.basename(path19.dirname(filePath)),
+        path20.basename(path20.dirname(filePath)),
         fileName
       );
       await githubApi(
@@ -5630,7 +6149,7 @@ function formatPRComment(data) {
 // src/commands/pr.ts
 async function prCommand(options) {
   const config = loadConfig();
-  const outputDir = path20.resolve(config.output);
+  const outputDir = path21.resolve(config.output);
   const uploadProvider = normalizeUploadProvider(options.uploadProvider);
   const artifactsBranch = options.artifactsBranch || "proofshot-artifacts";
   let branch;
@@ -5668,23 +6187,23 @@ async function prCommand(options) {
       if (!description && metadata.description) description = metadata.description;
       if (metadata.commitSha) latestCommitSha = metadata.commitSha;
     }
-    const files = fs23.readdirSync(sessionDir);
+    const files = fs24.readdirSync(sessionDir);
     for (const f of files) {
       if (f.endsWith(".png")) {
-        screenshotPaths.push(path20.join(sessionDir, f));
+        screenshotPaths.push(path21.join(sessionDir, f));
       }
     }
     if (!videoPath) {
       for (const f of files) {
         if (f === "session.webm" || f === "session.mp4") {
-          videoPath = path20.join(sessionDir, f);
+          videoPath = path21.join(sessionDir, f);
           break;
         }
       }
     }
-    const summaryPath = path20.join(sessionDir, "SUMMARY.md");
-    if (fs23.existsSync(summaryPath)) {
-      const summary = fs23.readFileSync(summaryPath, "utf-8");
+    const summaryPath = path21.join(sessionDir, "SUMMARY.md");
+    if (fs24.existsSync(summaryPath)) {
+      const summary = fs24.readFileSync(summaryPath, "utf-8");
       const errorMatch = summary.match(/(\d+)\s+error/gi);
       if (errorMatch) {
         for (const m of errorMatch) {
@@ -5696,7 +6215,7 @@ async function prCommand(options) {
   }
   if (videoPath && videoPath.endsWith(".webm")) {
     const mp4Path = videoPath.replace(/\.webm$/, ".mp4");
-    if (fs23.existsSync(mp4Path)) {
+    if (fs24.existsSync(mp4Path)) {
       videoPath = mp4Path;
     } else {
       try {
@@ -5724,7 +6243,7 @@ async function prCommand(options) {
       sessionCount: sessionDirs.length,
       screenshots: screenshotMap2,
       video: videoPath ? {
-        url: `https://github.com/user-attachments/assets/<${path20.basename(videoPath)}>`,
+        url: `https://github.com/user-attachments/assets/<${path21.basename(videoPath)}>`,
         renderMode: "embed"
       } : null,
       errorCount,
@@ -5809,15 +6328,15 @@ async function prCommand(options) {
   );
 }
 function screenshotLabel(ssPath) {
-  const sessionDir = path20.basename(path20.dirname(ssPath));
-  const fileName = path20.basename(ssPath);
+  const sessionDir = path21.basename(path21.dirname(ssPath));
+  const fileName = path21.basename(ssPath);
   return `${sessionDir}/${fileName}`;
 }
 function buildUploadRoot(branch, prNumber, commitSha) {
   const sanitizedBranch = branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "branch";
   const sha = commitSha ? commitSha.slice(0, 7) : "unknown-sha";
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-  return path20.posix.join("proofshot", `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
+  return path21.posix.join("proofshot", `pr-${prNumber}`, sanitizedBranch, `${timestamp}-${sha}`);
 }
 function normalizeUploadProvider(provider) {
   if (!provider || provider === "repo-contents" || provider === "github-web-attachments") {

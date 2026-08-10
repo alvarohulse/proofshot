@@ -22,6 +22,7 @@ import {
 import { registerSession, unregisterSession } from '../session/registry.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
+import { writeCanonicalEvidence } from '../artifacts/evidence.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { loadSessionLog, type SessionLogEntry } from './exec.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
@@ -207,6 +208,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     }
   }
 
+  const finalizedEnvironment = session.environment;
   if (session.environment) {
     console.log(chalk.dim('Stopping environment...'));
     try {
@@ -349,6 +351,18 @@ export async function stopCommand(options: StopOptions): Promise<void> {
 
   const viewerConsoleEntries = consoleEntries.map(adjustTime);
   const viewerServerEntries = serverEntries.map(adjustTime);
+  const { evidence, verdict } = writeCanonicalEvidence({
+    sessionId: session.sessionName,
+    sessionDir,
+    durationSec,
+    videoPath: session.videoPath,
+    recordingWasActive,
+    consoleEvidenceAvailable,
+    actions: viewerEntries,
+    consoleEntries: viewerConsoleEntries,
+    serverEntries: viewerServerEntries,
+    environment: finalizedEnvironment,
+  });
 
   const viewerPath = writeViewer(sessionDir, {
     description: session.description,
@@ -364,6 +378,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     serverEntries: viewerServerEntries.length > 0 ? viewerServerEntries : undefined,
     entries: viewerEntries.length > 0 ? viewerEntries : undefined,
     tokenUsage,
+    evidence,
+    verdict,
   });
 
   // Step 8: Retain exact browser ownership only when explicitly requested.
@@ -386,6 +402,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
   console.log(`📸 Screenshots:   ${screenshots.length} captured`);
   console.log(`📝 Summary:       ${chalk.dim(summaryPath)}`);
+  console.log(`🧾 Verdict:       ${verdict.status}`);
   if (viewerPath) {
     console.log(`🎬 Viewer:        ${chalk.dim(viewerPath)}`);
   } else {

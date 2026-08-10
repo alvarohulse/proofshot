@@ -153,11 +153,14 @@ export type EvidenceEvent = {
   group: string;
   sourceId: string;
   sourceTitle: string;
+  navigationId?: string;
+  pageUrl?: string;
   stream: 'pty' | 'stdout' | 'stderr' | 'file' | 'console';
   segment: 'history' | 'live';
   timestamp: string | null;
   relativeTimeSec: number | null;
   text: string;
+  presentationHidden?: boolean;
   truncated?: boolean;
   captureGap?: boolean;
 };

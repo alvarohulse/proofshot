@@ -183,11 +183,14 @@ type EvidenceEvent = {
     group: string;
     sourceId: string;
     sourceTitle: string;
+    navigationId?: string;
+    pageUrl?: string;
     stream: 'pty' | 'stdout' | 'stderr' | 'file' | 'console';
     segment: 'history' | 'live';
     timestamp: string | null;
     relativeTimeSec: number | null;
     text: string;
+    presentationHidden?: boolean;
     truncated?: boolean;
     captureGap?: boolean;
 };
@@ -300,6 +303,9 @@ interface SessionLogEntry {
     action: string;
     relativeTimeSec: number;
     timestamp: string;
+    outcome?: 'passed' | 'failed';
+    expectedSelector?: string;
+    error?: string;
     element?: {
         label: string;
         bbox: {
@@ -314,6 +320,75 @@ interface SessionLogEntry {
         };
     };
 }
+
+type VerdictStatus = 'PASS' | 'FAIL' | 'INCOMPLETE' | 'BLOCKED';
+type EvidenceSourceSummary = {
+    id: string;
+    title: string;
+    origin: EvidenceEvent['origin'];
+    group: string;
+    lineCount: number;
+    hiddenLineCount: number;
+    truncationCount: number;
+    captureGapCount: number;
+    incidentCount: number;
+};
+type EvidenceIncident = {
+    id: string;
+    severity: 'fatal' | 'error';
+    group: string;
+    message: string;
+    count: number;
+    sourceIds: string[];
+    firstTimeSec: number | null;
+    lastTimeSec: number | null;
+};
+type ScreenshotIntegrity = {
+    file: string;
+    sha256: string | null;
+    validPng: boolean;
+    size: number;
+};
+type CanonicalEvidence = {
+    version: 1;
+    sessionId: string;
+    generatedAt: string;
+    timelineDurationSec: number;
+    mediaDurationSec: number | null;
+    mediaDivergenceSec: number | null;
+    mediaTruncated: boolean;
+    actions: SessionLogEntry[];
+    events: EvidenceEvent[];
+    sources: EvidenceSourceSummary[];
+    incidents: EvidenceIncident[];
+    screenshots: ScreenshotIntegrity[];
+};
+type Verdict = {
+    version: 1;
+    status: VerdictStatus;
+    reasons: string[];
+    fatalIncidentCount: number;
+    missingArtifacts: string[];
+    duplicateScreenshotHashes: string[][];
+    expectedSelectorFailures: string[];
+    mediaTruncated: boolean;
+};
+type EvidenceBuildOptions = {
+    sessionId: string;
+    sessionDir: string;
+    durationSec: number;
+    videoPath: string;
+    recordingWasActive: boolean;
+    consoleEvidenceAvailable: boolean;
+    actions: SessionLogEntry[];
+    consoleEntries: TimestampedLogEntry[];
+    serverEntries: TimestampedLogEntry[];
+    environment?: EnvironmentState | null;
+};
+declare function writeCanonicalEvidence(options: EvidenceBuildOptions): {
+    evidence: CanonicalEvidence;
+    verdict: Verdict;
+};
 
 interface TimestampedLogEntry {
     text: string;
@@ -332,6 +407,8 @@ interface ViewerData {
     serverLog?: string;
     consoleEntries?: TimestampedLogEntry[];
     serverEntries?: TimestampedLogEntry[];
+    evidence?: CanonicalEvidence;
+    verdict?: Verdict;
     tokenUsage?: {
         inputTokens: number;
         outputTokens: number;
@@ -396,4 +473,4 @@ declare function formatPRComment(data: PRCommentData): string;
 declare function startOwnedEnvironment(environment: EnvironmentConfig | undefined, logs: LogsConfig, sessionDir: string, sessionName: string, startTimeMs: number, onState: (state: EnvironmentState) => void): Promise<EnvironmentState | null>;
 declare function stopOwnedEnvironment(state: EnvironmentState | null | undefined): Promise<void>;
 
-export { type EnvironmentConfig, type EnvironmentState, type LogSourceConfig, type LogsConfig, type PRCommentData, type ProofShotConfig, ProofShotError, type SessionLogEntry, type SessionMetadata, type SessionState, ab, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadConfig, loadMetadata, loadSession, saveSession, startOwnedEnvironment, stopOwnedEnvironment, waitForPort, writeConfig, writeMetadata, writeViewer };
+export { type CanonicalEvidence, type EnvironmentConfig, type EnvironmentState, type EvidenceIncident, type EvidenceSourceSummary, type LogSourceConfig, type LogsConfig, type PRCommentData, type ProofShotConfig, ProofShotError, type SessionLogEntry, type SessionMetadata, type SessionState, type Verdict, type VerdictStatus, ab, createCLI, ensureDevServer, findSessionsForBranch, formatPRComment, generateViewer, installCommand, isPortOpen, loadConfig, loadMetadata, loadSession, saveSession, startOwnedEnvironment, stopOwnedEnvironment, waitForPort, writeCanonicalEvidence, writeConfig, writeMetadata, writeViewer };

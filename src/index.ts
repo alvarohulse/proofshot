@@ -7,6 +7,14 @@ export { ab, ProofShotError } from './utils/exec.js';
 export { isPortOpen, waitForPort } from './utils/port.js';
 export { saveSession, loadSession, type SessionState } from './session/state.js';
 export { writeViewer, generateViewer } from './artifacts/viewer.js';
+export { writeCanonicalEvidence } from './artifacts/evidence.js';
+export type {
+  CanonicalEvidence,
+  EvidenceIncident,
+  EvidenceSourceSummary,
+  Verdict,
+  VerdictStatus,
+} from './artifacts/evidence.js';
 export type { SessionLogEntry } from './commands/exec.js';
 export { writeMetadata, loadMetadata, findSessionsForBranch, type SessionMetadata } from './session/metadata.js';
 export { formatPRComment, type PRCommentData } from './artifacts/pr-format.js';
