@@ -115,7 +115,7 @@ When `true`, the browser runs without a visible window. Set to `false` (or use `
 - `tmux`: ProofShot owns a dedicated tmux socket/session or connects to an external launcher on the launcher-reported socket.
 - `processes`: ProofShot starts multiple direct commands and preserves separate `stdout` and `stderr` streams.
 
-For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, env }` entries. `launch.kind: "external-command"` runs one launcher and reads either structured JSON or a `tmux -L <socket> attach -t <session>` command from stdout. Set `connection.ownership` to `attach` when the launcher only reports an existing session. Launchers that create resources must provide a stable `connection.socket` hint or `launch.stopCommand`; they also support `launch.timeoutMs`. Structured JSON is preferred:
+For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, env }` entries under `launch.panes`, plus an optional `launch.sessionName`. `launch.kind: "external-command"` runs one launcher and reads the tmux target from its stdout; the required `connection.format` selects the wire format — `"json"` for structured JSON or `"tmux-attach-command"` for a `tmux -L <socket> attach -t <session>` line. Set `connection.ownership` to `attach` when the launcher only reports an existing session. Launchers that create resources must provide a stable `connection.socket` hint or `launch.stopCommand`; they also support `launch.timeoutMs`. Structured JSON is preferred:
 
 ```json
 {
@@ -130,6 +130,8 @@ For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, en
 ```
 
 ProofShot snapshots a hinted tmux socket before launch and owns only server/session identities created by that start. Attach-only launchers are never killed. Shared launchers that create a session must provide `stopCommand`. ProofShot never runs `tmux kill-server` against the default or an unowned socket.
+
+For `processes`, list the commands under `environment.commands` — the same `{ id, title, group, cwd, command, env }` entry shape used by tmux panes. Each `id` must be unique, and `logs.sources` entries of kind `process` reference it via `processId`.
 
 `readiness` accepts HTTP checks (`url`) and TCP checks (`host`, `port`), each with an optional `timeoutMs`.
 
@@ -147,7 +149,7 @@ Pane titles resolve in this order: launcher mapping title, non-empty tmux pane t
 
 Tmux panes are one PTY byte stream and are always recorded as `stream: "pty"`; stdout and stderr cannot be recovered after tmux multiplexes them. ProofShot installs `pipe-pane` before backfilling retained scrollback. Canonical evidence keeps untimed `history` and timestamped `live` segments plus their overlap/capture-gap boundary.
 
-`maxBytesPerSource` bounds the combined canonical NDJSON and plain-text log bytes written for each source, and records truncation instead of silently discarding integrity state.
+`maxBytesPerSource` bounds the combined canonical NDJSON and plain-text log bytes written for each source, and records truncation instead of silently discarding integrity state. It must be at least `512` bytes.
 
 ## Validation
 

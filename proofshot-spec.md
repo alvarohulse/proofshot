@@ -2,6 +2,8 @@
 
 ## Product Spec v2.0
 
+> **Historical design record — not current behavior.** This is the original v2.0 design document, kept for the reasoning behind ProofShot's architecture and product decisions. The shipped CLI has since diverged: commands, flags, config keys, session state, and the artifact set described below are no longer accurate (for example, there is no `proofshot init` command and no `--no-server` flag). For what ProofShot actually does today, see [`README.md`](README.md) for usage, `content/docs/reference/cli.mdx` for commands and flags, `content/docs/reference/configuration.mdx` for config, and [`docs/architecture.md`](docs/architecture.md) for the implemented architecture. Do not treat anything here as a contract.
+
 **One-liner:** Give any AI coding agent eyes. It builds a feature → ProofShot records video proof it works.
 
 **Tagline:** "Cursor charges $200/mo for agents that can see what they build. Here's the same thing, free, for every agent."
@@ -248,6 +250,8 @@ No server errors detected.
 ---
 
 ## 4. CLI Commands
+
+> Historical — the shipped command surface differs (no `init`, no `--no-server`, plus commands and flags not designed here). `content/docs/reference/cli.mdx` is the authoritative CLI reference.
 
 ### `proofshot init`
 
