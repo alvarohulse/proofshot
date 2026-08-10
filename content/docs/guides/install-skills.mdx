@@ -51,12 +51,14 @@ All skills install at **user level** — one install works across every project 
 | Agent | Location | Strategy |
 |-------|----------|----------|
 | **Claude Code** | `~/.claude/skills/proofshot/SKILL.md` | Standalone file |
-| **Cursor** | `~/.cursor/rules/proofshot.mdc` | Standalone file |
+| **Cursor** | `~/.cursor/skills/proofshot/SKILL.md` | Standalone skill |
 | **Codex** | `~/.codex/skills/proofshot/SKILL.md` | Standalone file |
 | **Gemini CLI** | `~/.gemini/GEMINI.md` | Appended with markers |
 | **Windsurf** | `~/.codeium/windsurf/memories/global_rules.md` | Appended with markers |
 
 Tools using the **append** strategy wrap ProofShot's content in `<!-- proofshot:start -->` / `<!-- proofshot:end -->` markers. Running `proofshot install` again replaces only the marked section — your other content is preserved.
+
+When upgrading an existing Cursor installation, ProofShot writes the new skill first and then renames `~/.cursor/rules/proofshot.mdc` to a non-loading `.migrated` backup. Custom rule edits are preserved, and a failed skill write leaves the legacy rule active.
 
 ## What the skill teaches the agent
 

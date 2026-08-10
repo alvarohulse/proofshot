@@ -252,13 +252,14 @@ proofshot doctor
 | Agent | Install location |
 |-------|-----------------|
 | **Claude Code** | `~/.claude/skills/proofshot/SKILL.md` |
-| **Cursor** | `~/.cursor/rules/proofshot.mdc` |
+| **Cursor** | `~/.cursor/skills/proofshot/SKILL.md` |
 | **Codex (OpenAI)** | `~/.codex/skills/proofshot/SKILL.md` |
 | **OpenCode** | `~/.config/opencode/skills/proofshot/SKILL.md` |
 | **Gemini CLI** | Appends to `~/.gemini/GEMINI.md` |
 | **Windsurf** | Appends to `~/.codeium/windsurf/memories/global_rules.md` |
 
 All skills install at **user level** — no per-project configuration needed.
+When upgrading Cursor installations, ProofShot preserves the previous `proofshot.mdc` rule as a non-loading `.migrated` backup after the skill is written successfully.
 
 ## Try It
 

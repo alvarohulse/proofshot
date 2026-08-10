@@ -117,7 +117,7 @@ This does:
 3. Installs the skill file for the detected agent:
    - Claude Code: `.claude/skills/proofshot/SKILL.md`
    - Codex: `codex.md` / `AGENTS.md` append
-   - Cursor: `.cursor/rules/proofshot.mdc`
+   - Cursor: `.cursor/skills/proofshot/SKILL.md`
    - General: `PROOFSHOT.md` in project root
 
 ### Usage — The Developer Does Nothing Different
@@ -450,12 +450,12 @@ a SUMMARY.md with video, screenshots, and error report.
 - The proof artifacts in ./proofshot-artifacts/ can be referenced in commit messages or PRs
 ```
 
-### Cursor Rule: `.cursor/rules/proofshot.mdc`
+### Cursor Skill: `.cursor/skills/proofshot/SKILL.md`
 
 ```markdown
 ---
-description: Visual verification of UI changes using ProofShot
-globs: ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.html"]
+name: proofshot
+description: Visually verifies UI changes with browser recordings, screenshots, console output, and named environment logs. Use after building or modifying user-facing features.
 ---
 
 After modifying UI files, visually verify changes with this workflow:
@@ -534,7 +534,7 @@ proofshot/
 │       └── config.ts            # Config file reading/writing
 ├── skills/
 │   ├── claude/SKILL.md
-│   ├── cursor/proofshot.mdc
+│   ├── cursor/SKILL.md
 │   ├── codex/AGENTS.md
 │   └── generic/PROOFSHOT.md
 └── test/

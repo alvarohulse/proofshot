@@ -103,24 +103,26 @@ Default upload mode uses the official GitHub contents API on a \`proofshot-artif
 
   if (agent === 'cursor') {
     return `---
-description: Visual verification of UI changes using ProofShot
-globs: ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.html"]
+name: proofshot
+description: Visually verifies UI changes with browser recordings, screenshots, console output, and named environment logs. Use after building or modifying user-facing features.
 ---
 
-After modifying UI files, visually verify changes with this workflow:
+# ProofShot visual verification
 
-1. Start session: \`proofshot start --run "your-dev-command" --port PORT --description "what you are verifying"\`
-   If the server is already running, omit --run.
-2. Drive browser: Use \`proofshot exec\` commands to navigate, click, fill forms, and take screenshots
-3. Stop session: \`proofshot stop\` to bundle video + screenshots + error report
-4. (Optional) Post to PR: \`proofshot pr\` to upload proof to the GitHub PR
-   Default provider uses the official contents API. Use \`--upload-provider github-web-attachments\` only if you specifically want GitHub attachment URLs.
+Use ProofShot after changing UI behavior:
 
-Key proofshot exec commands:
-- \`proofshot exec snapshot -i\` — see interactive elements
-- \`proofshot exec click @e3\` — click an element
-- \`proofshot exec fill @e2 "text"\` — fill a form field
-- \`proofshot exec screenshot step.png\` — capture a moment
+1. Start a session:
+   \`proofshot start --run "your-dev-command" --port PORT --description "what you are verifying"\`
+   Use \`proofshot.config.json\` environment and log sources instead of \`--run\` when verification needs multiple processes, tmux panes, or file tails.
+2. Drive the browser with \`proofshot exec\`:
+   - \`proofshot exec snapshot -i\`
+   - \`proofshot exec click @e3\`
+   - \`proofshot exec fill @e2 "text"\`
+   - \`proofshot exec screenshot step.png\`
+3. Stop and bundle evidence:
+   \`proofshot stop\`
+
+Take screenshots before and after important actions. Read the browser snapshot and captured logs to verify the expected behavior, then fix and repeat if evidence contains errors.
 `;
   }
 

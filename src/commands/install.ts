@@ -32,6 +32,8 @@ interface ToolDefinition {
   bundledSkill: string;
   /** Fallback agent key for inline content generation */
   inlineAgent: string;
+  /** Previously installed file to retire after a successful migration */
+  legacyRelativePath?: string;
 }
 
 interface InstallResult {
@@ -76,9 +78,10 @@ function getToolDefinitions(): ToolDefinition[] {
       displayName: 'Cursor',
       binaryName: 'cursor',
       configDir: path.join(home, '.cursor'),
-      skillTarget: { strategy: 'file', relativePath: 'rules/proofshot.mdc' },
-      bundledSkill: 'cursor/proofshot.mdc',
+      skillTarget: { strategy: 'file', relativePath: 'skills/proofshot/SKILL.md' },
+      bundledSkill: 'cursor/SKILL.md',
       inlineAgent: 'cursor',
+      legacyRelativePath: 'rules/proofshot.mdc',
     },
     {
       name: 'codex',
@@ -268,7 +271,12 @@ function installForTool(tool: ToolDefinition, force: boolean): InstallResult {
     fs.mkdirSync(targetDir, { recursive: true });
 
     if (tool.skillTarget.strategy === 'file') {
-      return installFile(tool, targetPath, content, force);
+      const result = installFile(tool, targetPath, content, force);
+      const migratedPath = retireLegacyFile(tool);
+      if (migratedPath) {
+        result.message = `Legacy rule preserved at ${migratedPath}`;
+      }
+      return result;
     } else {
       return installAppend(tool, targetPath, content, force);
     }
@@ -281,6 +289,23 @@ function installForTool(tool: ToolDefinition, force: boolean): InstallResult {
       message: error.message,
     };
   }
+}
+
+function retireLegacyFile(tool: ToolDefinition): string | null {
+  if (!tool.legacyRelativePath) {
+    return null;
+  }
+  const legacyPath = path.join(tool.configDir, tool.legacyRelativePath);
+  if (!fs.existsSync(legacyPath)) {
+    return null;
+  }
+
+  let migratedPath = `${legacyPath}.migrated`;
+  for (let suffix = 2; fs.existsSync(migratedPath); suffix += 1) {
+    migratedPath = `${legacyPath}.migrated-${suffix}`;
+  }
+  fs.renameSync(legacyPath, migratedPath);
+  return migratedPath;
 }
 
 // ---------------------------------------------------------------------------
