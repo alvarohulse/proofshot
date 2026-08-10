@@ -96,6 +96,18 @@ export function discoverBrowserExecutable(
     return resolved;
   }
 
+  const homes = new Set<string>();
+  if (env.HOME) homes.add(path.resolve(env.HOME));
+  const accountHome = options.accountHome ?? accountHomeDirectory();
+  if (accountHome) homes.add(path.resolve(accountHome));
+
+  if (platform === 'linux') {
+    const cached = [...homes]
+      .flatMap(cachedBrowserCandidates)
+      .find(isExecutable);
+    if (cached) return cached;
+  }
+
   const commandNames =
     platform === 'darwin'
       ? ['google-chrome', 'chromium']
@@ -106,11 +118,6 @@ export function discoverBrowserExecutable(
     const executable = executableLookup(command, platform);
     if (executable && isExecutable(executable)) return executable;
   }
-
-  const homes = new Set<string>();
-  if (env.HOME) homes.add(path.resolve(env.HOME));
-  const accountHome = options.accountHome ?? accountHomeDirectory();
-  if (accountHome) homes.add(path.resolve(accountHome));
 
   const candidates: string[] = [];
   if (platform === 'darwin') {
@@ -127,7 +134,6 @@ export function discoverBrowserExecutable(
       );
     }
   } else {
-    for (const home of homes) candidates.push(...cachedBrowserCandidates(home));
     candidates.push('/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser');
   }
 

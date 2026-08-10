@@ -1179,15 +1179,19 @@ Retry with: proofshot start --browser-executable ${JSON.stringify(resolved)}`
     }
     return resolved;
   }
+  const homes = /* @__PURE__ */ new Set();
+  if (env.HOME) homes.add(path4.resolve(env.HOME));
+  const accountHome = options.accountHome ?? accountHomeDirectory();
+  if (accountHome) homes.add(path4.resolve(accountHome));
+  if (platform === "linux") {
+    const cached = [...homes].flatMap(cachedBrowserCandidates).find(isExecutable);
+    if (cached) return cached;
+  }
   const commandNames = platform === "darwin" ? ["google-chrome", "chromium"] : platform === "win32" ? ["chrome", "msedge"] : ["google-chrome-stable", "google-chrome", "chromium", "chromium-browser"];
   for (const command of commandNames) {
     const executable = executableLookup(command, platform);
     if (executable && isExecutable(executable)) return executable;
   }
-  const homes = /* @__PURE__ */ new Set();
-  if (env.HOME) homes.add(path4.resolve(env.HOME));
-  const accountHome = options.accountHome ?? accountHomeDirectory();
-  if (accountHome) homes.add(path4.resolve(accountHome));
   const candidates = [];
   if (platform === "darwin") {
     candidates.push(
@@ -1203,7 +1207,6 @@ Retry with: proofshot start --browser-executable ${JSON.stringify(resolved)}`
       );
     }
   } else {
-    for (const home of homes) candidates.push(...cachedBrowserCandidates(home));
     candidates.push("/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser");
   }
   return candidates.find(isExecutable) ?? null;
