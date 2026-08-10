@@ -638,7 +638,7 @@ function buildVerdict(
   };
 }
 
-function probeMediaDuration(videoPath: string): number | null {
+export function probeMediaDuration(videoPath: string): number | null {
   if (!fs.existsSync(videoPath)) {
     return null;
   }
@@ -649,15 +649,25 @@ function probeMediaDuration(videoPath: string): number | null {
         '-v',
         'error',
         '-show_entries',
-        'format=duration',
+        'format=start_time,duration',
         '-of',
-        'default=noprint_wrappers=1:nokey=1',
+        'json',
         videoPath,
       ],
       { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
     ).trim();
-    const duration = Number(output);
-    return Number.isFinite(duration) ? duration : null;
+    const parsed = JSON.parse(output) as {
+      format?: {
+        start_time?: string;
+        duration?: string;
+      };
+    };
+    const startTime = Number(parsed.format?.start_time || 0);
+    const duration = Number(parsed.format?.duration);
+    const playableDuration = duration - startTime;
+    return Number.isFinite(playableDuration) && playableDuration >= 0
+      ? playableDuration
+      : null;
   } catch {
     return null;
   }

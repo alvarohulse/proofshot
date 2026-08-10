@@ -5702,15 +5702,18 @@ function probeMediaDuration(videoPath) {
         "-v",
         "error",
         "-show_entries",
-        "format=duration",
+        "format=start_time,duration",
         "-of",
-        "default=noprint_wrappers=1:nokey=1",
+        "json",
         videoPath
       ],
       { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }
     ).trim();
-    const duration = Number(output);
-    return Number.isFinite(duration) ? duration : null;
+    const parsed = JSON.parse(output);
+    const startTime = Number(parsed.format?.start_time || 0);
+    const duration = Number(parsed.format?.duration);
+    const playableDuration = duration - startTime;
+    return Number.isFinite(playableDuration) && playableDuration >= 0 ? playableDuration : null;
   } catch {
     return null;
   }
@@ -6792,15 +6795,27 @@ function trimVideo(videoPath, screenshots, outputDir, sessionStartMs, sessionLog
   if (firstActionSec === null || lastActionSec === null) return 0;
   const BUFFER_BEFORE = 5;
   const BUFFER_AFTER = 3;
-  const trimStartSec = Math.max(0, firstActionSec - BUFFER_BEFORE);
+  const timelineTrimOffsetSec = Math.max(0, firstActionSec - BUFFER_BEFORE);
   const trimEndSec = lastActionSec + BUFFER_AFTER;
-  if (trimEndSec - trimStartSec < 5) return 0;
+  const requestedDurationSec = trimEndSec - timelineTrimOffsetSec;
+  if (requestedDurationSec < 5) return 0;
   try {
     execFileSync5("ffmpeg", ["-version"], { stdio: "pipe" });
   } catch {
     console.log(chalk3.dim("Tip: Install ffmpeg to auto-trim dead time from videos."));
     return 0;
   }
+  const mediaDurationSec = probeMediaDuration(videoPath);
+  const actionDurationSec = Math.max(0, lastActionSec - firstActionSec);
+  const maximumPhysicalTrimSec = mediaDurationSec === null ? timelineTrimOffsetSec : Math.max(0, mediaDurationSec - actionDurationSec - BUFFER_BEFORE);
+  const physicalTrimStartSec = Math.min(
+    timelineTrimOffsetSec,
+    maximumPhysicalTrimSec
+  );
+  const trimDurationSec = mediaDurationSec === null ? requestedDurationSec : Math.min(
+    requestedDurationSec,
+    mediaDurationSec - physicalTrimStartSec
+  );
   const dir = path18.dirname(videoPath);
   const ext = path18.extname(videoPath);
   const base = path18.basename(videoPath, ext);
@@ -6811,14 +6826,27 @@ function trimVideo(videoPath, screenshots, outputDir, sessionStartMs, sessionLog
       "ffmpeg",
       [
         "-y",
+        "-ss",
+        physicalTrimStartSec.toFixed(2),
         "-i",
         rawPath,
-        "-ss",
-        trimStartSec.toFixed(2),
-        "-to",
-        trimEndSec.toFixed(2),
-        "-c",
-        "copy",
+        "-t",
+        trimDurationSec.toFixed(2),
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "libvpx-vp9",
+        "-deadline",
+        "realtime",
+        "-cpu-used",
+        "8",
+        "-crf",
+        "30",
+        "-b:v",
+        "0",
+        "-an",
+        "-avoid_negative_ts",
+        "make_zero",
         "-abort_on",
         "empty_output",
         videoPath
@@ -6827,9 +6855,9 @@ function trimVideo(videoPath, screenshots, outputDir, sessionStartMs, sessionLog
     );
     validateTrimmedVideo(videoPath);
     fs21.unlinkSync(rawPath);
-    const trimmedDuration = Math.round(trimEndSec - trimStartSec);
+    const trimmedDuration = Math.round(trimDurationSec);
     console.log(chalk3.dim(`Trimmed video to ${trimmedDuration}s (removed dead time)`));
-    return trimStartSec;
+    return timelineTrimOffsetSec;
   } catch {
     if (fs21.existsSync(videoPath)) {
       fs21.unlinkSync(videoPath);

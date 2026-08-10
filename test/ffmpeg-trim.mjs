@@ -17,11 +17,11 @@ try {
       '-f',
       'lavfi',
       '-i',
-      'color=c=blue:s=64x64:r=1:d=20',
+      'color=c=blue:s=64x64:r=1:d=13',
       '-c:v',
       'libvpx-vp9',
       '-g',
-      '1',
+      '10',
       videoPath,
     ],
     { stdio: 'pipe', timeout: 60_000 },
@@ -33,13 +33,40 @@ try {
     temporaryDirectory,
     Date.now(),
     [
-      { action: 'open', relativeTimeSec: 6, timestamp },
-      { action: 'screenshot', relativeTimeSec: 12, timestamp },
+      { action: 'open', relativeTimeSec: 12, timestamp },
+      { action: 'screenshot', relativeTimeSec: 18, timestamp },
     ],
   );
 
-  if (trimOffset !== 1) {
-    throw new Error(`Expected a 1-second trim offset, received ${trimOffset}.`);
+  if (trimOffset !== 7) {
+    throw new Error(`Expected a 7-second timeline offset, received ${trimOffset}.`);
+  }
+  const probe = JSON.parse(
+    execFileSync(
+      'ffprobe',
+      [
+        '-v',
+        'error',
+        '-show_entries',
+        'format=start_time,duration',
+        '-of',
+        'json',
+        videoPath,
+      ],
+      { encoding: 'utf-8', timeout: 60_000 },
+    ).trim(),
+  );
+  const startTime = Number(probe.format?.start_time);
+  const duration = Number(probe.format?.duration);
+  if (!Number.isFinite(startTime) || startTime > 0.1) {
+    throw new Error(`Trimmed media starts at ${startTime}s instead of zero.`);
+  }
+  if (duration - startTime < 10.5) {
+    throw new Error(
+      `Trimmed media ended before the canonical 11-second action timeline: ${
+        duration - startTime
+      }s.`,
+    );
   }
   execFileSync(
     'ffmpeg',

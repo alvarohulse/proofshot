@@ -11,7 +11,14 @@ vi.mock('child_process', async () => {
   );
   return {
     ...actual,
-    execFileSync: vi.fn(() => '284.9\n'),
+    execFileSync: vi.fn(() =>
+      JSON.stringify({
+        format: {
+          start_time: '0',
+          duration: '284.9',
+        },
+      }),
+    ),
   };
 });
 

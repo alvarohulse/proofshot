@@ -322,6 +322,11 @@ describe('stop artifacts', () => {
     let trimArgs: string[] = [];
 
     mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (_command === 'ffprobe') {
+        return JSON.stringify({
+          format: { start_time: '0', duration: '30' },
+        });
+      }
       if (args[0] === '-version') {
         return '';
       }
@@ -352,6 +357,11 @@ describe('stop artifacts', () => {
     fs.writeFileSync(videoPath, 'original-video');
 
     mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (_command === 'ffprobe') {
+        return JSON.stringify({
+          format: { start_time: '0', duration: '30' },
+        });
+      }
       if (args[0] === '-version') {
         return '';
       }
@@ -380,6 +390,11 @@ describe('stop artifacts', () => {
     let trimArgs: string[] = [];
 
     mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (_command === 'ffprobe') {
+        return JSON.stringify({
+          format: { start_time: '0', duration: '20' },
+        });
+      }
       if (args[0] === '-version') {
         return '';
       }
