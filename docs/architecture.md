@@ -240,3 +240,7 @@ src/
 **Graceful degradation everywhere.** Missing ffmpeg skips video trimming. Failed element data capture skips overlays. Browser already closed gets a silent catch. Console errors unavailable shows "0 errors". Non-critical failures never abort a session.
 
 **Except for owned resources.** Starting and releasing an owned environment fails loudly. A silently dropped log source produces evidence that looks complete but is not, and a silently leaked process or tmux socket outlives the session — so both are errors, and an invalid `proofshot.config.json` now fails `start` instead of falling back to defaults.
+
+**A capture that died is a failed verification, not a warning.** Every capture worker removes its pid file on a clean exit, so `stop` treats a surviving pid file whose process is gone as a mid-session gap. Teardown still runs to completion and every artifact is still written — then the gap is recorded in `environment.ndjson` (`captureGap`) and `SUMMARY.md`, and `stop` exits non-zero. The alternative is a proof bundle that reads as complete while missing the output that mattered.
+
+**Attach-only environments are never terminated.** `connection.ownership: "attach"` outranks the "own what you created" rule, so a tmux server, session, or pane reached in attach mode survives `stop` even when this start's launcher created it; ProofShot only detaches its own `pipe-pane`. Since nothing is ever stopped in that mode, pairing it with `launch.stopCommand` is a config error rather than a silently ignored setting.

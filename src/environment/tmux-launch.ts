@@ -133,13 +133,10 @@ export async function startExternalTmux(
     throw new Error('External tmux launch requires a connection contract.');
   }
   const hintedSocket = config.connection.socket;
+  // An undisclosed socket cannot be snapshotted, so it is treated as pre-existing.
   const socketExistedBefore = hintedSocket ? fs.existsSync(hintedSocket) : true;
   const attachOnly = config.connection.ownership === 'attach';
-  if (
-    !attachOnly &&
-    ((!hintedSocket && !config.launch.stopCommand) ||
-      (socketExistedBefore && !config.launch.stopCommand))
-  ) {
+  if (!attachOnly && socketExistedBefore && !config.launch.stopCommand) {
     throw new Error(
       'External tmux launch against an existing or undisclosed socket requires stopCommand.',
     );
@@ -155,7 +152,11 @@ export async function startExternalTmux(
     config.connection.format === 'json'
       ? parseJsonConnection(output)
       : parseAttachCommand(output, config.cwd || process.cwd());
+  // `connection.ownership: "attach"` always wins: the tmux server, session and
+  // panes belong to the user even when this start's launcher happened to create
+  // them, so ProofShot never records an ownership claim over them.
   const ownsCreatedSocket =
+    !attachOnly &&
     hintedSocket !== undefined &&
     path.resolve(hintedSocket) === path.resolve(parsed.socketPath) &&
     !socketExistedBefore;
@@ -190,7 +191,8 @@ export function createTmuxState(
     panes: [],
     captures: [],
     stopCommand:
-      config.launch.kind === 'external-command'
+      config.launch.kind === 'external-command' &&
+      config.connection?.ownership !== 'attach'
         ? config.launch.stopCommand
         : undefined,
     stopCwd: config.cwd,

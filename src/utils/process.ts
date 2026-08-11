@@ -134,12 +134,15 @@ function captureBootToken(): string | null {
       );
     }
     if (process.platform === 'darwin') {
-      return (
-        execFileSync('sysctl', ['-n', 'kern.boottime'], {
-          encoding: 'utf-8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }).trim() || null
-      );
+      // `kern.boottime` ends in a locale/timezone-rendered date, so the epoch
+      // seconds are the only stable part of the reading.
+      const output = execFileSync('sysctl', ['-n', 'kern.boottime'], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, TZ: 'UTC' },
+      }).trim();
+      const seconds = output.match(/\bsec\s*=\s*(\d+)/);
+      return seconds ? `boot-${seconds[1]}` : output || null;
     }
   } catch {
     return null;

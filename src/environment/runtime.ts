@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
+import { appendEvidenceEvent } from './evidence.js';
 import { startFileCapture, startProcessCapture } from './workers.js';
 import { startTmuxEnvironment, stopTmuxEnvironment } from './tmux.js';
 import type {
@@ -18,6 +19,7 @@ import type {
 } from './types.js';
 import {
   ownedProcessTreeIsAlive,
+  processIdentityMatches,
   terminateOwnedProcessTree,
 } from '../utils/process.js';
 
@@ -99,6 +101,69 @@ function assertSourcesMatchEnvironment(
       }".`,
     );
   }
+}
+
+/**
+ * Verify every capture worker survived to the end of the session.
+ *
+ * A worker removes its pid file on each clean exit, so a pid file that outlives
+ * its recorded process identity is the canonical signal that a source stopped
+ * recording mid-session. The evidence it produced looks complete but is not, so
+ * each gap is written into canonical evidence, recorded on the state that
+ * teardown may have to persist, and returned for the caller to surface.
+ */
+export function recordCaptureHealthFailures(
+  state: EnvironmentState | null | undefined,
+  startTimeMs?: number,
+): string[] {
+  // A launcher state records only the external command, which is expected to
+  // have exited; it owns no capture worker to verify.
+  if (!state || state.kind === 'launcher') {
+    return [];
+  }
+  const captures = state.kind === 'tmux' ? state.captures : state.processes;
+  const failures: string[] = [];
+  for (const capture of captures) {
+    if (!capture.pidFile) continue;
+    if (processIdentityMatches(capture.process)) continue;
+    if (!fs.existsSync(capture.pidFile)) continue;
+
+    const source = state.sources.find(
+      (candidate) => candidate.id === capture.sourceId,
+    );
+    failures.push(
+      `Capture for "${capture.sourceId}" stopped before "proofshot stop"${
+        source ? ` — logs/${path.basename(source.logPath)} is incomplete` : ''
+      }. Helper diagnostics: ${capture.pidFile}.stderr`,
+    );
+    const now = Date.now();
+    try {
+      appendEvidenceEvent(state.evidencePath, {
+        version: 1,
+        origin: 'environment',
+        group: source?.group || 'environment',
+        sourceId: capture.sourceId,
+        sourceTitle: source?.title || capture.sourceId,
+        stream: source?.stream || 'stderr',
+        segment: 'live',
+        timestamp: new Date(now).toISOString(),
+        relativeTimeSec:
+          startTimeMs === undefined ? null : Math.max(0, (now - startTimeMs) / 1000),
+        text: '[capture stopped before the session ended; later output was not recorded]',
+        captureGap: true,
+      });
+    } catch (error) {
+      failures.push(
+        `Could not record the capture gap for "${capture.sourceId}" in ${
+          state.evidencePath
+        }: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  if (failures.length > 0) {
+    state.healthFailures = failures;
+  }
+  return failures;
 }
 
 export async function stopOwnedEnvironment(

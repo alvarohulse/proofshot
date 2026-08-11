@@ -46,21 +46,22 @@ export async function stopTmuxEnvironment(
   }
 
   if (serverMatches && socketMatches) {
+    // Detaching first releases panes ProofShot does not own before any shutdown
+    // runs, and stops output reaching a helper that is about to be terminated.
+    for (const pane of state.panes.filter(
+      (candidate) => candidate.captureAttached,
+    )) {
+      try {
+        tmuxExec(state.socket.path, ['pipe-pane', '-t', pane.paneId]);
+      } catch {
+        // A launcher-provided shutdown may already have removed the pane.
+      }
+    }
     try {
       if (state.stopCommand) {
         await runCommand(state.stopCommand, state.stopCwd || process.cwd());
       } else if (state.ownsSession && tmuxHasSession(state)) {
         tmuxExec(state.socket.path, ['kill-session', '-t', state.sessionName]);
-      } else {
-        for (const pane of state.panes.filter(
-          (candidate) => candidate.captureAttached,
-        )) {
-          try {
-            tmuxExec(state.socket.path, ['pipe-pane', '-t', pane.paneId]);
-          } catch {
-            // A launcher-provided shutdown may already have removed the pane.
-          }
-        }
       }
     } catch (error) {
       errors.push(toError(error));

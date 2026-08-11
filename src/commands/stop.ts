@@ -12,7 +12,10 @@ import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { loadSessionLog } from './exec.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
-import { stopOwnedEnvironment } from '../environment/runtime.js';
+import {
+  recordCaptureHealthFailures,
+  stopOwnedEnvironment,
+} from '../environment/runtime.js';
 import type { ResolvedLogSourceState } from '../environment/types.js';
 
 /**
@@ -121,7 +124,16 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     closeBrowser(session.sessionName);
   }
 
-  // Step 4: Stop the owned environment and capture helpers.
+  // Step 4: Verify capture health, then stop the owned environment and helpers.
+  // Cleanup still runs to completion when a capture died — the incomplete
+  // evidence is reported at the end instead of being presented as a clean run.
+  const captureHealthFailures = recordCaptureHealthFailures(
+    session.environment,
+    startTime,
+  );
+  if (captureHealthFailures.length > 0) {
+    saveSession(session);
+  }
   if (session.environment) {
     console.log(chalk.dim('Stopping environment capture...'));
     try {
@@ -203,6 +215,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     durationSec,
     outputDir: sessionDir,
     environmentSources,
+    captureHealthFailures,
   });
   fs.writeFileSync(summaryPath, summary);
 
@@ -251,7 +264,11 @@ export async function stopCommand(options: StopOptions): Promise<void> {
 
   // Step 9: Print results
   console.log('');
-  console.log(chalk.green.bold('✅ ProofShot verification complete'));
+  console.log(
+    captureHealthFailures.length > 0
+      ? chalk.red.bold('❌ ProofShot verification incomplete — environment capture stopped early')
+      : chalk.green.bold('✅ ProofShot verification complete'),
+  );
   console.log('');
 
   if (fs.existsSync(session.videoPath)) {
@@ -260,7 +277,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   console.log(`📸 Screenshots:   ${screenshots.length} captured`);
   if (environmentSources.length > 0) {
     console.log(
-      `📚 Environment:   ${environmentSources.length} source(s) → ${chalk.dim(path.join(sessionDir, 'logs'))}`,
+      `📚 Environment:   ${environmentSources.length} source(s) → ${chalk.dim(path.join(sessionDir, 'logs'))}` +
+        (captureHealthFailures.length > 0 ? chalk.red(' (incomplete)') : ''),
     );
   }
   console.log(`📝 Summary:       ${chalk.dim(summaryPath)}`);
@@ -302,6 +320,22 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       console.log(chalk.dim(`  ... and ${serverErrorLines.length - 10} more (see SUMMARY.md)`));
     }
   }
+
+  // Incomplete evidence must never exit 0 — every owned resource has been
+  // released by this point, so only the reporting outcome is left to decide.
+  if (captureHealthFailures.length > 0) {
+    console.log('');
+    console.log(chalk.red.bold('Capture gaps:'));
+    for (const failure of captureHealthFailures) {
+      console.log(chalk.red(`  ${failure}`));
+    }
+    console.log(
+      chalk.dim(
+        `  Recorded with captureGap in ${path.join(sessionDir, 'environment.ndjson')}`,
+      ),
+    );
+    process.exit(1);
+  }
 }
 
 interface SummaryData {
@@ -318,6 +352,7 @@ interface SummaryData {
   durationSec: number;
   outputDir: string;
   environmentSources: ResolvedLogSourceState[];
+  captureHealthFailures: string[];
 }
 
 function generateProofSummary(data: SummaryData): string {
@@ -393,6 +428,15 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
       md += `- **${source.title}** (${source.group}/${source.kind}): [${path.basename(source.logPath)}](./logs/${path.basename(source.logPath)})\n`;
     }
     md += '\n';
+  }
+
+  if (data.captureHealthFailures.length > 0) {
+    md += `## Capture Gaps\n\n`;
+    md += `Environment capture stopped early, so the logs above are incomplete:\n\n`;
+    for (const failure of data.captureHealthFailures) {
+      md += `- ${failure}\n`;
+    }
+    md += `\nEach gap is recorded in \`environment.ndjson\` with \`captureGap: true\`.\n\n`;
   }
 
   // Environment

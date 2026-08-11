@@ -3,8 +3,8 @@ import * as path from 'path';
 import {
   appendHistory,
   buildTmuxPipeCommand,
-  createWorkerConfig,
   waitForCaptureProcess,
+  type WorkerConfig,
 } from './workers.js';
 import { appendEvidenceEvent } from './evidence.js';
 import { stopTmuxEnvironment } from './tmux-cleanup.js';
@@ -26,6 +26,38 @@ import type {
 import { terminateOwnedProcessTree } from '../utils/process.js';
 
 export { stopTmuxEnvironment };
+
+const FALLBACK_HISTORY_LINES = 5000;
+
+/**
+ * Read a pane's retained scrollback.
+ *
+ * The capture crosses a pipe as a single buffer, and an attach-only pane can
+ * hold far more scrollback than the evidence budget once `history-limit` is
+ * raised. `appendHistory` keeps only the newest `historyBudget` bytes, so the
+ * buffer is sized from that budget and a pane that still overflows it falls
+ * back to a bounded line window — deep scrollback costs history, not the whole
+ * `start`. Returns null when no scrollback could be read at all.
+ */
+function capturePaneHistory(
+  socketPath: string,
+  paneId: string,
+  historyBudget: number,
+): string | null {
+  const maxBuffer = Math.max(historyBudget * 4, 16 * 1024 * 1024);
+  const requests = [
+    ['capture-pane', '-p', '-S', '-', '-t', paneId],
+    ['capture-pane', '-p', '-S', `-${FALLBACK_HISTORY_LINES}`, '-t', paneId],
+  ];
+  for (const request of requests) {
+    try {
+      return tmuxExec(socketPath, request, { maxBuffer });
+    } catch {
+      // Retry with a bounded window before giving up on the pane's history.
+    }
+  }
+  return null;
+}
 
 /**
  * Release a tmux server ProofShot took ownership of before it could record an
@@ -159,7 +191,7 @@ export async function startTmuxEnvironment(
       const pidFile = path.join(captureDir, `${pane.source.id}.pid`);
       const sourceBudget = logs.maxBytesPerSource || 5 * 1024 * 1024;
       const historyBudget = Math.max(1, Math.floor(sourceBudget / 2));
-      const workerConfig = createWorkerConfig({
+      const workerConfig: WorkerConfig = {
         evidencePath,
         logPath: pane.source.logPath,
         pidFile,
@@ -167,7 +199,7 @@ export async function startTmuxEnvironment(
         maxBytes: Math.max(1, sourceBudget - historyBudget),
         stripAnsi: logs.stripAnsi !== false,
         source: pane.source,
-      });
+      };
       tmuxExec(connection.socketPath, [
         'pipe-pane',
         '-t',
@@ -186,22 +218,35 @@ export async function startTmuxEnvironment(
       state = activeState;
       onState(activeState);
 
-      const history = tmuxExec(connection.socketPath, [
-        'capture-pane',
-        '-p',
-        '-S',
-        '-',
-        '-t',
+      const history = capturePaneHistory(
+        connection.socketPath,
         pane.pane.paneId,
-      ]);
-      appendHistory(
-        history,
-        pane.source,
-        evidencePath,
         historyBudget,
-        logs.stripAnsi !== false,
-        'pty',
       );
+      if (history === null) {
+        appendEvidenceEvent(evidencePath, {
+          version: 1,
+          origin: 'environment',
+          group: pane.source.group,
+          sourceId: pane.source.id,
+          sourceTitle: pane.source.title,
+          stream: 'pty',
+          segment: 'history',
+          timestamp: null,
+          relativeTimeSec: null,
+          text: '[tmux scrollback could not be read; history is missing]',
+          captureGap: true,
+        });
+      } else {
+        appendHistory(
+          history,
+          pane.source,
+          evidencePath,
+          historyBudget,
+          logs.stripAnsi !== false,
+          'pty',
+        );
+      }
       appendEvidenceEvent(evidencePath, {
         version: 1,
         origin: 'environment',

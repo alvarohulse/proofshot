@@ -98,6 +98,8 @@ proofshot stop [options]
 
 If releasing an owned resource fails, `stop` exits non-zero and keeps `.session.json` as recovery state so the remaining processes and sockets are still recorded. Resolve the reported resource and run `proofshot stop` again.
 
+If a capture stopped before the session ended, `stop` still completes teardown and writes every artifact, then records the gap in `environment.ndjson` and `SUMMARY.md` and exits non-zero — incomplete evidence is never reported as a clean run.
+
 ---
 
 ## `proofshot exec`

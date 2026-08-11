@@ -79,7 +79,8 @@ One JSON object per line — the canonical record of everything the configured e
 
 - `segment` is `history` for retained scrollback or pre-existing file content (`timestamp` and `relativeTimeSec` are `null` — the time it was written is unknown) and `live` for output captured during the session.
 - `stream` is `pty` for tmux panes, `stdout`/`stderr` for direct processes, and `file` for file sources.
-- `truncated` marks where a source hit `logs.maxBytesPerSource`. `captureGap` marks a point where output was missed — a rotated or truncated source file, or an unparseable evidence row.
+- `truncated` marks where a source hit `logs.maxBytesPerSource`. `captureGap` marks a point where output was missed — a rotated or truncated source file, unreadable tmux scrollback, an unparseable evidence row, or a capture that stopped before the session ended.
+- `stop` verifies every capture survived the session. A capture that stopped early gets a `captureGap` row, a **Capture Gaps** section in `SUMMARY.md`, and a non-zero exit code, because otherwise the remaining evidence reads as complete.
 
 See the [configuration reference](/docs/reference/configuration) for how sources are declared and named.
 

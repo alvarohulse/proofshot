@@ -10,6 +10,8 @@ npm test               # Run vitest once
 npm run dev            # Watch mode build
 ```
 
+**Optional test prerequisite: `tmux`.** The environment-capture integration tests in `src/environment/runtime.test.ts` drive real tmux servers. They skip themselves when `tmux` is not on `PATH`, except when `CI` is set — CI installs tmux explicitly, so a missing binary there is a failure, not a skip.
+
 ## Architecture
 
 ```
@@ -101,4 +103,6 @@ Edit `src/utils/error-patterns.ts` — add a new entry to the `PATTERNS` array:
 - `--run` and `config.environment` are mutually exclusive (both start the app); `start` rejects the combination up front
 - Config validation fails `start` closed, but `stop`/`clean` load config through `loadConfigForTeardown` and only warn — an invalid config must never strand owned resources
 - Tmux panes are a single PTY stream, so pane evidence is always `stream: "pty"`; only direct processes keep `stdout`/`stderr` apart
+- `connection.ownership: "attach"` outranks "own what you created" — an attach-only tmux server/session/pane is never terminated, so `launch.stopCommand` is rejected in that mode
+- A capture worker deletes its pid file on every clean exit, so a surviving pid file with a dead process is how `stop` detects a mid-session capture gap — it records the gap and exits non-zero after finishing teardown
 - The `consoleErrors`/`consoleOutput` from agent-browser are point-in-time snapshots collected at stop time

@@ -119,6 +119,31 @@ describe('loadConfig', () => {
     expect(() => loadConfig(tempDir)).toThrow(/Invalid ProofShot config/);
   });
 
+  it('rejects an attach-only launcher that also declares a stop command', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-attach-stop-'));
+    const configPath = path.join(tempDir, 'proofshot.config.json');
+    const environment = {
+      kind: 'tmux',
+      launch: {
+        kind: 'external-command',
+        command: 'npm run dev:tmux',
+        stopCommand: 'npm run dev:stop',
+      },
+      connection: { format: 'json', ownership: 'attach', socket: '/tmp/dev.sock' },
+    };
+
+    fs.writeFileSync(configPath, JSON.stringify({ environment }));
+    expect(() => loadConfig(tempDir)).toThrow(/attach.*cannot be combined with launch\.stopCommand/);
+
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        environment: { ...environment, connection: { ...environment.connection, ownership: 'create' } },
+      }),
+    );
+    expect(() => loadConfig(tempDir)).not.toThrow();
+  });
+
   it('rejects log sources the configured environment cannot capture', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-source-kind-'));
     const configPath = path.join(tempDir, 'proofshot.config.json');

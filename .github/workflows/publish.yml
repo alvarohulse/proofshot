@@ -28,6 +28,14 @@ jobs:
           node-version: "20.x"
           cache: "npm"
 
+      # The environment-capture tests drive real tmux servers. They skip when the
+      # binary is absent locally, so CI installs it to keep that coverage running.
+      - name: Install tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          tmux -V
+
       - name: Install dependencies
         run: npm ci
 

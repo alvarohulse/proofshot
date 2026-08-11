@@ -6,9 +6,27 @@ const ANSI_PATTERN =
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 const CONTROL_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g;
 
+// OSC bodies carry arbitrary text — shells and npm scripts set titles such as
+// "npm run dev" — which the body class inside ANSI_PATTERN cannot express. The
+// body stops at a newline or a further escape, so an unterminated sequence can
+// never swallow real log lines.
+const OSC_PATTERN =
+  // eslint-disable-next-line no-control-regex
+  /(?:\u001B\]|\u009D)[^\u0007\u001B\u009C\n]*(?:\u0007|\u001B\\|\u009C)/g;
+
+/**
+ * Escape sequences are stripped before the remaining control characters,
+ * because OSC sequences terminate on BEL or ST — both of which
+ * `CONTROL_PATTERN` would otherwise remove first, leaving the sequence body
+ * spliced into the surrounding log text.
+ */
 export function normalizeLogText(text: string, stripAnsi = true): string {
-  const normalized = text.replace(/\r\n?/g, '\n').replace(CONTROL_PATTERN, '');
-  return stripAnsi ? normalized.replace(ANSI_PATTERN, '') : normalized;
+  const normalized = text.replace(/\r\n?/g, '\n');
+  return (
+    stripAnsi
+      ? normalized.replace(OSC_PATTERN, '').replace(ANSI_PATTERN, '')
+      : normalized
+  ).replace(CONTROL_PATTERN, '');
 }
 
 export function appendEvidenceEvent(filePath: string, event: EvidenceEvent): void {

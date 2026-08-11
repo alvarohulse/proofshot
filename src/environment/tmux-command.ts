@@ -18,10 +18,20 @@ export function assertTmuxAvailable(): void {
   }
 }
 
-export function tmuxExec(socketPath: string, args: string[]): string {
+/**
+ * `maxBuffer` defaults to Node's 1 MB, which is smaller than the scrollback
+ * ProofShot budgets for pane history, so callers that read bulk output must
+ * raise it or the whole start fails with ENOBUFS.
+ */
+export function tmuxExec(
+  socketPath: string,
+  args: string[],
+  options: { maxBuffer?: number } = {},
+): string {
   return execFileSync('tmux', ['-S', socketPath, ...args], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(options.maxBuffer === undefined ? {} : { maxBuffer: options.maxBuffer }),
   }).trimEnd();
 }
 
@@ -38,6 +48,15 @@ export async function runCommand(
   });
   const identity = child.pid ? captureProcessIdentity(child.pid) : null;
   if (!identity) {
+    // Without an identity there is nothing to record in `.session.json`, so the
+    // just-spawned pid is the only handle left for avoiding an orphan launcher.
+    try {
+      if (child.pid) {
+        process.kill(-child.pid, 'SIGKILL');
+      }
+    } catch {
+      // The launcher may already have exited.
+    }
     throw new Error('ProofShot could not capture the external launcher identity.');
   }
   try {

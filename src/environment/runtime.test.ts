@@ -4,7 +4,11 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadEvidenceEvents } from './evidence.js';
-import { startOwnedEnvironment, stopOwnedEnvironment } from './runtime.js';
+import {
+  recordCaptureHealthFailures,
+  startOwnedEnvironment,
+  stopOwnedEnvironment,
+} from './runtime.js';
 import type {
   EnvironmentState,
   LauncherEnvironmentState,
@@ -16,6 +20,20 @@ import { processIdentityMatches } from '../utils/process.js';
 let root: string;
 const states: EnvironmentState[] = [];
 const extraTmuxSockets: string[] = [];
+
+/**
+ * tmux coverage is mandatory in CI, which installs the binary explicitly, and
+ * skipped on contributor machines that do not have it.
+ */
+const tmuxAvailable = (() => {
+  try {
+    execFileSync('tmux', ['-V'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const skipWithoutTmux = !tmuxAvailable && !process.env.CI;
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-environment-test-'));
@@ -36,7 +54,7 @@ afterEach(async () => {
 });
 
 describe('owned environment capture', () => {
-  it('captures named tmux panes as history and live PTY evidence', async () => {
+  it.skipIf(skipWithoutTmux)('captures named tmux panes as history and live PTY evidence', async () => {
     const sessionDir = path.join(root, 'session');
     fs.mkdirSync(sessionDir, { recursive: true });
     let latestState: EnvironmentState | null = null;
@@ -133,7 +151,7 @@ describe('owned environment capture', () => {
     states.pop();
   }, 15000);
 
-  it('does not kill a shared external tmux session', async () => {
+  it.skipIf(skipWithoutTmux)('does not kill a shared external tmux session', async () => {
     const socket = path.join(root, 'shared.sock');
     extraTmuxSockets.push(socket);
     execFileSync(
@@ -191,7 +209,102 @@ describe('owned environment capture', () => {
     states.pop();
   }, 15000);
 
-  it('persists and cleans a timed-out external launcher identity', async () => {
+  it.skipIf(skipWithoutTmux)('never owns a tmux server its attach-only launcher created', async () => {
+    const socket = path.join(root, 'attach-created.sock');
+    extraTmuxSockets.push(socket);
+    expect(fs.existsSync(socket)).toBe(false);
+    const sessionDir = path.join(root, 'attach-created-session');
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    const started = await startOwnedEnvironment(
+      {
+        kind: 'tmux',
+        launch: {
+          kind: 'external-command',
+          command:
+            `tmux -S ${socket} new-session -d -s created "printf 'created-live\\n'; sleep 30" && ` +
+            `printf 'tmux -S ${socket} attach -t created\\n'`,
+        },
+        connection: {
+          source: 'stdout',
+          format: 'tmux-attach-command',
+          ownership: 'attach',
+          socket,
+        },
+      },
+      {
+        sources: [
+          {
+            id: 'created-pane',
+            kind: 'tmux-pane',
+            match: { target: 'created:0.0' },
+          },
+        ],
+      },
+      sessionDir,
+      'ps-attach-created',
+      Date.now(),
+      () => {},
+    );
+    if (started) states.push(started);
+    const state = requireTmuxState(started);
+
+    expect(state.ownsServer).toBe(false);
+    expect(state.ownsSession).toBe(false);
+    await waitForEvidence(state.evidencePath, ['created-live']);
+
+    await stopOwnedEnvironment(state);
+    expect(
+      execFileSync(
+        'tmux',
+        ['-S', socket, 'display-message', '-p', '-t', 'created:0.0', '#{pane_pipe}'],
+        { encoding: 'utf-8' },
+      ).trim(),
+    ).toBe('0');
+    expect(() =>
+      execFileSync('tmux', ['-S', socket, 'has-session', '-t', 'created']),
+    ).not.toThrow();
+    states.pop();
+  }, 15000);
+
+  it('reports a capture gap when a capture worker dies mid-session', async () => {
+    const sessionDir = path.join(root, 'capture-health-session');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const started = await startOwnedEnvironment(
+      {
+        kind: 'processes',
+        commands: [{ id: 'api', command: "printf 'api-ready\\n'; sleep 30" }],
+      },
+      {},
+      sessionDir,
+      'ps-capture-health',
+      Date.now(),
+      () => {},
+    );
+    if (started) states.push(started);
+    const state = requireProcessState(started);
+    await waitForEvidence(state.evidencePath, ['api-ready']);
+    expect(recordCaptureHealthFailures(state)).toEqual([]);
+
+    const capture = state.processes[0];
+    process.kill(capture.process.pid, 'SIGKILL');
+    await waitFor(() => !processIdentityMatches(capture.process));
+
+    const failures = recordCaptureHealthFailures(state, Date.now());
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('"api"');
+    expect(state.healthFailures).toEqual(failures);
+    expect(
+      loadEvidenceEvents(state.evidencePath).filter(
+        (event) => event.captureGap && event.sourceId === 'api',
+      ),
+    ).toHaveLength(1);
+
+    await stopOwnedEnvironment(state);
+    states.pop();
+  }, 15000);
+
+  it.skipIf(skipWithoutTmux)('persists and cleans a timed-out external launcher identity', async () => {
     const sessionDir = path.join(root, 'timed-out-launcher');
     fs.mkdirSync(sessionDir, { recursive: true });
     let pendingState: EnvironmentState | null = null;
@@ -368,7 +481,7 @@ describe('owned environment capture', () => {
     states.pop();
   }, 15000);
 
-  it('refuses to replace a pre-existing pipe-pane consumer', async () => {
+  it.skipIf(skipWithoutTmux)('refuses to replace a pre-existing pipe-pane consumer', async () => {
     const socket = path.join(root, 'p.sock');
     extraTmuxSockets.push(socket);
     execFileSync(
@@ -537,6 +650,18 @@ function requireLauncherState(
     throw new Error('expected persisted launcher state');
   }
   return state;
+}
+
+async function waitFor(
+  condition: () => boolean,
+  timeoutMs = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('Condition was not met before the timeout.');
 }
 
 async function waitForEvidence(

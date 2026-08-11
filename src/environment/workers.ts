@@ -14,7 +14,7 @@ import {
   type ProcessIdentity,
 } from '../utils/process.js';
 
-type WorkerConfig = {
+export type WorkerConfig = {
   evidencePath: string;
   logPath: string;
   pidFile?: string;
@@ -36,11 +36,15 @@ const fs = require('fs');
 const config = JSON.parse(Buffer.from(process.argv[1], 'base64').toString('utf8'));
 const ansiPattern = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 const controlPattern = /[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F]/g;
+const oscPattern = /(?:\u001B\]|\u009D)[^\u0007\u001B\u009C\n]*(?:\u0007|\u001B\\|\u009C)/g;
 let bytesWritten = 0;
 let truncated = false;
 function normalize(text) {
-  const normalized = text.replace(/\r\n?/g, '\n').replace(controlPattern, '');
-  return config.stripAnsi ? normalized.replace(ansiPattern, '') : normalized;
+  const normalized = text.replace(/\r\n?/g, '\n');
+  return (config.stripAnsi
+    ? normalized.replace(oscPattern, '').replace(ansiPattern, '')
+    : normalized
+  ).replace(controlPattern, '');
 }
 function writeEvent(text, stream, segment = 'live', extra = {}) {
   const normalized = normalize(text);
@@ -387,10 +391,6 @@ export function appendHistory(
     fs.appendFileSync(evidencePath, entry.serialized);
     fs.appendFileSync(source.logPath, entry.logLine);
   }
-}
-
-export function createWorkerConfig(params: WorkerConfig): WorkerConfig {
-  return params;
 }
 
 async function startDetachedWorker(

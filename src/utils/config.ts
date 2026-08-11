@@ -284,6 +284,14 @@ function validateEnvironment(value: unknown): void {
         );
       }
       if (
+        value.connection.ownership === 'attach' &&
+        value.launch.stopCommand !== undefined
+      ) {
+        throw new Error(
+          'environment.connection.ownership "attach" cannot be combined with launch.stopCommand; attach-only environments are never stopped by ProofShot',
+        );
+      }
+      if (
         value.connection.ownership !== 'attach' &&
         value.connection.socket === undefined &&
         value.launch.stopCommand === undefined

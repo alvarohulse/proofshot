@@ -307,6 +307,8 @@ npm test         # Run tests
 npm run dev      # Watch mode
 ```
 
+Install `tmux` to run the environment-capture integration tests locally — they skip themselves when it is missing, and CI installs it so the coverage always runs there.
+
 Three sample apps in `test/fixtures/` cover different UI patterns for end-to-end testing: a SaaS dashboard (`sample-app`), a kanban board (`todo-app`), and a chat interface (`chat-app`).
 
 Built on [agent-browser](https://github.com/vercel-labs/agent-browser) by Vercel.

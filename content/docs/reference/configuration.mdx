@@ -129,7 +129,9 @@ For `tmux`, `launch.kind: "panes"` accepts `{ id, title, group, cwd, command, en
 }
 ```
 
-ProofShot snapshots a hinted tmux socket before launch and owns only server/session identities created by that start. Attach-only launchers are never killed. Shared launchers that create a session must provide `stopCommand`. ProofShot never runs `tmux kill-server` against the default or an unowned socket.
+`connection.ownership: "attach"` always wins: ProofShot never terminates the launcher, tmux server, session, or panes of an attach-only environment, even when that start's launcher created them — it only detaches its own `pipe-pane` capture. Because nothing is ever stopped in that mode, `launch.stopCommand` is rejected alongside `ownership: "attach"` rather than silently ignored.
+
+Otherwise ProofShot snapshots a hinted tmux socket before launch and owns only the server/session identities created by that start. Shared launchers that create a session must provide `stopCommand`. ProofShot never runs `tmux kill-server` against the default or an unowned socket.
 
 For `processes`, list the commands under `environment.commands` — the same `{ id, title, group, cwd, command, env }` entry shape used by tmux panes. Each `id` must be unique, and `logs.sources` entries of kind `process` reference it via `processId`.
 

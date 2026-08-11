@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stopCommand } from './stop.js';
 import type { SessionState } from '../session/state.js';
@@ -11,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   getConsoleOutput: vi.fn(),
   getConsoleOutputJson: vi.fn(),
   stopOwnedEnvironment: vi.fn(),
+  recordCaptureHealthFailures: vi.fn(),
 }));
 
 vi.mock('../utils/config.js', () => ({
@@ -36,6 +40,7 @@ vi.mock('../browser/capture.js', () => ({
 
 vi.mock('../environment/runtime.js', () => ({
   stopOwnedEnvironment: mocks.stopOwnedEnvironment,
+  recordCaptureHealthFailures: mocks.recordCaptureHealthFailures,
 }));
 
 describe('stopCommand environment cleanup', () => {
@@ -55,6 +60,7 @@ describe('stopCommand environment cleanup', () => {
     mocks.getConsoleErrors.mockReturnValue('');
     mocks.getConsoleOutput.mockReturnValue('');
     mocks.getConsoleOutputJson.mockReturnValue([]);
+    mocks.recordCaptureHealthFailures.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -101,5 +107,53 @@ describe('stopCommand environment cleanup', () => {
         .mock.calls.map((call) => call.join(' '))
         .join('\n'),
     ).toContain('Environment process api did not stop.');
+  });
+
+  it('completes cleanup but exits non-zero when a capture stopped early', async () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-stop-capture-health-'),
+    );
+    const session: SessionState = {
+      startedAt: new Date().toISOString(),
+      description: null,
+      outputDir: sessionDir,
+      sessionDir,
+      sessionName: 'proofshot-test',
+      videoPath: path.join(sessionDir, 'session.webm'),
+      serverErrorLog: path.join(sessionDir, 'server.log'),
+      port: 3000,
+      serverCommand: null,
+      serverAlreadyRunning: true,
+      recordingActive: false,
+      environment: {
+        kind: 'processes',
+        evidencePath: path.join(sessionDir, 'environment.ndjson'),
+        sources: [],
+        processes: [],
+      },
+    };
+    mocks.loadSession.mockReturnValue(session);
+    mocks.stopOwnedEnvironment.mockResolvedValue(undefined);
+    mocks.recordCaptureHealthFailures.mockReturnValue([
+      'Capture for "api" stopped before "proofshot stop" — logs/api.log is incomplete.',
+    ]);
+
+    try {
+      await expect(stopCommand({})).rejects.toThrow('process.exit:1');
+
+      expect(mocks.stopOwnedEnvironment).toHaveBeenCalledOnce();
+      expect(mocks.clearSession).toHaveBeenCalled();
+      expect(fs.readFileSync(path.join(sessionDir, 'SUMMARY.md'), 'utf-8')).toContain(
+        '## Capture Gaps',
+      );
+      expect(
+        vi
+          .mocked(console.log)
+          .mock.calls.map((call) => call.join(' '))
+          .join('\n'),
+      ).toContain('logs/api.log is incomplete');
+    } finally {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
   });
 });
