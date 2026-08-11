@@ -17,10 +17,10 @@ Each ProofShot session creates a timestamped folder in your output directory (de
 | `server.log` | `start` | Dev server stdout and stderr. Only created when ProofShot starts the server via `--run`. |
 | `environment.ndjson` | `start` | Canonical timestamped evidence from configured tmux panes, direct processes, and file tails. |
 | `logs/*.log` | `start` | One bounded plain-text log per configured environment source, named `<source id>.log`. |
-| `.capture/` | `start` | Internal bookkeeping for the capture workers (one pid file per source). Not proof — ignore it when reading a session. |
+| `.capture/` | `start` | Internal bookkeeping for the capture workers: `<source id>.pid` while a capture is live, plus `<source id>.pid.stderr` helper diagnostics that a reported capture gap points you to. Not proof. |
 | `console-output.log` | `stop` | Browser console output collected at stop time. |
 | `step-*.png` | `exec screenshot` | Screenshots captured at key moments. Filenames come from the `exec screenshot` argument. |
-| `SUMMARY.md` | `stop` | Markdown report containing: session date, description, video link, screenshots, console error count and details, server error count and details, environment info. |
+| `SUMMARY.md` | `stop` | Text-based markdown report — see [`SUMMARY.md`](#summarymd) below for its contents. |
 | `viewer.html` | `stop` | Self-contained interactive HTML viewer. No external dependencies — open it in any browser. |
 
 ## `metadata.json` format
@@ -99,4 +99,5 @@ A text-based report for environments where the HTML viewer isn't practical (PR c
 - Console error count and details
 - Server error count and log excerpt
 - Links to captured environment source logs
+- A **Capture Gaps** section naming any source that stopped feeding ProofShot before the session ended
 - Environment info (browser, viewport, duration)

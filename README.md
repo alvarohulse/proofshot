@@ -237,6 +237,8 @@ Remove the `./proofshot-artifacts/` directory.
 proofshot clean
 ```
 
+If a session is still active there, `clean` first releases the processes and tmux sockets it owns — and refuses to delete the directory if that fails, since `.session.json` is the only record of them.
+
 ### `proofshot doctor`
 
 Print the current ProofShot environment, including config path, browser mode, viewport, installed binaries, and any active session.

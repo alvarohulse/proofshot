@@ -64,18 +64,22 @@ describe('owned environment capture', () => {
         launch: {
           kind: 'panes',
           panes: [
+            // The live markers repeat so the assertions below hold however long
+            // the capture pipe takes to attach; a single line printed once would
+            // land in the history snapshot instead on a loaded machine.
             {
               id: 'vite',
               title: 'Vite',
               group: 'frontend',
               command:
-                "printf 'vite-history\\n'; sleep 2; printf '\\033[31mvite-live\\033[0m\\n'; sleep 30",
+                "printf 'vite-history\\n'; while :; do printf '\\033[31mvite-live\\033[0m\\n'; sleep 0.2; done",
             },
             {
               id: 'api',
               title: 'API',
               group: 'backend',
-              command: "printf 'api-history\\n'; sleep 2; printf 'api-live\\n'; sleep 30",
+              command:
+                "printf 'api-history\\n'; while :; do printf 'api-live\\n'; sleep 0.2; done",
             },
           ],
         },
@@ -107,7 +111,10 @@ describe('owned environment capture', () => {
     if (started) states.push(started);
     const state = requireTmuxState(started);
 
-    await waitForEvidence(state.evidencePath, ['vite-live', 'api-live']);
+    await waitForLiveEvidence(state.evidencePath, {
+      'frontend-vite': 'vite-live',
+      'backend-api': 'api-live',
+    });
     const events = loadEvidenceEvents(state.evidencePath);
     expect(events).toEqual(
       expect.arrayContaining([
@@ -810,6 +817,35 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error('Condition was not met before the timeout.');
+}
+
+/** Wait until each source has recorded the given text in its live segment. */
+async function waitForLiveEvidence(
+  evidencePath: string,
+  expected: Record<string, string>,
+  timeoutMs = 5000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = loadEvidenceEvents(evidencePath);
+    const pending = Object.entries(expected).filter(
+      ([sourceId, text]) =>
+        !events.some(
+          (event) =>
+            event.sourceId === sourceId &&
+            event.segment === 'live' &&
+            event.text.includes(text),
+        ),
+    );
+    if (pending.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  const raw = fs.existsSync(evidencePath)
+    ? fs.readFileSync(evidencePath, 'utf-8')
+    : '<missing evidence file>';
+  throw new Error(
+    `Missing live evidence: ${JSON.stringify(expected)}\n${raw}`,
+  );
 }
 
 async function waitForEvidence(

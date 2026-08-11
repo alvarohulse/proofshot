@@ -148,7 +148,9 @@ describe('process ownership', () => {
       await terminateOwnedProcessTree(unrelatedIdentity, { graceMs: 200 });
       await waitForExit(unrelated.pid!);
     }
-  });
+    // Ownership checks shell out to `ps` on every poll, which outruns the 5s
+    // default timeout on a loaded machine.
+  }, 15000);
 
   it('terminates an exact helper without widening to its process group', async () => {
     const helper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
@@ -174,5 +176,5 @@ describe('process ownership', () => {
         await waitForExit(unrelatedIdentity.pid);
       }
     }
-  });
+  }, 15000);
 });

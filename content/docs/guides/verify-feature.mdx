@@ -131,7 +131,7 @@ You need to run `proofshot start` first. The session state is stored in `.sessio
 Install [ffmpeg](https://ffmpeg.org/) and ProofShot will automatically trim dead time from the video (5s buffer before the first action, 3s buffer after the last).
 
 **No server errors detected but I know there are errors**
-Server error detection only works when ProofShot starts the server itself (`--run`). If your server was already running, ProofShot can't capture its logs.
+The error scan reads `server.log`, which only exists when ProofShot starts the server itself (`--run`). To capture an app you start yourself, or more than one process, see [the FAQ](/docs/faq) and the [configuration reference](/docs/reference/configuration).
 
 ## What's next?
 
