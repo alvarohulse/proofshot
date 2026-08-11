@@ -318,6 +318,76 @@ describe('owned environment capture', () => {
     states.pop();
   }, 15000);
 
+  it.skipIf(skipWithoutTmux)('does not fabricate pane gaps when a failed stop is retried', async () => {
+    const socket = path.join(root, 'retry.sock');
+    extraTmuxSockets.push(socket);
+    execFileSync(
+      'tmux',
+      [
+        '-S',
+        socket,
+        'new-session',
+        '-d',
+        '-s',
+        'shared',
+        "sleep 0.5; printf 'shared-live\\n'; sleep 30",
+      ],
+      { stdio: 'ignore' },
+    );
+    const sessionDir = path.join(root, 'retry-session');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const started = await startOwnedEnvironment(
+      {
+        kind: 'tmux',
+        launch: {
+          kind: 'external-command',
+          command: `printf 'tmux -S ${socket} attach -t shared\\n'`,
+        },
+        connection: {
+          source: 'stdout',
+          format: 'tmux-attach-command',
+          ownership: 'attach',
+        },
+      },
+      {
+        sources: [
+          {
+            id: 'shared-pane',
+            kind: 'tmux-pane',
+            match: { target: 'shared:0.0' },
+          },
+        ],
+      },
+      sessionDir,
+      'ps-stop-retry',
+      Date.now(),
+      () => {},
+    );
+    if (started) states.push(started);
+    const state = requireTmuxState(started);
+    await waitForEvidence(state.evidencePath, ['shared-live']);
+    expect(recordCaptureHealthFailures(state)).toEqual([]);
+
+    // Fail a teardown step that runs after the pipes are already detached,
+    // which is the state the documented "run stop again" recovery starts from.
+    state.stopCommand = 'exit 1';
+    await expect(stopOwnedEnvironment(state)).rejects.toThrow();
+    expect(state.panes.every((pane) => !pane.captureAttached)).toBe(true);
+
+    state.stopCommand = undefined;
+    expect(recordCaptureHealthFailures(state, Date.now())).toEqual([]);
+    expect(state.healthFailures).toBeUndefined();
+    expect(
+      loadEvidenceEvents(state.evidencePath).some((event) => event.captureGap),
+    ).toBe(false);
+    await expect(stopOwnedEnvironment(state)).resolves.toBeUndefined();
+
+    expect(() =>
+      execFileSync('tmux', ['-S', socket, 'has-session', '-t', 'shared']),
+    ).not.toThrow();
+    states.pop();
+  }, 15000);
+
   it.skipIf(skipWithoutTmux)('never runs an attach-only stop command when start fails', async () => {
     const marker = path.join(root, 'attach-stop-marker');
     const sessionDir = path.join(root, 'attach-stop-session');

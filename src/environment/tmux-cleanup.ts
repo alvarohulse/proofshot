@@ -53,6 +53,10 @@ export async function stopTmuxEnvironment(
     )) {
       try {
         tmuxExec(state.socket.path, ['pipe-pane', '-t', pane.paneId]);
+        // A later step can still fail and leave this state to be retried, and
+        // by then an unpiped pane is this teardown's own work rather than a
+        // mid-session gap.
+        pane.captureAttached = false;
       } catch {
         // A launcher-provided shutdown may already have removed the pane.
       }
