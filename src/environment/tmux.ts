@@ -9,6 +9,7 @@ import {
 import { appendEvidenceEvent } from './evidence.js';
 import { stopTmuxEnvironment } from './tmux-cleanup.js';
 import { assertTmuxAvailable, runCommand, tmuxExec } from './tmux-command.js';
+import { assertSocketIdentity } from './tmux-identity.js';
 import {
   createTmuxState,
   startExternalTmux,
@@ -22,12 +23,57 @@ import type {
   LogsConfig,
   TmuxEnvironmentConfig,
   TmuxEnvironmentState,
+  TmuxPaneState,
 } from './types.js';
-import { terminateOwnedProcessTree } from '../utils/process.js';
+import {
+  processIdentityMatches,
+  terminateOwnedProcessTree,
+} from '../utils/process.js';
 
 export { stopTmuxEnvironment };
 
 const FALLBACK_HISTORY_LINES = 5000;
+
+/**
+ * Report the panes that stopped feeding ProofShot before teardown began.
+ *
+ * A pane whose command exits is destroyed by tmux, which closes the capture
+ * pipe as a clean EOF, so the helper shuts down exactly as it would at stop
+ * time and leaves no pid file behind. `#{pane_pipe}` is the only signal that
+ * separates the two, and it is only trustworthy before teardown detaches the
+ * pipes. When the server or socket identity no longer matches, every attached
+ * pane is treated as a gap, since nothing can be verified against a server
+ * ProofShot no longer recognizes.
+ */
+export function findUnpipedPanes(state: TmuxEnvironmentState): TmuxPaneState[] {
+  const attached = state.panes.filter((pane) => pane.captureAttached);
+  if (attached.length === 0) {
+    return [];
+  }
+  if (!processIdentityMatches(state.serverProcess)) {
+    return attached;
+  }
+  try {
+    assertSocketIdentity(state);
+  } catch {
+    return attached;
+  }
+  return attached.filter((pane) => {
+    try {
+      return (
+        tmuxExec(state.socket.path, [
+          'display-message',
+          '-p',
+          '-t',
+          pane.paneId,
+          '#{pane_pipe}',
+        ]) !== '1'
+      );
+    } catch {
+      return true;
+    }
+  });
+}
 
 /**
  * Read a pane's retained scrollback.
@@ -70,7 +116,10 @@ async function releaseUnverifiedTmux(
   connection: TmuxConnection | null,
 ): Promise<void> {
   const stopCommand =
-    config.launch.kind === 'external-command' ? config.launch.stopCommand : undefined;
+    config.launch.kind === 'external-command' &&
+    config.connection?.ownership !== 'attach'
+      ? config.launch.stopCommand
+      : undefined;
   if (stopCommand) {
     await runCommand(stopCommand, config.cwd || process.cwd()).catch(() => {});
   }

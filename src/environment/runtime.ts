@@ -3,7 +3,11 @@ import * as net from 'net';
 import * as path from 'path';
 import { appendEvidenceEvent } from './evidence.js';
 import { startFileCapture, startProcessCapture } from './workers.js';
-import { startTmuxEnvironment, stopTmuxEnvironment } from './tmux.js';
+import {
+  findUnpipedPanes,
+  startTmuxEnvironment,
+  stopTmuxEnvironment,
+} from './tmux.js';
 import type {
   EnvironmentConfig,
   EnvironmentState,
@@ -104,13 +108,19 @@ function assertSourcesMatchEnvironment(
 }
 
 /**
- * Verify every capture worker survived to the end of the session.
+ * Verify every configured source recorded output for the whole session.
  *
- * A worker removes its pid file on each clean exit, so a pid file that outlives
- * its recorded process identity is the canonical signal that a source stopped
- * recording mid-session. The evidence it produced looks complete but is not, so
- * each gap is written into canonical evidence, recorded on the state that
- * teardown may have to persist, and returned for the caller to surface.
+ * Two signals are needed because the workers fail in two different shapes. A
+ * worker removes its pid file on each clean exit, so a pid file that outlives
+ * its recorded process identity means the helper itself was killed. A tmux
+ * pane that exits instead closes its capture pipe as a clean EOF, so the
+ * helper shuts down normally and only the pane's own `#{pane_pipe}` state
+ * still distinguishes a dead source from a healthy one — which is why this
+ * runs before teardown detaches those pipes.
+ *
+ * Either way the evidence produced looks complete but is not, so each gap is
+ * written into canonical evidence, recorded on the state that teardown may
+ * have to persist, and returned for the caller to surface.
  */
 export function recordCaptureHealthFailures(
   state: EnvironmentState | null | undefined,
@@ -121,47 +131,72 @@ export function recordCaptureHealthFailures(
   if (!state || state.kind === 'launcher') {
     return [];
   }
-  const captures = state.kind === 'tmux' ? state.captures : state.processes;
+  const target = state;
   const failures: string[] = [];
-  for (const capture of captures) {
-    if (!capture.pidFile) continue;
-    if (processIdentityMatches(capture.process)) continue;
-    if (!fs.existsSync(capture.pidFile)) continue;
-
-    const source = state.sources.find(
-      (candidate) => candidate.id === capture.sourceId,
-    );
-    failures.push(
-      `Capture for "${capture.sourceId}" stopped before "proofshot stop"${
-        source ? ` — logs/${path.basename(source.logPath)} is incomplete` : ''
-      }. Helper diagnostics: ${capture.pidFile}.stderr`,
-    );
+  const reported = new Set<string>();
+  const recordGap = (sourceId: string, summary: string, evidenceText: string): void => {
+    reported.add(sourceId);
+    failures.push(summary);
+    const source = target.sources.find((candidate) => candidate.id === sourceId);
     const now = Date.now();
     try {
-      appendEvidenceEvent(state.evidencePath, {
+      appendEvidenceEvent(target.evidencePath, {
         version: 1,
         origin: 'environment',
         group: source?.group || 'environment',
-        sourceId: capture.sourceId,
-        sourceTitle: source?.title || capture.sourceId,
+        sourceId,
+        sourceTitle: source?.title || sourceId,
         stream: source?.stream || 'stderr',
         segment: 'live',
         timestamp: new Date(now).toISOString(),
         relativeTimeSec:
           startTimeMs === undefined ? null : Math.max(0, (now - startTimeMs) / 1000),
-        text: '[capture stopped before the session ended; later output was not recorded]',
+        text: evidenceText,
         captureGap: true,
       });
     } catch (error) {
       failures.push(
-        `Could not record the capture gap for "${capture.sourceId}" in ${
-          state.evidencePath
+        `Could not record the capture gap for "${sourceId}" in ${
+          target.evidencePath
         }: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  };
+  const incompleteLog = (sourceId: string): string => {
+    const source = target.sources.find((candidate) => candidate.id === sourceId);
+    return source ? ` — logs/${path.basename(source.logPath)} is incomplete` : '';
+  };
+
+  const captures = target.kind === 'tmux' ? target.captures : target.processes;
+  for (const capture of captures) {
+    if (!capture.pidFile) continue;
+    if (processIdentityMatches(capture.process)) continue;
+    if (!fs.existsSync(capture.pidFile)) continue;
+
+    recordGap(
+      capture.sourceId,
+      `Capture for "${capture.sourceId}" stopped before "proofshot stop"${incompleteLog(
+        capture.sourceId,
+      )}. Helper diagnostics: ${capture.pidFile}.stderr`,
+      '[capture stopped before the session ended; later output was not recorded]',
+    );
   }
+
+  if (target.kind === 'tmux') {
+    for (const pane of findUnpipedPanes(target)) {
+      if (reported.has(pane.sourceId)) continue;
+      recordGap(
+        pane.sourceId,
+        `tmux pane ${pane.paneId} for "${pane.sourceId}" exited or lost its capture pipe before "proofshot stop"${incompleteLog(
+          pane.sourceId,
+        )}.`,
+        '[tmux pane stopped feeding ProofShot before the session ended; later output was not recorded]',
+      );
+    }
+  }
+
   if (failures.length > 0) {
-    state.healthFailures = failures;
+    target.healthFailures = failures;
   }
   return failures;
 }

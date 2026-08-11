@@ -267,6 +267,84 @@ describe('owned environment capture', () => {
     states.pop();
   }, 15000);
 
+  it.skipIf(skipWithoutTmux)('reports a capture gap when a tmux pane dies mid-session', async () => {
+    const sessionDir = path.join(root, 'pane-death-session');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const started = await startOwnedEnvironment(
+      {
+        kind: 'tmux',
+        launch: {
+          kind: 'panes',
+          panes: [
+            { id: 'api', command: "printf 'api-live\\n'; sleep 30" },
+            { id: 'web', command: "printf 'web-live\\n'; sleep 30" },
+          ],
+        },
+      },
+      {},
+      sessionDir,
+      'ps-pane-death',
+      Date.now(),
+      () => {},
+    );
+    if (started) states.push(started);
+    const state = requireTmuxState(started);
+    await waitForEvidence(state.evidencePath, ['api-live', 'web-live']);
+    expect(recordCaptureHealthFailures(state)).toEqual([]);
+
+    const apiPane = state.panes.find((pane) => pane.sourceId === 'api');
+    const apiCapture = state.captures.find((capture) => capture.sourceId === 'api');
+    if (!apiPane || !apiCapture) throw new Error('expected a recorded api pane');
+    execFileSync(
+      'tmux',
+      ['-S', state.socket.path, 'kill-pane', '-t', apiPane.paneId],
+      { stdio: 'ignore' },
+    );
+    // The pipe helper exits cleanly on the pane's EOF, so its pid file is gone
+    // and only the pane's own pipe state can still reveal the gap.
+    await waitFor(() => !fs.existsSync(apiCapture.pidFile));
+
+    const failures = recordCaptureHealthFailures(state, Date.now());
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('"api"');
+    expect(state.healthFailures).toEqual(failures);
+    expect(
+      loadEvidenceEvents(state.evidencePath).filter(
+        (event) => event.captureGap && event.sourceId === 'api',
+      ),
+    ).toHaveLength(1);
+
+    await stopOwnedEnvironment(state);
+    states.pop();
+  }, 15000);
+
+  it.skipIf(skipWithoutTmux)('never runs an attach-only stop command when start fails', async () => {
+    const marker = path.join(root, 'attach-stop-marker');
+    const sessionDir = path.join(root, 'attach-stop-session');
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    await expect(
+      startOwnedEnvironment(
+        {
+          kind: 'tmux',
+          launch: {
+            kind: 'external-command',
+            command: "printf 'not-json\\n'",
+            stopCommand: `printf 'ran\\n' > ${marker}`,
+          },
+          connection: { format: 'json', ownership: 'attach' },
+        },
+        { sources: [] },
+        sessionDir,
+        'ps-attach-stop',
+        Date.now(),
+        () => {},
+      ),
+    ).rejects.toThrow();
+
+    expect(fs.existsSync(marker)).toBe(false);
+  }, 15000);
+
   it('reports a capture gap when a capture worker dies mid-session', async () => {
     const sessionDir = path.join(root, 'capture-health-session');
     fs.mkdirSync(sessionDir, { recursive: true });
