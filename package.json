@@ -10,6 +10,7 @@
   "types": "./dist/src/index.d.ts",
   "scripts": {
     "build": "tsup",
+    "typecheck": "tsc --noEmit",
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:ffmpeg": "node test/ffmpeg-trim.mjs",

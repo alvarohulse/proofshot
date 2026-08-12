@@ -59,8 +59,11 @@ export async function startTmuxEnvironment(
   fs.mkdirSync(captureDir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(evidencePath, '', { flag: 'a', mode: 0o600 });
 
-  let state: TmuxEnvironmentState | null = null;
-  let pendingLauncher: LauncherEnvironmentState | null = null;
+  // Both are assigned from the launch callbacks below, which control-flow
+  // analysis cannot see; the assertions keep the declared unions in scope so
+  // the cleanup guards narrow to a real state instead of `never`.
+  let state = null as TmuxEnvironmentState | null;
+  let pendingLauncher = null as LauncherEnvironmentState | null;
   let connection: TmuxConnection;
   try {
     connection =

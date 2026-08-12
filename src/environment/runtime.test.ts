@@ -37,7 +37,7 @@ describe('owned environment capture', () => {
   it('captures named tmux panes as history and live PTY evidence', async () => {
     const sessionDir = path.join(root, 'session');
     fs.mkdirSync(sessionDir, { recursive: true });
-    let latestState: EnvironmentState | null = null;
+    let latestState = null as EnvironmentState | null;
     const state = await startOwnedEnvironment(
       {
         kind: 'tmux',
@@ -193,7 +193,7 @@ describe('owned environment capture', () => {
   it('persists and cleans a timed-out external launcher identity', async () => {
     const sessionDir = path.join(root, 'timed-out-launcher');
     fs.mkdirSync(sessionDir, { recursive: true });
-    let pendingState: EnvironmentState | null = null;
+    let pendingState = null as EnvironmentState | null;
 
     await expect(
       startOwnedEnvironment(
@@ -408,7 +408,7 @@ describe('owned environment capture', () => {
   it('cleans process ownership when readiness fails', async () => {
     const sessionDir = path.join(root, 'readiness-session');
     fs.mkdirSync(sessionDir, { recursive: true });
-    let latestState: EnvironmentState | null = null;
+    let latestState = null as EnvironmentState | null;
 
     await expect(
       startOwnedEnvironment(
