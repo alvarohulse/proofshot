@@ -15,7 +15,7 @@ npm run dev            # Watch mode build
 ```
 src/
 ├── cli.ts                  # Commander.js command registration
-├── commands/               # One file per CLI command (install, start, stop, exec, diff, pr, clean)
+├── commands/               # One file per CLI command (install, start, stop, exec, diff, pr, doctor, session, clean)
 ├── browser/                # agent-browser CLI wrappers (session, capture, interact, navigate)
 ├── server/                 # Dev server detection, startup, port waiting
 ├── session/state.ts        # .session.json lifecycle (save/load/clear)

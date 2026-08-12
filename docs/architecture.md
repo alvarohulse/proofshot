@@ -34,18 +34,7 @@ The choice of agent-browser as the browser automation layer is the most importan
 
 **Built-in recording.** Playwright's screencast API is exposed directly, so video capture works without ffmpeg. Finalization uses ffmpeg to trim the WebM capture and convert it to H.264 MP4.
 
-All browser commands in ProofShot go through a single function:
-
-```typescript
-// src/utils/exec.ts
-export function ab(command: string, timeoutMs = 30000): string {
-  return execSync(`agent-browser ${command}`, {
-    encoding: 'utf-8',
-    timeout: timeoutMs,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }).trim();
-}
-```
+All browser commands in ProofShot go through a single function — `ab()` in `src/utils/exec.ts`. It builds the `agent-browser` invocation (config path, session name), runs it with `execSync`, and wraps any failure in a `ProofShotError` carrying the command and stderr. Callers pass either a timeout or a per-call options object; see the source for the current signature.
 
 ## Session lifecycle
 
@@ -167,6 +156,8 @@ Adding support for a new language is one entry in the `PATTERNS` array.
 ```
 src/
 ├── cli.ts                    # Commander.js command registration
+├── index.ts                  # Programmatic (library) entry point
+├── version.ts                # Package version resolution
 ├── commands/
 │   ├── install.ts            # Tool detection + skill installation
 │   ├── start.ts              # Session init: server, browser, recording
@@ -174,26 +165,45 @@ src/
 │   ├── exec.ts               # Action logging + agent-browser passthrough
 │   ├── diff.ts               # Visual regression (screenshot comparison)
 │   ├── pr.ts                 # GitHub PR description formatting
+│   ├── doctor.ts             # Environment diagnostics (config, binaries, session)
+│   ├── session.ts            # Registered session list/cleanup subcommands
 │   └── clean.ts              # Artifact directory removal
 ├── browser/
 │   ├── session.ts            # Browser open/close, console collection
 │   ├── capture.ts            # Recording start/stop, screenshots, diffs
 │   ├── navigate.ts           # URL navigation, snapshot
-│   └── interact.ts           # Click, fill, type, scroll, press
+│   ├── interact.ts           # Click, fill, type, scroll, press
+│   ├── discovery.ts          # Browser executable discovery
+│   └── runtime.ts            # agent-browser socket dir + daemon process identity
 ├── server/
 │   └── start.ts              # Dev server spawn + port waiting
+├── environment/
+│   ├── runtime.ts            # Multi-process environment start/stop
+│   ├── tmux.ts               # tmux-backed process panes
+│   ├── workers.ts            # Process/file log capture workers
+│   ├── evidence.ts           # Log normalization + evidence event stream
+│   └── types.ts              # Environment config/state types
 ├── session/
-│   └── state.ts              # .session.json read/write/clear
+│   ├── state.ts              # .session.json read/write/clear
+│   ├── registry.ts           # Cross-project registry of live sessions
+│   ├── lifecycle.ts          # Owned browser/server teardown, failed-start cleanup
+│   ├── metadata.ts           # metadata.json (branch, commit) for PR matching
+│   ├── manifest.ts           # artifact-manifest.json + git provenance
+│   └── publication.ts        # Manifest-driven artifact selection for publishing
 ├── artifacts/
 │   ├── viewer.ts             # Interactive HTML viewer generation
 │   ├── summary.ts            # Markdown summary generation
+│   ├── evidence.ts           # Canonical evidence + verdict computation
 │   ├── pr-format.ts          # PR description formatting
 │   └── bundle.ts             # Artifact bundling
 └── utils/
-    ├── config.ts             # Config file search + merge
+    ├── config.ts             # Config file search + merge, viewport normalization
     ├── exec.ts               # ab() and exec() shell wrappers
     ├── error-patterns.ts     # Multi-language regex patterns
     ├── port.ts               # isPortOpen, waitForPort
+    ├── process.ts            # Process identity, spawning, tree termination
+    ├── github.ts             # GitHub REST API helpers
+    ├── token-usage.ts        # Token usage estimation
     └── skills.ts             # Skill file bundling
 ```
 
