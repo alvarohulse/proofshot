@@ -356,6 +356,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
 
   // Step 7: Generate SUMMARY.md
+  const viewport = session.viewport || config.viewport || { width: 1280, height: 720 };
   const summaryPath = path.join(sessionDir, 'SUMMARY.md');
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),
@@ -363,7 +364,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     serverCommand: session.serverCommand,
     port: session.port,
     headless: session.headless ?? config.headless ?? true,
-    viewport: session.viewport || config.viewport || { width: 1280, height: 720 },
+    viewport,
     videoPath: session.videoPath,
     screenshots,
     consoleErrors,
@@ -428,6 +429,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     serverCommand: session.serverCommand,
     durationSec: canonicalDurationSec,
     videoFilename: fs.existsSync(session.videoPath) ? path.basename(session.videoPath) : null,
+    viewport,
     consoleErrorCount,
     consoleEvidenceAvailable,
     serverErrorCount,
