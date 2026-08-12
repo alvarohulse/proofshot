@@ -3,7 +3,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
-import { loadConfig } from '../utils/config.js';
+import { loadConfig, normalizeViewport } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
@@ -356,7 +356,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
 
   // Step 7: Generate SUMMARY.md
-  const viewport = session.viewport || config.viewport || { width: 1280, height: 720 };
+  const viewport =
+    normalizeViewport(session.viewport) ||
+    normalizeViewport(config.viewport) || { width: 1280, height: 720 };
   const summaryPath = path.join(sessionDir, 'SUMMARY.md');
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),

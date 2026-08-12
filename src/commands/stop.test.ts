@@ -26,7 +26,10 @@ const mocks = vi.hoisted(() => ({
   execFileSync: vi.fn(),
 }));
 
-vi.mock('../utils/config.js', () => ({ loadConfig: mocks.loadConfig }));
+vi.mock('../utils/config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/config.js')>()),
+  loadConfig: mocks.loadConfig,
+}));
 vi.mock('../session/state.js', () => ({
   loadSession: mocks.loadSession,
   clearSession: mocks.clearSession,

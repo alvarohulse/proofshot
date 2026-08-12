@@ -183,4 +183,33 @@ describe('canonical evidence viewer', () => {
       width: 100%;
       height: auto;`);
   });
+
+  it('omits video dimensions when the recorded viewport is not usable', () => {
+    const render = (viewport: unknown) =>
+      generateViewer({
+        description: 'video sizing fixture',
+        serverCommand: null,
+        durationSec: 1,
+        videoFilename: 'recording.webm',
+        viewport: viewport as { width: number; height: number },
+        entries: [],
+        consoleErrorCount: 0,
+        serverErrorCount: 0,
+      });
+
+    for (const viewport of [
+      { width: undefined, height: undefined },
+      { width: 0, height: 0 },
+      { width: -1024, height: 768 },
+      { width: '1024" onerror="alert(1)', height: 768 },
+    ]) {
+      const html = render(viewport);
+      expect(html).toContain('<video src="./recording.webm" controls>');
+      expect(html).not.toContain('onerror');
+    }
+
+    expect(render({ width: '1024', height: '768.4' })).toContain(
+      'width="1024" height="768"',
+    );
+  });
 });

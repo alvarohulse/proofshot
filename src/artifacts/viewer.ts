@@ -7,7 +7,7 @@ import type {
   Verdict,
 } from './evidence.js';
 import type { EvidenceEvent } from '../environment/types.js';
-import type { ViewportConfig } from '../utils/config.js';
+import { normalizeViewport, type ViewportConfig } from '../utils/config.js';
 
 export interface TimestampedLogEntry {
   text: string;
@@ -319,8 +319,9 @@ export function generateViewer(data: ViewerData): string {
     : '';
 
   const hasVideo = !!data.videoFilename;
-  const videoDimensions = data.viewport
-    ? ` width="${data.viewport.width}" height="${data.viewport.height}"`
+  const recordedViewport = normalizeViewport(data.viewport);
+  const videoDimensions = recordedViewport
+    ? ` width="${recordedViewport.width}" height="${recordedViewport.height}"`
     : '';
 
   // Build marker data for the scrub bar

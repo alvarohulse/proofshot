@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { loadConfig } from '../utils/config.js';
+import { loadConfig, normalizeViewport } from '../utils/config.js';
 import {
   ab,
   buildAgentBrowserCommand,
@@ -341,10 +341,12 @@ export async function execCommand(args: string[]): Promise<void> {
       const vpJson = ab("eval 'JSON.stringify({width: window.innerWidth, height: window.innerHeight})'", {
         session: session.sessionName,
       });
-      const vp = JSON.parse(vpJson);
-      session.viewport = { width: vp.width, height: vp.height };
-      saveSession(session, controlDir);
-      registerSession(session);
+      const vp = normalizeViewport(JSON.parse(vpJson));
+      if (vp) {
+        session.viewport = vp;
+        saveSession(session, controlDir);
+        registerSession(session);
+      }
     } catch {
       // Non-critical — viewport cache stays stale
     }
