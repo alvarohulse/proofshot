@@ -319,6 +319,8 @@ export function generateViewer(data: ViewerData): string {
     : '';
 
   const hasVideo = !!data.videoFilename;
+  // Intrinsic dimensions let the browser reserve the recorded aspect ratio on the first frame
+  // instead of the 300x150 unloaded-media fallback. Pairs with `height: auto` in `.video-container video`.
   const recordedViewport = normalizeViewport(data.viewport);
   const videoDimensions = recordedViewport
     ? ` width="${recordedViewport.width}" height="${recordedViewport.height}"`
