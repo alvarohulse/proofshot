@@ -207,6 +207,7 @@ describe('stopCommand retryability', () => {
       consoleEvidenceAvailable: true,
       consoleErrorCount: 0,
       consoleOutput: 'console evidence',
+      viewport: session.viewport,
     });
     expect(mocks.clearSession).toHaveBeenCalledWith(path.join(root, 'proofshot-artifacts'));
     expect(fs.readFileSync(summaryPath, 'utf-8')).toBe(summaryBefore);

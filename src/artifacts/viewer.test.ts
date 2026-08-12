@@ -165,4 +165,22 @@ describe('canonical evidence viewer', () => {
     const inlineScript = html.match(/<script>([\s\S]*)<\/script>/)?.[1] || '';
     expect(inlineScript).not.toContain('\u2028');
   });
+
+  it('reserves the recorded video aspect ratio before metadata loads', () => {
+    const html = generateViewer({
+      description: 'video sizing fixture',
+      serverCommand: null,
+      durationSec: 1,
+      videoFilename: 'recording.webm',
+      viewport: { width: 1024, height: 768 },
+      entries: [],
+      consoleErrorCount: 0,
+      serverErrorCount: 0,
+    });
+
+    expect(html).toContain('width="1024" height="768"');
+    expect(html).toContain(`.video-container video {
+      width: 100%;
+      height: auto;`);
+  });
 });
