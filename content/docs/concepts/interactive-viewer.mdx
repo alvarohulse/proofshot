@@ -50,7 +50,7 @@ Overlays are scaled from the original viewport size to the current video display
 
 **Sync.** Playing the video highlights current actions and timed evidence rows. Untimed or non-finite rows cannot seek. If the action timeline extends beyond the recording, the viewer warns instead of shortening the timeline and clamps seeks to available media.
 
-**Responsive.** On smaller screens, the video and timeline stack vertically.
+**Responsive.** On desktop the viewer fits the browser window instead of scrolling the page: the header is capped at half the window height (scrolling internally if it overflows) and the video is sized to fit the remaining space, so the whole recording, its native controls, and the scrub bar stay visible at the recorded aspect ratio. On narrow screens (768px and below) the video and timeline stack vertically and the page scrolls normally.
 
 ## How overlays work
 

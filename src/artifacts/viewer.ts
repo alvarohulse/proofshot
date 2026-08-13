@@ -319,12 +319,20 @@ export function generateViewer(data: ViewerData): string {
     : '';
 
   const hasVideo = !!data.videoFilename;
-  // Intrinsic dimensions let the browser reserve the recorded aspect ratio on the first frame
-  // instead of the 300x150 unloaded-media fallback. Pairs with `height: auto` in `.video-container video`.
+  // The recorded viewport is the only aspect-ratio source before metadata loads, so it feeds
+  // the intrinsic `width`/`height` attributes, the `.video-fit` container ratio, and the
+  // `recordedVideoSize` fallback used to fit the video. Without it the browser reserves the
+  // 300x150 unloaded-media box; legacy sessions lack it and only fit once metadata arrives.
   const recordedViewport = normalizeViewport(data.viewport);
   const videoDimensions = recordedViewport
     ? ` width="${recordedViewport.width}" height="${recordedViewport.height}"`
     : '';
+  const videoContainerAttributes = recordedViewport
+    ? ` class="video-container video-fit" style="aspect-ratio: ${recordedViewport.width} / ${recordedViewport.height}"`
+    : ' class="video-container"';
+  const recordedVideoSizeJs = recordedViewport
+    ? `{ width: ${recordedViewport.width}, height: ${recordedViewport.height} }`
+    : 'null';
 
   // Build marker data for the scrub bar
   const markersJson = serializeInlineJson(
@@ -361,7 +369,7 @@ export function generateViewer(data: ViewerData): string {
 
   const videoPanelHtml = hasVideo
     ? `<div class="video-wrapper">
-        <div class="video-container">
+        <div${videoContainerAttributes}>
           <video src="./${escapeHtml(data.videoFilename!)}"${videoDimensions} controls></video>
           <div class="video-overlay"></div>
         </div>
@@ -474,10 +482,16 @@ export function generateViewer(data: ViewerData): string {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
       background: #0d1117;
       color: #c9d1d9;
-      min-height: 100vh;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     .header {
+      flex: 0 0 auto;
+      max-height: 50%;
+      overflow-y: auto;
       padding: 24px 32px;
       border-bottom: 1px solid #21262d;
       background: #161b22;
@@ -687,15 +701,15 @@ export function generateViewer(data: ViewerData): string {
 
     .viewer {
       display: flex;
-      height: calc(100vh - 180px);
-      min-height: 400px;
+      flex: 1 1 auto;
+      min-height: 0;
     }
 
     .video-panel {
       flex: 0 0 62%;
       padding: 16px;
       display: flex;
-      align-items: flex-start;
+      align-items: stretch;
       justify-content: center;
       background: #0d1117;
       overflow: hidden;
@@ -703,6 +717,9 @@ export function generateViewer(data: ViewerData): string {
 
     .video-wrapper {
       width: 100%;
+      max-width: 100%;
+      height: 100%;
+      min-height: 0;
       display: flex;
       flex-direction: column;
     }
@@ -712,12 +729,23 @@ export function generateViewer(data: ViewerData): string {
       width: 100%;
     }
 
+    .video-container.video-fit {
+      flex: 0 0 auto;
+      min-height: 0;
+      width: 100%;
+    }
+
     .video-container video {
       width: 100%;
       height: auto;
       border-radius: 8px 8px 0 0;
       background: #000;
       display: block;
+    }
+
+    .video-container.video-fit video {
+      width: 100%;
+      height: 100%;
     }
 
     .video-overlay {
@@ -734,6 +762,7 @@ export function generateViewer(data: ViewerData): string {
     /* Scrub bar */
     .scrub-bar {
       position: relative;
+      flex: 0 0 auto;
       width: 100%;
       padding: 8px 0 6px;
       background: #161b22;
@@ -1144,8 +1173,24 @@ export function generateViewer(data: ViewerData): string {
     .timeline-panel::-webkit-scrollbar-thumb:hover { background: #484f58; }
 
     @media (max-width: 768px) {
+      body {
+        height: auto;
+        min-height: 100vh;
+        display: block;
+        overflow: auto;
+      }
       .viewer {
         flex-direction: column;
+        height: auto;
+      }
+      .video-wrapper {
+        height: auto;
+      }
+      .video-container.video-fit {
+        flex: none;
+        width: 100%;
+      }
+      .video-container.video-fit video {
         height: auto;
       }
       .video-panel, .timeline-panel {
@@ -1248,6 +1293,7 @@ ${stepsHtml}
       const isClamped = desc.classList.contains('clamped');
       desc.classList.toggle('clamped');
       btn.textContent = isClamped ? 'Show less' : 'Show more';
+      fitVideoToAvailableSpace();
     }
     initDescription();
 
@@ -1278,6 +1324,10 @@ ${stepsHtml}
     const steps = document.querySelectorAll('.step');
     const timelinePanel = document.querySelector('.timeline-panel');
     const overlay = document.querySelector('.video-overlay');
+    const videoContainer = document.querySelector('.video-container');
+    const videoWrapper = document.querySelector('.video-wrapper');
+    const scrubBar = document.querySelector('.scrub-bar');
+    const recordedVideoSize = ${recordedVideoSizeJs};
     const entries = ${entriesJson};
     let duration = ${timelineDurationSec};
     const markers = ${markersJson};
@@ -1288,6 +1338,34 @@ ${stepsHtml}
     const scrubPlayhead = document.getElementById('scrubPlayhead');
     const scrubTooltip = document.getElementById('scrubTooltip');
     const scrubMarkers = document.querySelectorAll('.scrub-marker');
+
+    // --- Video sizing ---
+    // The wrapper is the shared-width card: the aspect ratio drives the container
+    // height, and the fitted width is applied to the wrapper so the scrub bar matches.
+    function videoIntrinsicSize() {
+      if (video && video.videoWidth > 0 && video.videoHeight > 0) {
+        return { width: video.videoWidth, height: video.videoHeight };
+      }
+      return recordedVideoSize;
+    }
+
+    function fitVideoToAvailableSpace() {
+      if (!video || !videoContainer || !videoWrapper) return;
+      const size = videoIntrinsicSize();
+      if (!size) return;
+      videoContainer.classList.add('video-fit');
+      videoContainer.style.aspectRatio = size.width + ' / ' + size.height;
+      videoWrapper.style.width = '';
+      if (window.matchMedia('(max-width: 768px)').matches) return;
+      const availableWidth = videoWrapper.clientWidth;
+      const availableHeight = videoWrapper.clientHeight - (scrubBar ? scrubBar.offsetHeight : 0);
+      if (availableWidth <= 0 || availableHeight <= 0) return;
+      const fitted = Math.min(availableWidth, (availableHeight * size.width) / size.height);
+      videoWrapper.style.width = Math.floor(fitted) + 'px';
+    }
+
+    fitVideoToAvailableSpace();
+    window.addEventListener('resize', fitVideoToAvailableSpace);
 
     // --- Toggle state ---
     const toggleOverlays = document.getElementById('toggle-overlays');
@@ -1666,6 +1744,7 @@ ${stepsHtml}
 
       // Preserve the canonical action timeline when media is shorter.
       video.addEventListener('loadedmetadata', () => {
+        fitVideoToAvailableSpace();
         if (video.duration && isFinite(video.duration)) {
           duration = Math.max(duration, video.duration);
           scrubMarkers.forEach(m => {
