@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { CanonicalEvidence, Verdict } from './evidence.js';
 import { generateViewer } from './viewer.js';
 
+/** Body of the first stylesheet rule for `selector`, so assertions can target single declarations. */
+function styleRule(html: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = html.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+  if (!match) throw new Error(`No stylesheet rule found for "${selector}"`);
+  return match[1];
+}
+
 describe('canonical evidence viewer', () => {
   it('keeps untimed rows non-clickable and the action timeline authoritative', () => {
     const evidence: CanonicalEvidence = {
@@ -182,21 +190,33 @@ describe('canonical evidence viewer', () => {
     expect(html).toContain(
       '<div class="video-container video-fit" style="aspect-ratio: 1024 / 768">',
     );
-    expect(html).toContain(`.video-container.video-fit video {
-      width: 100%;
-      height: 100%;`);
-    expect(html).toContain(`body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
-      background: #0d1117;
-      color: #c9d1d9;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;`);
-    expect(html).toContain(`.viewer {
-      display: flex;
-      flex: 1 1 auto;
-      min-height: 0;`);
+    expect(html).toContain('const recordedVideoSize = { width: 1024, height: 768 };');
+    expect(styleRule(html, 'body')).toContain('height: 100vh');
+    expect(styleRule(html, 'body')).toContain('overflow: hidden');
+    expect(styleRule(html, '.viewer')).toContain('flex: 1 1 auto');
+    expect(styleRule(html, '.viewer')).toContain('min-height: 0');
+    expect(styleRule(html, '.video-container.video-fit')).toContain('width: 100%');
+    expect(styleRule(html, '.video-container.video-fit video')).toContain(
+      'height: 100%',
+    );
+  });
+
+  it('keeps the scrub bar aligned with the fitted video width', () => {
+    const html = generateViewer({
+      description: 'video sizing fixture',
+      serverCommand: null,
+      durationSec: 1,
+      videoFilename: 'recording.webm',
+      viewport: { width: 1024, height: 768 },
+      entries: [],
+      consoleErrorCount: 0,
+      serverErrorCount: 0,
+    });
+
+    expect(html).toContain("videoWrapper.style.width = Math.floor(fitted) + 'px';");
+    expect(styleRule(html, '.scrub-bar')).toContain('width: 100%');
+    expect(styleRule(html, '.header')).toContain('max-height: 50%');
+    expect(styleRule(html, '.header')).toContain('overflow-y: auto');
   });
 
   it('omits video dimensions when the recorded viewport is not usable', () => {

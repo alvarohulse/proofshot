@@ -328,6 +328,9 @@ export function generateViewer(data: ViewerData): string {
   const videoContainerAttributes = recordedViewport
     ? ` class="video-container video-fit" style="aspect-ratio: ${recordedViewport.width} / ${recordedViewport.height}"`
     : ' class="video-container"';
+  const recordedVideoSizeJs = recordedViewport
+    ? `{ width: ${recordedViewport.width}, height: ${recordedViewport.height} }`
+    : 'null';
 
   // Build marker data for the scrub bar
   const markersJson = serializeInlineJson(
@@ -485,6 +488,8 @@ export function generateViewer(data: ViewerData): string {
 
     .header {
       flex: 0 0 auto;
+      max-height: 50%;
+      overflow-y: auto;
       padding: 24px 32px;
       border-bottom: 1px solid #21262d;
       background: #161b22;
@@ -710,11 +715,11 @@ export function generateViewer(data: ViewerData): string {
 
     .video-wrapper {
       width: 100%;
+      max-width: 100%;
       height: 100%;
       min-height: 0;
       display: flex;
       flex-direction: column;
-      align-items: center;
     }
 
     .video-container {
@@ -723,10 +728,9 @@ export function generateViewer(data: ViewerData): string {
     }
 
     .video-container.video-fit {
-      flex: 1 1 auto;
+      flex: 0 0 auto;
       min-height: 0;
-      width: auto;
-      max-width: 100%;
+      width: 100%;
     }
 
     .video-container video {
@@ -1287,6 +1291,7 @@ ${stepsHtml}
       const isClamped = desc.classList.contains('clamped');
       desc.classList.toggle('clamped');
       btn.textContent = isClamped ? 'Show less' : 'Show more';
+      fitVideoToAvailableSpace();
     }
     initDescription();
 
@@ -1318,6 +1323,9 @@ ${stepsHtml}
     const timelinePanel = document.querySelector('.timeline-panel');
     const overlay = document.querySelector('.video-overlay');
     const videoContainer = document.querySelector('.video-container');
+    const videoWrapper = document.querySelector('.video-wrapper');
+    const scrubBar = document.querySelector('.scrub-bar');
+    const recordedVideoSize = ${recordedVideoSizeJs};
     const entries = ${entriesJson};
     let duration = ${timelineDurationSec};
     const markers = ${markersJson};
@@ -1328,6 +1336,34 @@ ${stepsHtml}
     const scrubPlayhead = document.getElementById('scrubPlayhead');
     const scrubTooltip = document.getElementById('scrubTooltip');
     const scrubMarkers = document.querySelectorAll('.scrub-marker');
+
+    // --- Video sizing ---
+    // The wrapper is the shared-width card: the aspect ratio drives the container
+    // height, and the fitted width is applied to the wrapper so the scrub bar matches.
+    function videoIntrinsicSize() {
+      if (video && video.videoWidth > 0 && video.videoHeight > 0) {
+        return { width: video.videoWidth, height: video.videoHeight };
+      }
+      return recordedVideoSize;
+    }
+
+    function fitVideoToAvailableSpace() {
+      if (!video || !videoContainer || !videoWrapper) return;
+      const size = videoIntrinsicSize();
+      if (!size) return;
+      videoContainer.classList.add('video-fit');
+      videoContainer.style.aspectRatio = size.width + ' / ' + size.height;
+      videoWrapper.style.width = '';
+      if (window.matchMedia('(max-width: 768px)').matches) return;
+      const availableWidth = videoWrapper.clientWidth;
+      const availableHeight = videoWrapper.clientHeight - (scrubBar ? scrubBar.offsetHeight : 0);
+      if (availableWidth <= 0 || availableHeight <= 0) return;
+      const fitted = Math.min(availableWidth, (availableHeight * size.width) / size.height);
+      videoWrapper.style.width = Math.floor(fitted) + 'px';
+    }
+
+    fitVideoToAvailableSpace();
+    window.addEventListener('resize', fitVideoToAvailableSpace);
 
     // --- Toggle state ---
     const toggleOverlays = document.getElementById('toggle-overlays');
@@ -1673,14 +1709,6 @@ ${stepsHtml}
 
     // Highlight active step as video plays (only if video exists)
     if (video) {
-      function fitVideoToAvailableSpace() {
-        if (!videoContainer || video.videoWidth <= 0 || video.videoHeight <= 0) return;
-        videoContainer.classList.add('video-fit');
-        videoContainer.style.aspectRatio = video.videoWidth + ' / ' + video.videoHeight;
-      }
-
-      if (video.readyState >= 1) fitVideoToAvailableSpace();
-
       video.addEventListener('timeupdate', () => {
         const t = video.currentTime;
         let activeStep = null;
