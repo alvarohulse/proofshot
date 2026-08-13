@@ -179,9 +179,24 @@ describe('canonical evidence viewer', () => {
     });
 
     expect(html).toContain('width="1024" height="768"');
-    expect(html).toContain(`.video-container video {
+    expect(html).toContain(
+      '<div class="video-container video-fit" style="aspect-ratio: 1024 / 768">',
+    );
+    expect(html).toContain(`.video-container.video-fit video {
       width: 100%;
-      height: auto;`);
+      height: 100%;`);
+    expect(html).toContain(`body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;`);
+    expect(html).toContain(`.viewer {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;`);
   });
 
   it('omits video dimensions when the recorded viewport is not usable', () => {

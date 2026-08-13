@@ -325,6 +325,9 @@ export function generateViewer(data: ViewerData): string {
   const videoDimensions = recordedViewport
     ? ` width="${recordedViewport.width}" height="${recordedViewport.height}"`
     : '';
+  const videoContainerAttributes = recordedViewport
+    ? ` class="video-container video-fit" style="aspect-ratio: ${recordedViewport.width} / ${recordedViewport.height}"`
+    : ' class="video-container"';
 
   // Build marker data for the scrub bar
   const markersJson = serializeInlineJson(
@@ -361,7 +364,7 @@ export function generateViewer(data: ViewerData): string {
 
   const videoPanelHtml = hasVideo
     ? `<div class="video-wrapper">
-        <div class="video-container">
+        <div${videoContainerAttributes}>
           <video src="./${escapeHtml(data.videoFilename!)}"${videoDimensions} controls></video>
           <div class="video-overlay"></div>
         </div>
@@ -474,10 +477,14 @@ export function generateViewer(data: ViewerData): string {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
       background: #0d1117;
       color: #c9d1d9;
-      min-height: 100vh;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
     }
 
     .header {
+      flex: 0 0 auto;
       padding: 24px 32px;
       border-bottom: 1px solid #21262d;
       background: #161b22;
@@ -687,15 +694,15 @@ export function generateViewer(data: ViewerData): string {
 
     .viewer {
       display: flex;
-      height: calc(100vh - 180px);
-      min-height: 400px;
+      flex: 1 1 auto;
+      min-height: 0;
     }
 
     .video-panel {
       flex: 0 0 62%;
       padding: 16px;
       display: flex;
-      align-items: flex-start;
+      align-items: stretch;
       justify-content: center;
       background: #0d1117;
       overflow: hidden;
@@ -703,13 +710,23 @@ export function generateViewer(data: ViewerData): string {
 
     .video-wrapper {
       width: 100%;
+      height: 100%;
+      min-height: 0;
       display: flex;
       flex-direction: column;
+      align-items: center;
     }
 
     .video-container {
       position: relative;
       width: 100%;
+    }
+
+    .video-container.video-fit {
+      flex: 1 1 auto;
+      min-height: 0;
+      width: auto;
+      max-width: 100%;
     }
 
     .video-container video {
@@ -718,6 +735,11 @@ export function generateViewer(data: ViewerData): string {
       border-radius: 8px 8px 0 0;
       background: #000;
       display: block;
+    }
+
+    .video-container.video-fit video {
+      width: 100%;
+      height: 100%;
     }
 
     .video-overlay {
@@ -734,6 +756,7 @@ export function generateViewer(data: ViewerData): string {
     /* Scrub bar */
     .scrub-bar {
       position: relative;
+      flex: 0 0 auto;
       width: 100%;
       padding: 8px 0 6px;
       background: #161b22;
@@ -1144,8 +1167,24 @@ export function generateViewer(data: ViewerData): string {
     .timeline-panel::-webkit-scrollbar-thumb:hover { background: #484f58; }
 
     @media (max-width: 768px) {
+      body {
+        height: auto;
+        min-height: 100vh;
+        display: block;
+        overflow: auto;
+      }
       .viewer {
         flex-direction: column;
+        height: auto;
+      }
+      .video-wrapper {
+        height: auto;
+      }
+      .video-container.video-fit {
+        flex: none;
+        width: 100%;
+      }
+      .video-container.video-fit video {
         height: auto;
       }
       .video-panel, .timeline-panel {
@@ -1278,6 +1317,7 @@ ${stepsHtml}
     const steps = document.querySelectorAll('.step');
     const timelinePanel = document.querySelector('.timeline-panel');
     const overlay = document.querySelector('.video-overlay');
+    const videoContainer = document.querySelector('.video-container');
     const entries = ${entriesJson};
     let duration = ${timelineDurationSec};
     const markers = ${markersJson};
@@ -1633,6 +1673,14 @@ ${stepsHtml}
 
     // Highlight active step as video plays (only if video exists)
     if (video) {
+      function fitVideoToAvailableSpace() {
+        if (!videoContainer || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+        videoContainer.classList.add('video-fit');
+        videoContainer.style.aspectRatio = video.videoWidth + ' / ' + video.videoHeight;
+      }
+
+      if (video.readyState >= 1) fitVideoToAvailableSpace();
+
       video.addEventListener('timeupdate', () => {
         const t = video.currentTime;
         let activeStep = null;
@@ -1666,6 +1714,7 @@ ${stepsHtml}
 
       // Preserve the canonical action timeline when media is shorter.
       video.addEventListener('loadedmetadata', () => {
+        fitVideoToAvailableSpace();
         if (video.duration && isFinite(video.duration)) {
           duration = Math.max(duration, video.duration);
           scrubMarkers.forEach(m => {
