@@ -7,6 +7,7 @@ import type {
   Verdict,
 } from './evidence.js';
 import type { EvidenceEvent } from '../environment/types.js';
+import { normalizeViewport, type ViewportConfig } from '../utils/config.js';
 
 export interface TimestampedLogEntry {
   text: string;
@@ -18,6 +19,7 @@ interface ViewerData {
   serverCommand: string | null;
   durationSec: number;
   videoFilename: string | null;
+  viewport?: ViewportConfig;
   entries: SessionLogEntry[];
   consoleErrorCount: number;
   consoleEvidenceAvailable?: boolean;
@@ -317,6 +319,12 @@ export function generateViewer(data: ViewerData): string {
     : '';
 
   const hasVideo = !!data.videoFilename;
+  // Intrinsic dimensions let the browser reserve the recorded aspect ratio on the first frame
+  // instead of the 300x150 unloaded-media fallback. Pairs with `height: auto` in `.video-container video`.
+  const recordedViewport = normalizeViewport(data.viewport);
+  const videoDimensions = recordedViewport
+    ? ` width="${recordedViewport.width}" height="${recordedViewport.height}"`
+    : '';
 
   // Build marker data for the scrub bar
   const markersJson = serializeInlineJson(
@@ -354,7 +362,7 @@ export function generateViewer(data: ViewerData): string {
   const videoPanelHtml = hasVideo
     ? `<div class="video-wrapper">
         <div class="video-container">
-          <video src="./${escapeHtml(data.videoFilename!)}" controls></video>
+          <video src="./${escapeHtml(data.videoFilename!)}"${videoDimensions} controls></video>
           <div class="video-overlay"></div>
         </div>
         ${scrubBarHtml}
@@ -706,6 +714,7 @@ export function generateViewer(data: ViewerData): string {
 
     .video-container video {
       width: 100%;
+      height: auto;
       border-radius: 8px 8px 0 0;
       background: #000;
       display: block;

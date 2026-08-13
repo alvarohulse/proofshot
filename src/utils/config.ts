@@ -59,6 +59,23 @@ const DEFAULT_CONFIG: ResolvedProofShotConfig = {
 };
 
 /**
+ * Coerce an untrusted viewport value into whole positive pixel dimensions.
+ *
+ * Session state and browser-reported viewports are parsed from JSON without a
+ * schema, so callers that render or report dimensions must not trust them.
+ * Returns null when the value cannot describe a real viewport.
+ */
+export function normalizeViewport(value: unknown): ViewportConfig | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const candidate = value as { width?: unknown; height?: unknown };
+  const width = Math.round(Number(candidate.width));
+  const height = Math.round(Number(candidate.height));
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+/**
  * Find the config file by walking up from cwd.
  */
 export function findConfigPath(startDir?: string): string | null {

@@ -26,7 +26,10 @@ const mocks = vi.hoisted(() => ({
   execFileSync: vi.fn(),
 }));
 
-vi.mock('../utils/config.js', () => ({ loadConfig: mocks.loadConfig }));
+vi.mock('../utils/config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/config.js')>()),
+  loadConfig: mocks.loadConfig,
+}));
 vi.mock('../session/state.js', () => ({
   loadSession: mocks.loadSession,
   clearSession: mocks.clearSession,
@@ -207,6 +210,7 @@ describe('stopCommand retryability', () => {
       consoleEvidenceAvailable: true,
       consoleErrorCount: 0,
       consoleOutput: 'console evidence',
+      viewport: session.viewport,
     });
     expect(mocks.clearSession).toHaveBeenCalledWith(path.join(root, 'proofshot-artifacts'));
     expect(fs.readFileSync(summaryPath, 'utf-8')).toBe(summaryBefore);
@@ -254,6 +258,19 @@ describe('stopCommand retryability', () => {
     const summary = fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8');
     expect(summary).toContain('1 error(s) detected');
     expect(summary).toContain('synthetic console failure');
+  });
+
+  it('withholds viewer dimensions when the session recorded no usable viewport', async () => {
+    session.viewport = { width: 0, height: 720 };
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+    mocks.writeViewer.mockReturnValue(path.join(session.sessionDir, 'viewer.html'));
+
+    await stopCommand({});
+
+    expect(mocks.writeViewer.mock.calls.at(-1)?.[1].viewport).toBeUndefined();
+    expect(fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8')).toContain(
+      '- Viewport: 1280x720',
+    );
   });
 
   it('skips every session-addressed browser command when identity is mismatched', async () => {
