@@ -258,7 +258,7 @@ export async function execCommand(args: string[]): Promise<void> {
   let elementData: SessionLogEntry['element'] | undefined;
   if (session && isRefTargetedAction(args)) {
     const ref = parseElementRef(args)!;
-    const viewport = session.viewport || { width: 1280, height: 720 };
+    const viewport = normalizeViewport(session.viewport) || { width: 1280, height: 720 };
     const captured = captureElementData(ref, viewport, session.sessionName);
     if (captured) elementData = captured;
   }

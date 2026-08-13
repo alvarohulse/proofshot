@@ -260,6 +260,19 @@ describe('stopCommand retryability', () => {
     expect(summary).toContain('synthetic console failure');
   });
 
+  it('withholds viewer dimensions when the session recorded no usable viewport', async () => {
+    session.viewport = { width: 0, height: 720 };
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+    mocks.writeViewer.mockReturnValue(path.join(session.sessionDir, 'viewer.html'));
+
+    await stopCommand({});
+
+    expect(mocks.writeViewer.mock.calls.at(-1)?.[1].viewport).toBeUndefined();
+    expect(fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8')).toContain(
+      '- Viewport: 1280x720',
+    );
+  });
+
   it('skips every session-addressed browser command when identity is mismatched', async () => {
     mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
     mocks.writeViewer.mockReturnValue(path.join(session.sessionDir, 'viewer.html'));
