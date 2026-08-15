@@ -138,6 +138,7 @@ fs.appendFileSync(process.env.FAKE_AGENT_BROWSER_LOG, JSON.stringify({
   pid: process.pid,
   session,
   namespace,
+  allowedDomains: process.env.AGENT_BROWSER_ALLOWED_DOMAINS,
   socketDir,
   home: process.env.HOME,
   command,
@@ -363,6 +364,18 @@ describe('isolated CLI lifecycle', () => {
     expect(sessions[0].agentBrowserNamespace).toEqual(expect.any(String));
     expect(sessions[0].agentBrowserNamespace).not.toBe(
       sessions[1].agentBrowserNamespace,
+    );
+    expect(sessions[0].agentBrowserAllowedDomains).toEqual(['example.invalid']);
+    expect(sessions[1].agentBrowserAllowedDomains).toEqual(['example.invalid']);
+    const openCalls = fs
+      .readFileSync(tools.browserLog, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((call) => call.command === 'open');
+    expect(openCalls).toHaveLength(2);
+    expect(openCalls.every((call) => call.allowedDomains === 'example.invalid')).toBe(
+      true,
     );
 
     const ambiguousExec = runCli(audit, env, ['exec', 'get', 'url']);

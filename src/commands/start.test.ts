@@ -226,6 +226,7 @@ describe('startCommand', () => {
         '/run/user/1000/proofshot/namespaces/psn-deadbeef1234/run',
       agentBrowserSocketRoot: '/run/user/1000/proofshot',
       agentBrowserNamespace: 'psn-deadbeef1234',
+      agentBrowserAllowedDomains: ['127.0.0.1'],
     });
     expect(finalState.controlDir).toBe('/project/proofshot-artifacts');
   });

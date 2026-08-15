@@ -76,6 +76,7 @@ describe('session commands', () => {
 
     expect(mocks.cleanupFailedStart).toHaveBeenCalledWith(session);
     expect(mocks.setAgentBrowserDefaults).toHaveBeenCalledWith({
+      allowedDomains: session.agentBrowserAllowedDomains,
       configPath: session.agentBrowserConfigPath,
       namespace: session.agentBrowserNamespace,
       socketDir: session.agentBrowserSocketDir,
