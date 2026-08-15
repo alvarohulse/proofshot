@@ -259,6 +259,27 @@ describe('startCommand', () => {
     expect(mocks.unregisterSession).toHaveBeenCalledWith('ps-2026-04-deadbeef1234');
   });
 
+  it('persists network cleanup state before starting HAR capture', async () => {
+    mocks.startPrivateNetworkCapture.mockImplementation(() => {
+      const persistedState = mocks.registerSession.mock.calls.at(-1)?.[0];
+      expect(persistedState).toMatchObject({
+        networkCaptureStarted: false,
+        networkCaptureActive: true,
+      });
+      throw new Error('HAR start response was lost');
+    });
+
+    const commandPromise = startCommand({}).catch((error) => error);
+    await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
+
+    expect(mocks.cleanupFailedStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        networkCaptureStarted: false,
+        networkCaptureActive: true,
+      }),
+    );
+  });
+
   it('persists the intended target and stable control path with custom evidence output', async () => {
     await startCommand({
       output: '/audit/custom-evidence',

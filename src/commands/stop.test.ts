@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
   loadSessionLog: vi.fn(),
   estimateTokenUsage: vi.fn(),
   execFileSync: vi.fn(),
+  finalizePrivateNetworkCapture: vi.fn(),
+  loadSanitizedNetworkSummary: vi.fn(),
 }));
 
 vi.mock('../utils/config.js', async (importOriginal) => ({
@@ -39,6 +41,10 @@ vi.mock('../session/state.js', () => ({
   saveSession: mocks.saveSession,
 }));
 vi.mock('../browser/capture.js', () => ({ stopRecording: mocks.stopRecording }));
+vi.mock('../browser/evidence.js', () => ({
+  finalizePrivateNetworkCapture: mocks.finalizePrivateNetworkCapture,
+  loadSanitizedNetworkSummary: mocks.loadSanitizedNetworkSummary,
+}));
 vi.mock('../browser/session.js', () => ({
   getConsoleErrors: mocks.getConsoleErrors,
   getConsoleOutput: mocks.getConsoleOutput,
@@ -130,6 +136,12 @@ beforeEach(() => {
   mocks.extractServerErrors.mockReturnValue([]);
   mocks.loadSessionLog.mockReturnValue([]);
   mocks.estimateTokenUsage.mockReturnValue(null);
+  mocks.loadSanitizedNetworkSummary.mockReturnValue(null);
+  mocks.finalizePrivateNetworkCapture.mockReturnValue({
+    version: 1,
+    requestCount: 0,
+    requests: [],
+  });
   mocks.execFileSync.mockReturnValue('');
   mocks.stopOwnedBrowser.mockResolvedValue(undefined);
   mocks.stopOwnedServer.mockResolvedValue(undefined);
@@ -163,6 +175,69 @@ afterEach(() => {
 });
 
 describe('stopCommand retryability', () => {
+  it('retains active network capture and browser ownership when live finalization fails', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    mocks.finalizePrivateNetworkCapture.mockImplementation(() => {
+      throw new Error('HAR finalization failed');
+    });
+
+    await expect(stopCommand({})).rejects.toThrow('HAR finalization failed');
+
+    expect(session.networkCaptureActive).toBe(true);
+    expect(session.stoppedAt).toBeUndefined();
+    expect(session.networkEvidenceAvailable).toBe(false);
+    expect(session.networkCaptureError).toContain('HAR finalization failed');
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedServer).not.toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenCalledWith(session);
+
+    mocks.finalizePrivateNetworkCapture.mockReturnValue({
+      version: 1,
+      requestCount: 0,
+      requests: [],
+    });
+    await expect(stopCommand({})).resolves.toBeUndefined();
+
+    expect(mocks.finalizePrivateNetworkCapture).toHaveBeenCalledTimes(2);
+    expect(session.networkCaptureActive).toBe(false);
+    expect(session.networkEvidenceAvailable).toBe(true);
+    expect(session.networkCaptureError).toBeNull();
+    expect(mocks.stopRecording).toHaveBeenCalledTimes(1);
+    expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
+  });
+
+  it('adopts local network evidence after browser ownership is lost', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+
+    await stopCommand({});
+
+    expect(mocks.finalizePrivateNetworkCapture).toHaveBeenCalledWith(
+      session.sessionName,
+      {
+        privateDirectory: session.privateEvidenceDir,
+        harPath: session.networkHarPath,
+        requestsPath: session.networkRequestsPath,
+        summaryPath: session.networkSummaryPath,
+      },
+      { allowBrowserCommands: false },
+    );
+    expect(session.networkCaptureActive).toBe(false);
+    expect(session.networkEvidenceAvailable).toBe(true);
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+  });
+
   it('keeps state after a bundle failure and retries without replacing a valid summary', async () => {
     fs.writeFileSync(session.videoPath, 'nonempty-original-video');
     const sessionLogPath = path.join(session.sessionDir, 'session-log.json');

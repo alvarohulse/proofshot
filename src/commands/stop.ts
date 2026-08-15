@@ -238,23 +238,34 @@ export async function stopCommand(options: StopOptions): Promise<void> {
 
   let networkSummary: SanitizedNetworkSummary | null =
     loadSanitizedNetworkSummary(session.networkSummaryPath);
-  if (
-    browserSessionAvailable &&
-    session.networkCaptureActive &&
+  const networkEvidencePaths =
     session.privateEvidenceDir &&
     session.networkHarPath &&
     session.networkRequestsPath &&
     session.networkSummaryPath
+      ? {
+          privateDirectory: session.privateEvidenceDir,
+          harPath: session.networkHarPath,
+          requestsPath: session.networkRequestsPath,
+          summaryPath: session.networkSummaryPath,
+        }
+      : null;
+  if (
+    !networkSummary &&
+    networkEvidencePaths &&
+    (session.networkCaptureStarted || session.networkCaptureActive)
   ) {
     console.log(chalk.dim('Collecting private network evidence...'));
+    const allowBrowserCommands =
+      browserSessionAvailable && session.networkCaptureActive === true;
     try {
-      networkSummary = finalizePrivateNetworkCapture(session.sessionName, {
-        privateDirectory: session.privateEvidenceDir,
-        harPath: session.networkHarPath,
-        requestsPath: session.networkRequestsPath,
-        summaryPath: session.networkSummaryPath,
-      });
+      networkSummary = finalizePrivateNetworkCapture(
+        session.sessionName,
+        networkEvidencePaths,
+        { allowBrowserCommands },
+      );
       session.networkEvidenceAvailable = true;
+      session.networkCaptureActive = false;
       session.networkCaptureError = null;
     } catch (error) {
       session.networkEvidenceAvailable = false;
@@ -266,10 +277,22 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         chalk.yellow('⚠') +
           ` Private network evidence was incomplete: ${session.networkCaptureError}`,
       );
+      if (allowBrowserCommands) {
+        session.lifecycleStatus = 'active';
+        session.stoppedAt = undefined;
+        session.networkCaptureActive = true;
+        persistOwnedSession(session);
+        throw error;
+      }
+      session.networkCaptureActive = false;
     }
-    session.networkCaptureActive = false;
     persistOwnedSession(session);
-  } else if (session.networkCaptureStarted && !networkSummary) {
+  } else if (networkSummary) {
+    session.networkEvidenceAvailable = true;
+    session.networkCaptureActive = false;
+    session.networkCaptureError = null;
+    persistOwnedSession(session);
+  } else if (session.networkCaptureStarted || session.networkCaptureActive) {
     session.networkEvidenceAvailable = false;
     session.networkCaptureActive = false;
     persistOwnedSession(session);

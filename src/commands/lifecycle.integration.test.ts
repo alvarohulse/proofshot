@@ -884,6 +884,75 @@ describe('isolated CLI lifecycle', () => {
     expect(readRegisteredSessions(env)).toEqual([]);
   }, 30000);
 
+  it('adopts pending HAR evidence after the owned browser is lost', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = runCli(audit, env, [
+      'start',
+      '--url',
+      'https://example.invalid/browser-loss',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    const [session] = readRegisteredSessions(env);
+    cleanupProcesses.push(session.browserProcess);
+    await terminateOwnedProcessTree(session.browserProcess, { graceMs: 300 });
+    await waitForProcessExit(session.browserProcess.pid);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
+
+    fs.writeFileSync(
+      `${session.networkHarPath}.pending`,
+      JSON.stringify({
+        log: {
+          entries: [
+            {
+              time: 7,
+              request: {
+                method: 'GET',
+                url: 'https://example.invalid/recovered-after-loss?token=private',
+              },
+              response: { status: 200 },
+            },
+          ],
+        },
+      }),
+    );
+    const browserLogBeforeStop = fs.readFileSync(tools.browserLog, 'utf-8');
+
+    const stop = runCli(audit, env, [
+      'stop',
+      '--session',
+      session.sessionName,
+    ]);
+
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    expect(fs.existsSync(`${session.networkHarPath}.pending`)).toBe(false);
+    expect(fs.existsSync(session.networkHarPath)).toBe(true);
+    expect(fs.readFileSync(tools.browserLog, 'utf-8')).toBe(browserLogBeforeStop);
+    expect(JSON.parse(fs.readFileSync(session.networkSummaryPath, 'utf-8'))).toEqual({
+      version: 1,
+      requestCount: 1,
+      requests: [
+        {
+          endpoint: 'https://example.invalid/recovered-after-loss',
+          method: 'GET',
+          status: 200,
+          durationMs: 7,
+          error: null,
+        },
+      ],
+    });
+    expect(readRegisteredSessions(env)).toEqual([]);
+  }, 30000);
+
   it('keeps both owned browsers isolated when one exec process is interrupted', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);

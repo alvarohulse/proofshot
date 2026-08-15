@@ -143,6 +143,42 @@ describe('private browser evidence', () => {
     }
   });
 
+  it('adopts a valid pending HAR when the stop command reports failure', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-network-stop-error-'),
+    );
+    const privateDirectory = path.join(sessionDir, 'private', 'agent-browser');
+    const paths = {
+      privateDirectory,
+      harPath: path.join(privateDirectory, 'network.har'),
+      requestsPath: path.join(privateDirectory, 'requests.json'),
+      summaryPath: path.join(sessionDir, 'network-summary.json'),
+    };
+    mocks.ab.mockImplementation((command: string) => {
+      if (command.startsWith('network har stop ')) {
+        fs.writeFileSync(
+          `${paths.harPath}.pending`,
+          JSON.stringify({ log: { entries: [] } }),
+        );
+        throw new Error('HAR stop response was lost');
+      }
+      if (command === 'network requests --json') {
+        return JSON.stringify({ success: true, data: [] });
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      expect(finalizePrivateNetworkCapture('ps-test', paths)).toMatchObject({
+        requestCount: 0,
+      });
+      expect(fs.existsSync(paths.harPath)).toBe(true);
+      expect(fs.existsSync(`${paths.harPath}.pending`)).toBe(false);
+    } finally {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   it('adopts a complete pending HAR after interrupted finalization', () => {
     const sessionDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'proofshot-network-recovery-'),
@@ -191,6 +227,59 @@ describe('private browser evidence', () => {
       expect(mocks.ab).toHaveBeenCalledTimes(1);
       expect(fs.existsSync(`${paths.harPath}.pending`)).toBe(false);
       expect(fs.statSync(paths.harPath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it('adopts existing HAR evidence without browser commands after browser loss', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-network-offline-recovery-'),
+    );
+    const privateDirectory = path.join(sessionDir, 'private', 'agent-browser');
+    fs.mkdirSync(privateDirectory, { recursive: true });
+    const paths = {
+      privateDirectory,
+      harPath: path.join(privateDirectory, 'network.har'),
+      requestsPath: path.join(privateDirectory, 'requests.json'),
+      summaryPath: path.join(sessionDir, 'network-summary.json'),
+    };
+    fs.writeFileSync(
+      paths.harPath,
+      JSON.stringify({
+        log: {
+          entries: [
+            {
+              time: 9,
+              request: { method: 'GET', url: 'https://example.com/offline' },
+              response: { status: 204 },
+            },
+          ],
+        },
+      }),
+    );
+    fs.writeFileSync(paths.requestsPath, 'retained request evidence\n');
+
+    try {
+      const summary = finalizePrivateNetworkCapture('ps-test', paths, {
+        allowBrowserCommands: false,
+      });
+
+      expect(summary.requests).toEqual([
+        {
+          endpoint: 'https://example.com/offline',
+          method: 'GET',
+          status: 204,
+          durationMs: 9,
+          error: null,
+        },
+      ]);
+      expect(mocks.ab).not.toHaveBeenCalled();
+      expect(fs.readFileSync(paths.requestsPath, 'utf-8')).toBe(
+        'retained request evidence\n',
+      );
+      expect(fs.statSync(paths.harPath).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(paths.summaryPath).mode & 0o777).toBe(0o600);
     } finally {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     }

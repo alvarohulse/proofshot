@@ -17,6 +17,10 @@ export type PrivateNetworkEvidencePaths = {
   summaryPath: string;
 };
 
+export type FinalizePrivateNetworkCaptureOptions = {
+  allowBrowserCommands?: boolean;
+};
+
 export type SanitizedNetworkRequest = {
   endpoint: string;
   method: string;
@@ -51,25 +55,35 @@ export function startPrivateNetworkCapture(sessionName: string): void {
 export function finalizePrivateNetworkCapture(
   sessionName: string,
   paths: PrivateNetworkEvidencePaths,
+  options: FinalizePrivateNetworkCaptureOptions = {},
 ): SanitizedNetworkSummary {
   preparePrivateDirectory(paths.privateDirectory);
-  const har = finalizePrivateHarCapture(sessionName, paths.harPath);
-  let requests: string;
-  try {
-    requests = ab('network requests --json', { session: sessionName });
-  } catch (error) {
-    requests = JSON.stringify({
-      success: false,
-      data: null,
-      error: sanitizeDiagnosticMessage(
-        error instanceof Error ? error.message : String(error),
-      ),
-    });
-  }
-  writePrivateTextFile(
-    paths.requestsPath,
-    requests.trim() ? `${requests.trim()}\n` : '{"success":true,"data":[]}\n',
+  const allowBrowserCommands = options.allowBrowserCommands !== false;
+  const har = finalizePrivateHarCapture(
+    sessionName,
+    paths.harPath,
+    allowBrowserCommands,
   );
+  if (fs.existsSync(paths.requestsPath)) {
+    fs.chmodSync(paths.requestsPath, 0o600);
+  } else if (allowBrowserCommands) {
+    let requests: string;
+    try {
+      requests = ab('network requests --json', { session: sessionName });
+    } catch (error) {
+      requests = JSON.stringify({
+        success: false,
+        data: null,
+        error: sanitizeDiagnosticMessage(
+          error instanceof Error ? error.message : String(error),
+        ),
+      });
+    }
+    writePrivateTextFile(
+      paths.requestsPath,
+      requests.trim() ? `${requests.trim()}\n` : '{"success":true,"data":[]}\n',
+    );
+  }
   const summary = buildSanitizedNetworkSummary(har);
   writeJsonFile(paths.summaryPath, summary);
   return summary;
@@ -78,6 +92,7 @@ export function finalizePrivateNetworkCapture(
 function finalizePrivateHarCapture(
   sessionName: string,
   harPath: string,
+  allowBrowserCommands: boolean,
 ): unknown {
   const finalizedHar = readValidHarFile(harPath);
   if (finalizedHar !== null) {
@@ -91,7 +106,9 @@ function finalizePrivateHarCapture(
     adoptPendingHar(pendingPath, harPath);
     return pendingHar;
   }
-  removeInvalidHarFile(harPath);
+  if (!allowBrowserCommands) {
+    throw new Error('No valid local HAR evidence was available for recovery.');
+  }
   removeInvalidHarFile(pendingPath);
 
   let stopError: unknown;

@@ -329,9 +329,10 @@ export async function startCommand(options: StartOptions): Promise<void> {
     console.log(chalk.green('✓') + ' Browser ready');
 
     failureContext = 'start private network capture';
+    session.networkCaptureActive = true;
+    persistOwnedSession(session);
     startPrivateNetworkCapture(sessionName);
     session.networkCaptureStarted = true;
-    session.networkCaptureActive = true;
     persistOwnedSession(session);
     console.log(chalk.green('✓') + ' Private network capture started');
 
