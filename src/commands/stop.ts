@@ -277,14 +277,18 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         chalk.yellow('⚠') +
           ` Private network evidence was incomplete: ${session.networkCaptureError}`,
       );
-      if (allowBrowserCommands) {
+      const browserSessionStillAvailable =
+        allowBrowserCommands && canAddressOwnedBrowserSession(session);
+      if (browserSessionStillAvailable) {
         session.lifecycleStatus = 'active';
         session.stoppedAt = undefined;
-        session.networkCaptureActive = true;
-        persistOwnedSession(session);
-        throw error;
       }
-      session.networkCaptureActive = false;
+      // A browser can disappear while the HAR stop command is flushing its
+      // pending file. Keep the session retryable so a later stop can adopt
+      // that local evidence without addressing the lost browser.
+      session.networkCaptureActive = true;
+      persistOwnedSession(session);
+      throw error;
     }
     persistOwnedSession(session);
   } else if (networkSummary) {

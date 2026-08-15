@@ -151,6 +151,33 @@ describe('owned browser lifecycle', () => {
     );
   });
 
+  it('retains offline network finalization for delayed local recovery', async () => {
+    mocks.captureAgentBrowserProcessIdentity.mockReturnValue(null);
+    const state = {
+      ...session(null),
+      browserLaunchAttempted: false,
+      networkCaptureStarted: true,
+      networkCaptureActive: true,
+      privateEvidenceDir: '/evidence/private/agent-browser',
+      networkHarPath: '/evidence/private/agent-browser/network.har',
+      networkRequestsPath: '/evidence/private/agent-browser/requests.json',
+      networkSummaryPath: '/evidence/network-summary.json',
+    };
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('pending HAR is not complete yet');
+    });
+
+    await expect(cleanupFailedStart(state)).rejects.toThrow(
+      'pending HAR is not complete yet',
+    );
+
+    expect(state.networkCaptureActive).toBe(true);
+    expect(state.networkEvidenceAvailable).toBe(false);
+    expect(state.networkCaptureError).toContain('pending HAR is not complete yet');
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
+  });
+
   it('falls back to exact termination when graceful browser close fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     mocks.closeBrowser.mockImplementationOnce(() => {

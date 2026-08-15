@@ -238,6 +238,83 @@ describe('stopCommand retryability', () => {
     expect(mocks.stopRecording).not.toHaveBeenCalled();
   });
 
+  it('retains a stopping session when browser ownership is lost during HAR finalization', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    mocks.canAddressOwnedBrowserSession
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('browser disappeared before HAR flush');
+    });
+
+    await expect(stopCommand({})).rejects.toThrow(
+      'browser disappeared before HAR flush',
+    );
+
+    expect(session.lifecycleStatus).toBe('stopping');
+    expect(session.networkCaptureActive).toBe(true);
+    expect(session.stoppedAt).toEqual(expect.any(String));
+    expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
+
+    mocks.finalizePrivateNetworkCapture.mockReturnValue({
+      version: 1,
+      requestCount: 0,
+      requests: [],
+    });
+    await stopCommand({});
+
+    expect(mocks.finalizePrivateNetworkCapture).toHaveBeenLastCalledWith(
+      session.sessionName,
+      expect.any(Object),
+      { allowBrowserCommands: false },
+    );
+    expect(session.networkEvidenceAvailable).toBe(true);
+    expect(session.networkCaptureActive).toBe(false);
+  });
+
+  it('retains offline network recovery until delayed HAR evidence is available', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('pending HAR is not complete yet');
+    });
+
+    await expect(stopCommand({})).rejects.toThrow(
+      'pending HAR is not complete yet',
+    );
+
+    expect(session.lifecycleStatus).toBe('stopping');
+    expect(session.networkCaptureActive).toBe(true);
+    expect(session.bundleComplete).toBe(false);
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
+
+    mocks.finalizePrivateNetworkCapture.mockReturnValue({
+      version: 1,
+      requestCount: 0,
+      requests: [],
+    });
+    await stopCommand({});
+
+    expect(mocks.finalizePrivateNetworkCapture).toHaveBeenLastCalledWith(
+      session.sessionName,
+      expect.any(Object),
+      { allowBrowserCommands: false },
+    );
+    expect(session.networkEvidenceAvailable).toBe(true);
+    expect(session.networkCaptureActive).toBe(false);
+  });
+
   it('keeps state after a bundle failure and retries without replacing a valid summary', async () => {
     fs.writeFileSync(session.videoPath, 'nonempty-original-video');
     const sessionLogPath = path.join(session.sessionDir, 'session-log.json');

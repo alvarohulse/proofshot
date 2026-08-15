@@ -154,17 +154,15 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
         sanitizeDiagnosticMessage(
           error instanceof Error ? error.message : String(error),
         ) || 'network capture failed';
-      session.networkCaptureActive = allowBrowserCommands;
-      if (allowBrowserCommands) {
-        cleanupError ||= error;
-      }
+      session.networkCaptureActive = true;
+      cleanupError ||= error;
     }
   }
 
   // Recording may have started even when its CLI call returned an error.
   // Never address a session name unless its daemon still has the identity
   // captured by this start.
-  if (browserSessionAddressable) {
+  if (canAddressOwnedBrowserSession(session)) {
     stopRecording(session.sessionName);
   }
   if (session.browserProcess || !session.browserLaunchAttempted) {
