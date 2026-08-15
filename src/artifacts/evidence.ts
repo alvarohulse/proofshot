@@ -3,6 +3,7 @@ import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 import { PNG } from 'pngjs';
+import type { SanitizedNetworkSummary } from '../browser/evidence.js';
 import type { SessionLogEntry } from '../commands/exec.js';
 import { loadEvidenceEvents } from '../environment/evidence.js';
 import type {
@@ -59,6 +60,7 @@ export type CanonicalEvidence = {
   sources: EvidenceSourceSummary[];
   incidents: EvidenceIncident[];
   screenshots: ScreenshotIntegrity[];
+  network?: SanitizedNetworkSummary | null;
 };
 
 export type Verdict = {
@@ -85,6 +87,8 @@ export type EvidenceBuildOptions = {
   consoleEntries: TimestampedLogEntry[];
   serverEntries: TimestampedLogEntry[];
   environment?: EnvironmentState | null;
+  networkSummary?: SanitizedNetworkSummary | null;
+  networkEvidenceRequired?: boolean;
 };
 
 export function writeCanonicalEvidence(
@@ -123,6 +127,7 @@ export function writeCanonicalEvidence(
     sources,
     incidents,
     screenshots,
+    network: options.networkSummary,
   };
   const verdict = buildVerdict(options, evidence);
   writeJsonAtomically(
@@ -528,6 +533,9 @@ function buildVerdict(
   evidence: CanonicalEvidence,
 ): Verdict {
   const missingArtifacts: string[] = [];
+  if (options.networkEvidenceRequired && !options.networkSummary) {
+    missingArtifacts.push('network-summary.json');
+  }
   if (options.recordingWasActive && !fs.existsSync(options.videoPath)) {
     missingArtifacts.push(path.basename(options.videoPath));
   } else if (

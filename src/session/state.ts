@@ -35,7 +35,17 @@ export interface SessionState {
   targetUrl?: string;
   headless?: boolean;
   agentBrowserSocketDir?: string;
+  agentBrowserSocketRoot?: string;
+  agentBrowserNamespace?: string;
   agentBrowserConfigPath?: string;
+  privateEvidenceDir?: string;
+  networkHarPath?: string;
+  networkRequestsPath?: string;
+  networkSummaryPath?: string;
+  networkCaptureStarted?: boolean;
+  networkCaptureActive?: boolean;
+  networkEvidenceAvailable?: boolean;
+  networkCaptureError?: string | null;
   serverProcess?: ProcessIdentity | null;
   browserProcess?: ProcessIdentity | null;
   environment?: EnvironmentState | null;
@@ -124,4 +134,9 @@ export function generateAgentBrowserSessionName(
     .slice(0, 12);
 
   return normalized ? `ps-${normalized}-${digest}` : `ps-${digest}`;
+}
+
+export function generateAgentBrowserNamespace(sessionName: string): string {
+  const digest = createHash('sha256').update(sessionName).digest('hex').slice(0, 12);
+  return `psn-${digest}`;
 }

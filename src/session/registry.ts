@@ -134,9 +134,31 @@ function isSessionState(value: unknown): value is SessionState {
     (typeof session.serverCommand === 'string' || session.serverCommand === null) &&
     typeof session.serverAlreadyRunning === 'boolean' &&
     typeof session.recordingActive === 'boolean' &&
+    isOptionalString(session.agentBrowserSocketDir) &&
+    isOptionalString(session.agentBrowserSocketRoot) &&
+    isOptionalString(session.agentBrowserNamespace) &&
+    isOptionalString(session.agentBrowserConfigPath) &&
+    isOptionalString(session.privateEvidenceDir) &&
+    isOptionalString(session.networkHarPath) &&
+    isOptionalString(session.networkRequestsPath) &&
+    isOptionalString(session.networkSummaryPath) &&
+    isOptionalBoolean(session.networkCaptureStarted) &&
+    isOptionalBoolean(session.networkCaptureActive) &&
+    isOptionalBoolean(session.networkEvidenceAvailable) &&
+    (session.networkCaptureError === undefined ||
+      session.networkCaptureError === null ||
+      typeof session.networkCaptureError === 'string') &&
     isOptionalProcessIdentity(session.serverProcess) &&
     isOptionalProcessIdentity(session.browserProcess)
   );
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === 'string';
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean';
 }
 
 function isOptionalProcessIdentity(value: unknown): boolean {

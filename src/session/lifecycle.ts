@@ -1,4 +1,5 @@
 import { stopRecording } from '../browser/capture.js';
+import { finalizePrivateNetworkCapture } from '../browser/evidence.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import {
   clearAgentBrowserSessionFiles,
@@ -126,6 +127,25 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
   // operations are session-scoped and best effort. Never address a session
   // name unless its daemon still has the identity captured by this start.
   if (canAddressOwnedBrowserSession(session)) {
+    if (
+      session.networkCaptureActive &&
+      session.privateEvidenceDir &&
+      session.networkHarPath &&
+      session.networkRequestsPath &&
+      session.networkSummaryPath
+    ) {
+      try {
+        finalizePrivateNetworkCapture(session.sessionName, {
+          privateDirectory: session.privateEvidenceDir,
+          harPath: session.networkHarPath,
+          requestsPath: session.networkRequestsPath,
+          summaryPath: session.networkSummaryPath,
+        });
+      } catch {
+        // Failed-start cleanup must still close exact owned processes.
+      }
+      session.networkCaptureActive = false;
+    }
     stopRecording(session.sessionName);
   }
   if (session.browserProcess || !session.browserLaunchAttempted) {

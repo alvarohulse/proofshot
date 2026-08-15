@@ -22,6 +22,7 @@ export type ManifestArtifactKind =
   | 'summary'
   | 'evidence'
   | 'verdict'
+  | 'network-summary'
   | 'log';
 
 export type ManifestArtifact = {
@@ -271,6 +272,7 @@ function isArtifactManifest(value: unknown): value is ArtifactManifest {
           'summary',
           'evidence',
           'verdict',
+          'network-summary',
           'log',
         ].includes(artifact.kind),
     )
@@ -348,6 +350,7 @@ function listArtifactFiles(
 }
 
 function classifyArtifact(file: string): ManifestArtifactKind | null {
+  if (file.split(/[\\/]/)[0] === 'private') return null;
   const basename = path.basename(file);
   const isSessionRoot = path.dirname(file) === '.';
   if (isSessionRoot && file.endsWith('.png')) return 'screenshot';
@@ -361,6 +364,9 @@ function classifyArtifact(file: string): ManifestArtifactKind | null {
   if (isSessionRoot && basename === 'SUMMARY.md') return 'summary';
   if (isSessionRoot && basename === 'evidence.json') return 'evidence';
   if (isSessionRoot && basename === 'verdict.json') return 'verdict';
+  if (isSessionRoot && basename === 'network-summary.json') {
+    return 'network-summary';
+  }
   if (file.endsWith('.log') || file.endsWith('.ndjson')) return 'log';
   return null;
 }

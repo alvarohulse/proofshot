@@ -13,28 +13,38 @@ export class ProofShotError extends Error {
 
 export interface AgentBrowserCommandOptions {
   configPath?: string;
+  json?: boolean;
+  namespace?: string;
   session?: string;
   socketDir?: string;
   timeoutMs?: number;
 }
 
-let defaultAgentBrowserOptions: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'> = {};
+let defaultAgentBrowserOptions: Pick<
+  AgentBrowserCommandOptions,
+  'configPath' | 'namespace' | 'socketDir'
+> = {};
 
 export function setAgentBrowserDefaults(
-  options: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'>,
+  options: Pick<
+    AgentBrowserCommandOptions,
+    'configPath' | 'namespace' | 'socketDir'
+  >,
 ): void {
   defaultAgentBrowserOptions = { ...options };
 }
 
 export function getAgentBrowserEnvironment(
-  options: Pick<AgentBrowserCommandOptions, 'socketDir'> = {},
+  options: Pick<AgentBrowserCommandOptions, 'namespace' | 'socketDir'> = {},
 ): NodeJS.ProcessEnv {
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
+  const namespace = options.namespace ?? defaultAgentBrowserOptions.namespace;
   return {
     ...process.env,
     AGENT_BROWSER_IDLE_TIMEOUT_MS:
       process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || '1800000',
     ...(socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}),
+    ...(namespace ? { AGENT_BROWSER_NAMESPACE: namespace } : {}),
   };
 }
 
@@ -45,7 +55,10 @@ export function quoteShellArgument(value: string): string {
 
 export function buildAgentBrowserCommand(
   command: string,
-  options: Pick<AgentBrowserCommandOptions, 'configPath' | 'session'> = {},
+  options: Pick<
+    AgentBrowserCommandOptions,
+    'configPath' | 'json' | 'session'
+  > = {},
 ): string {
   const mergedOptions = {
     ...defaultAgentBrowserOptions,
@@ -57,7 +70,8 @@ export function buildAgentBrowserCommand(
   const sessionFlag = mergedOptions.session
     ? ` --session ${quoteShellArgument(mergedOptions.session)}`
     : '';
-  return `agent-browser${configFlag}${sessionFlag} ${command}`;
+  const jsonFlag = mergedOptions.json ? ' --json' : '';
+  return `agent-browser${configFlag}${sessionFlag}${jsonFlag} ${command}`;
 }
 
 /**
