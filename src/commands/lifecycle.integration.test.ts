@@ -229,6 +229,12 @@ if (command === 'network' && detail[0] === 'har' && detail[1] === 'stop') {
   }
   process.exit(0);
 }
+if (command === 'hang') {
+  spawnSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  process.exit(0);
+}
 if (command === 'close') {
   try {
     const pid = Number(fs.readFileSync(pidPath, 'utf8'));
@@ -606,6 +612,109 @@ describe('isolated CLI lifecycle', () => {
         ),
       ).toBe(false);
     }
+  }, 30000);
+
+  it('keeps both owned browsers isolated when one exec process is interrupted', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    for (const target of ['first', 'second']) {
+      const start = runCli(audit, env, [
+        'start',
+        '--url',
+        `https://example.invalid/${target}`,
+        '--browser-executable',
+        tools.browserPath,
+      ]);
+      expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    }
+    const sessions = readRegisteredSessions(env).sort((left, right) =>
+      left.targetUrl.localeCompare(right.targetUrl),
+    );
+    cleanupProcesses.push(...sessions.map((session) => session.browserProcess));
+
+    const interruptedExec = spawn(
+      process.execPath,
+      [
+        cliPath,
+        'exec',
+        '--session',
+        sessions[0].sessionName,
+        'hang',
+      ],
+      {
+        cwd: audit,
+        env,
+        detached: true,
+        stdio: 'ignore',
+      },
+    );
+    const interruptedIdentity = captureProcessIdentity(interruptedExec.pid!);
+    if (interruptedIdentity) {
+      cleanupProcesses.push(interruptedIdentity);
+    }
+    const interruptedLogPath = path.join(
+      sessions[0].sessionDir,
+      'session-log.json',
+    );
+    for (
+      let attempt = 0;
+      attempt < 80 && !fs.existsSync(interruptedLogPath);
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(fs.existsSync(interruptedLogPath)).toBe(true);
+
+    process.kill(-interruptedExec.pid!, 'SIGTERM');
+    await new Promise<void>((resolve) => interruptedExec.once('close', () => resolve()));
+    if (interruptedIdentity) {
+      cleanupProcesses.splice(cleanupProcesses.indexOf(interruptedIdentity), 1);
+    }
+    expect(processIsAlive(sessions[0].browserProcess.pid)).toBe(true);
+    expect(processIsAlive(sessions[1].browserProcess.pid)).toBe(true);
+    const pendingActions = JSON.parse(
+      fs.readFileSync(interruptedLogPath, 'utf-8'),
+    );
+    expect(pendingActions.at(-1).action).toBe('hang');
+    expect('outcome' in pendingActions.at(-1)).toBe(false);
+
+    const unaffectedExec = runCli(audit, env, [
+      'exec',
+      '--session',
+      sessions[1].sessionName,
+      'get',
+      'url',
+    ]);
+    expect(unaffectedExec.status, `${unaffectedExec.stdout}\n${unaffectedExec.stderr}`).toBe(0);
+    expect(unaffectedExec.stdout.trim()).toBe(sessions[1].targetUrl);
+
+    for (const session of sessions) {
+      const stop = runCli(audit, env, [
+        'stop',
+        '--session',
+        session.sessionName,
+      ]);
+      expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+      await waitForProcessExit(session.browserProcess.pid);
+      cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
+    }
+    const interruptedVerdict = JSON.parse(
+      fs.readFileSync(
+        path.join(sessions[0].sessionDir, 'verdict.json'),
+        'utf-8',
+      ),
+    );
+    expect(interruptedVerdict).toMatchObject({ status: 'INCOMPLETE' });
+    expect(interruptedVerdict.reasons).toContain(
+      '1 browser action(s) had no recorded outcome.',
+    );
   }, 30000);
 
   it('shares custom-output control across processes and stops idempotently', async () => {
