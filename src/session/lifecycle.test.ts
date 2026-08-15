@@ -178,6 +178,31 @@ describe('owned browser lifecycle', () => {
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
   });
 
+  it('marks absent network evidence unavailable after the recorded browser tree is gone', async () => {
+    mocks.processIdentityMatches.mockReturnValue(false);
+    const state = {
+      ...session(),
+      networkCaptureStarted: true,
+      networkCaptureActive: true,
+      privateEvidenceDir: '/evidence/private/agent-browser',
+      networkHarPath: '/evidence/private/agent-browser/network.har',
+      networkRequestsPath: '/evidence/private/agent-browser/requests.json',
+      networkSummaryPath: '/evidence/network-summary.json',
+    };
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('no local HAR remains');
+    });
+
+    await cleanupFailedStart(state);
+
+    expect(state.networkCaptureActive).toBe(false);
+    expect(state.networkEvidenceAvailable).toBe(false);
+    expect(state.networkCaptureError).toContain('no local HAR remains');
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(
+      persistedIdentity,
+    );
+  });
+
   it('falls back to exact termination when graceful browser close fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     mocks.closeBrowser.mockImplementationOnce(() => {

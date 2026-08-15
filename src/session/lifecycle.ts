@@ -154,8 +154,15 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
         sanitizeDiagnosticMessage(
           error instanceof Error ? error.message : String(error),
         ) || 'network capture failed';
-      session.networkCaptureActive = true;
-      cleanupError ||= error;
+      const recordedBrowserIsGone = Boolean(
+        !allowBrowserCommands &&
+          session.browserProcess &&
+          !ownedProcessTreeIsAlive(session.browserProcess),
+      );
+      session.networkCaptureActive = !recordedBrowserIsGone;
+      if (!recordedBrowserIsGone) {
+        cleanupError ||= error;
+      }
     }
   }
 
