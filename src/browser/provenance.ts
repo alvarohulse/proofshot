@@ -84,7 +84,7 @@ function classifyInteractionAtDepth(
     const nestedAction = args[findActionIndex(args)]?.toLowerCase();
     return nestedAction
       ? classifyInteractionAtDepth([nestedAction], batchDepth)
-      : 'observation';
+      : 'pointer-keyboard';
   }
   if (command === 'keyboard') {
     const keyboardAction = args[1]?.toLowerCase();

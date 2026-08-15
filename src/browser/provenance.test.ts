@@ -33,6 +33,12 @@ describe('browser interaction provenance', () => {
     expect(
       classifyInteraction(['find', 'nth', '2', 'a', 'click']),
     ).toBe('pointer-keyboard');
+    expect(classifyInteraction(['find', 'text', 'Submit'])).toBe(
+      'pointer-keyboard',
+    );
+    expect(classifyInteraction(['find', 'nth', '2', '.card'])).toBe(
+      'pointer-keyboard',
+    );
     expect(classifyInteraction(['keyboard', 'inserttext', 'private'])).toBe(
       'hybrid',
     );
