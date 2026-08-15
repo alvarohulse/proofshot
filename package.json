@@ -18,7 +18,7 @@
     "postinstall": "node -e \"try { require('child_process').execSync('agent-browser install', { stdio: 'inherit' }) } catch(e) { console.log('Note: Run agent-browser install to set up Chromium') }\""
   },
   "dependencies": {
-    "agent-browser": "^0.27.0",
+    "agent-browser": "0.34.0",
     "chalk": "^5.4.0",
     "commander": "^12.0.0",
     "detect-port": "^2.1.0",
