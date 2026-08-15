@@ -1,10 +1,7 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import type { EnvironmentState } from '../environment/types.js';
 import type { ProcessIdentity } from '../utils/process.js';
-
-const SESSION_FILENAME = '.session.json';
 
 export interface SessionState {
   startedAt: string;
@@ -66,54 +63,6 @@ export function resolveSessionControlDir(
   cwd = process.cwd(),
 ): string {
   return path.resolve(cwd, configuredOutput);
-}
-
-/**
- * Write session state to disk.
- */
-export function saveSession(state: SessionState, controlDir = state.outputDir): void {
-  fs.mkdirSync(controlDir, { recursive: true });
-  const sessionPath = path.join(controlDir, SESSION_FILENAME);
-  const temporaryPath = `${sessionPath}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2) + '\n', {
-    mode: 0o600,
-  });
-  fs.renameSync(temporaryPath, sessionPath);
-}
-
-/**
- * Read session state from disk.
- * Returns null if no active session.
- */
-export function loadSession(controlDir: string): SessionState | null {
-  const sessionPath = path.join(controlDir, SESSION_FILENAME);
-  if (!fs.existsSync(sessionPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `ProofShot session state is corrupt: ${sessionPath}\n${message}\n` +
-        'Use "proofshot session list" to inspect durable recovery records.',
-    );
-  }
-}
-
-/**
- * Check if a session is currently active.
- */
-export function hasActiveSession(controlDir: string): boolean {
-  return fs.existsSync(path.join(controlDir, SESSION_FILENAME));
-}
-
-/**
- * Delete the session state file (called after stop).
- */
-export function clearSession(controlDir: string): void {
-  const sessionPath = path.join(controlDir, SESSION_FILENAME);
-  if (fs.existsSync(sessionPath)) {
-    fs.unlinkSync(sessionPath);
-  }
 }
 
 /**
