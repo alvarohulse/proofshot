@@ -1,4 +1,3 @@
-import * as path from 'path';
 import { execSync } from 'child_process';
 import {
   writePrivateAgentBrowserResult,
@@ -7,10 +6,13 @@ import {
 import {
   buildSanitizedCommandIntent,
   classifyInteraction,
-  parseAgentBrowserBatchCommands,
   sanitizeDiagnosticMessage,
   sanitizePageUrl,
 } from '../browser/provenance.js';
+import {
+  assertControlledAgentBrowserCommand,
+  prepareControlledAgentBrowserCommand,
+} from '../browser/command-policy.js';
 import { loadConfig, normalizeViewport } from '../utils/config.js';
 import {
   ab,
@@ -39,64 +41,6 @@ import {
 type ExecOptions = {
   session?: string;
 };
-
-const MAX_BATCH_DEPTH = 8;
-const PROOFSHOT_OWNED_COMMANDS = new Set([
-  'auth',
-  'close',
-  'connect',
-  'record',
-  'state',
-]);
-const RESERVED_AGENT_BROWSER_FLAGS = new Set([
-  '--action-policy',
-  '--allow-file-access',
-  '--allowed-domains',
-  '--args',
-  '--auto-connect',
-  '--cdp',
-  '--config',
-  '--confirm-actions',
-  '--confirm-interactive',
-  '--device',
-  '--download-path',
-  '--enable',
-  '--engine',
-  '--executable-path',
-  '--extension',
-  '--headed',
-  '--ignore-https-errors',
-  '--init-script',
-  '--namespace',
-  '--no-auto-dialog',
-  '--profile',
-  '--provider',
-  '--proxy',
-  '--proxy-bypass',
-  '--session',
-  '--session-name',
-  '--socket-dir',
-  '--state',
-  '--user-agent',
-  '-p',
-]);
-
-/**
- * For screenshot commands, resolve relative paths into the session directory
- * so agents can just say `proofshot exec screenshot step-name.png`.
- */
-function resolveScreenshotPath(args: string[], sessionDir: string): string[] {
-  if (args[0] !== 'screenshot' || args.length < 2) return args;
-
-  const screenshotPath = args[args.length - 1];
-  const resolved = path.resolve(sessionDir, screenshotPath);
-  if (path.dirname(resolved) !== path.resolve(sessionDir)) {
-    throw new Error(
-      'ProofShot screenshots must use a filename directly inside the active session.',
-    );
-  }
-  return [...args.slice(0, -1), resolved];
-}
 
 /**
  * Build the shell command string for agent-browser.
@@ -131,53 +75,6 @@ export function buildShellCommand(
     json: structuredOutput,
     session: sessionName,
   });
-}
-
-export function assertControlledAgentBrowserCommand(args: string[]): void {
-  assertControlledAgentBrowserCommandAtDepth(args, 0);
-}
-
-function assertControlledAgentBrowserCommandAtDepth(
-  args: string[],
-  batchDepth: number,
-): void {
-  const command = args[0]?.toLowerCase();
-  if (command && PROOFSHOT_OWNED_COMMANDS.has(command)) {
-    throw new Error(
-      `agent-browser ${command} cannot override ProofShot-owned browser state.`,
-    );
-  }
-  if (
-    command === 'network' &&
-    args[1]?.toLowerCase() === 'har'
-  ) {
-    throw new Error(
-      'agent-browser network HAR capture is owned by ProofShot.',
-    );
-  }
-
-  const reservedFlag = args
-    .map(normalizeFlag)
-    .find((argument) => RESERVED_AGENT_BROWSER_FLAGS.has(argument));
-  if (reservedFlag) {
-    throw new Error(
-      `${reservedFlag} is owned by ProofShot and cannot be passed through proofshot exec.`,
-    );
-  }
-
-  if (command !== 'batch') {
-    return;
-  }
-  if (batchDepth >= MAX_BATCH_DEPTH) {
-    throw new Error('Nested agent-browser batch commands exceed the safe depth.');
-  }
-  for (const nestedArgs of parseAgentBrowserBatchCommands(args)) {
-    assertControlledAgentBrowserCommandAtDepth(nestedArgs, batchDepth + 1);
-  }
-}
-
-function normalizeFlag(argument: string): string {
-  return argument.toLowerCase().split('=', 1)[0];
 }
 
 export function translateProofShotExecArgs(args: string[]): {
@@ -301,10 +198,10 @@ export async function execCommand(
   args: string[],
   options: ExecOptions = {},
 ): Promise<void> {
-  assertControlledAgentBrowserCommand(args);
   const intent = buildSanitizedCommandIntent(args);
   const action = intent.summary;
   const translated = translateProofShotExecArgs(args);
+  assertControlledAgentBrowserCommand(translated.agentBrowserArgs);
   let loggedEntry: SessionLogEntry | null = null;
   let sessionLogPath: string | null = null;
 
@@ -358,7 +255,7 @@ export async function execCommand(
   // Resolve args (screenshot path rewriting)
   let resolvedArgs = translated.agentBrowserArgs;
   if (session) {
-    resolvedArgs = resolveScreenshotPath(
+    resolvedArgs = prepareControlledAgentBrowserCommand(
       translated.agentBrowserArgs,
       session.sessionDir,
     );
@@ -505,6 +402,11 @@ export async function execCommand(
     }
   }
 }
+
+export {
+  assertControlledAgentBrowserCommand,
+  prepareControlledAgentBrowserCommand,
+};
 
 function capturePageUrl(sessionName: string): string | undefined {
   try {

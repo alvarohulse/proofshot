@@ -3,6 +3,7 @@ import { setAgentBrowserDefaults } from '../utils/exec.js';
 import {
   assertControlledAgentBrowserCommand,
   buildShellCommand,
+  prepareControlledAgentBrowserCommand,
   translateProofShotExecArgs,
 } from './exec.js';
 
@@ -63,13 +64,27 @@ describe('buildShellCommand', () => {
   it('rejects commands that can escape the owned browser lifecycle', () => {
     for (const args of [
       ['auth', 'login', 'shared'],
+      ['chat', 'inspect the page'],
+      ['clipboard', 'read'],
       ['close'],
       ['connect', '9222'],
+      ['dashboard', 'start'],
+      ['doctor', '--fix'],
+      ['download', '@e1', '/tmp/report.csv'],
+      ['install'],
+      ['pdf', '/tmp/page.pdf'],
+      ['profiles'],
+      ['pushstate', 'https://example.com/private'],
       ['record', 'stop'],
+      ['session', 'list'],
       ['state', 'load', './shared.json'],
+      ['stream', 'enable', '--port', '4848'],
+      ['trace', 'stop', '/tmp/trace.zip'],
+      ['upgrade'],
+      ['future-command', 'value'],
     ]) {
       expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
-        'cannot override ProofShot-owned browser state',
+        /not permitted|cannot override ProofShot-owned browser state/,
       );
     }
     expect(() =>
@@ -82,6 +97,67 @@ describe('buildShellCommand', () => {
         'open https://example.com --provider browserbase',
       ]),
     ).toThrow('--provider is owned by ProofShot');
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'batch',
+        'snapshot -i',
+        'dashboard start --port 4848',
+      ]),
+    ).toThrow('dashboard is not permitted');
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'batch',
+        'snapshot -i',
+        'screenshot /tmp/outside.png',
+      ]),
+    ).toThrow('screenshot must run as a separate ProofShot action');
+  });
+
+  it.each([
+    ['get', 'cdp-url'],
+    ['network', 'har', 'stop'],
+    ['network', 'request', '1234.5'],
+    ['network', 'requests', '--clear'],
+    ['network', 'route', '**/api/*', '--abort'],
+    ['console', '--clear'],
+    ['console', '--future-option'],
+    ['cookies', 'import', './shared.json'],
+    ['errors', '--clear'],
+    ['keyboard', 'paste', 'private'],
+    ['mouse', 'teleport', '1', '2'],
+    ['set', 'profile', 'shared'],
+    ['storage', 'indexeddb', 'get'],
+    ['storage', 'local', 'export'],
+  ])('rejects unsupported or evidence-destructive subcommands: %j', (...args) => {
+    expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
+      /not permitted|owned by ProofShot/,
+    );
+  });
+
+  it('requires screenshots to use one PNG filename in the session root', () => {
+    expect(
+      prepareControlledAgentBrowserCommand(
+        ['screenshot', '--full', 'step (1).png'],
+        '/evidence/session',
+      ),
+    ).toEqual([
+      'screenshot',
+      '--full',
+      '/evidence/session/step (1).png',
+    ]);
+
+    for (const args of [
+      ['screenshot'],
+      ['screenshot', '--annotate'],
+      ['screenshot', '../outside.png'],
+      ['screenshot', '/tmp/outside.png'],
+      ['screenshot', 'step.jpg'],
+      ['screenshot', '--screenshot-dir', '/tmp'],
+    ]) {
+      expect(() =>
+        prepareControlledAgentBrowserCommand(args, '/evidence/session'),
+      ).toThrow(/PNG filename directly inside/);
+    }
   });
 
   it('preserves legitimate command-specific options', () => {
@@ -108,6 +184,21 @@ describe('buildShellCommand', () => {
     ).not.toThrow();
     expect(() =>
       assertControlledAgentBrowserCommand(['network', 'requests']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand(['keyboard', 'type', 'hello']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand(['set', 'viewport', '1280', '720']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'storage',
+        'local',
+        'set',
+        'theme',
+        'dark',
+      ]),
     ).not.toThrow();
   });
 });
