@@ -46,9 +46,13 @@ export function createCLI(): Command {
   program
     .command('stop')
     .description('Stop session: stop recording, collect errors, bundle proof artifacts')
+    .option('--session <id>', 'Stop one exact registered session')
     .option('--no-close', 'Don\'t close the browser (keep it open for further use)')
     .action(async (options) => {
-      await stopCommand({ noClose: options.close === false });
+      await stopCommand({
+        noClose: options.close === false,
+        session: options.session,
+      });
     });
 
   program
@@ -111,10 +115,11 @@ export function createCLI(): Command {
   program
     .command('exec')
     .description('Run an agent-browser command with logging (use instead of agent-browser directly)')
+    .option('--session <id>', 'Address one exact registered session')
     .argument('<args...>', 'agent-browser command and arguments')
     .allowUnknownOption()
-    .action(async (args) => {
-      await execCommand(args);
+    .action(async (args, options) => {
+      await execCommand(args, { session: options.session });
     });
 
   const session = program

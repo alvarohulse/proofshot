@@ -4,24 +4,30 @@ import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { ensureDevServer } from '../server/start.js';
 import { getPageUrl, openBrowser } from '../browser/session.js';
+import {
+  preparePrivateNetworkEvidence,
+  startPrivateNetworkCapture,
+} from '../browser/evidence.js';
 import { startRecording } from '../browser/capture.js';
 import { discoverBrowserExecutable, browserSetupError } from '../browser/discovery.js';
 import {
   captureAgentBrowserProcessIdentity,
   prepareAgentBrowserSocketDir,
+  resolveAgentBrowserRuntimeDir,
 } from '../browser/runtime.js';
 import { ensureOutputDir, generateTimestamp, generateSessionDirName } from '../artifacts/bundle.js';
 import {
-  saveSession,
-  loadSession,
-  hasActiveSession,
-  clearSession,
+  generateAgentBrowserNamespace,
   generateAgentBrowserSessionName,
   resolveSessionControlDir,
   type SessionState,
 } from '../session/state.js';
 import { cleanupFailedStart } from '../session/lifecycle.js';
 import { registerSession, unregisterSession } from '../session/registry.js';
+import {
+  listSessionsForControlDir,
+  sessionHasVerifiedLiveOwnership,
+} from '../session/selection.js';
 import { writeMetadata } from '../session/metadata.js';
 import { captureGitProvenance } from '../session/manifest.js';
 import { startOwnedEnvironment } from '../environment/runtime.js';
@@ -41,25 +47,49 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
 
-  if (hasActiveSession(controlDir)) {
-    if (options.force) {
-      const existingSession = loadSession(controlDir);
-      if (existingSession) {
-        setAgentBrowserDefaults({
-          configPath: existingSession.agentBrowserConfigPath || config.browser.configPath,
-          socketDir: existingSession.agentBrowserSocketDir,
-        });
+  if (options.force) {
+    const existingSessions = listSessionsForControlDir(controlDir);
+    const liveSessions = existingSessions.filter(sessionHasVerifiedLiveOwnership);
+    if (liveSessions.length > 0) {
+      console.error(
+        chalk.red('✗') +
+          ' --force cannot clean a verified live ProofShot session.\n' +
+          chalk.dim(
+            `  Stop it explicitly with --session ${liveSessions[0].sessionName}.`,
+          ),
+      );
+      process.exit(1);
+      return;
+    }
+    for (const existingSession of existingSessions) {
+      setAgentBrowserDefaults({
+        configPath:
+          existingSession.agentBrowserConfigPath || config.browser.configPath,
+        namespace: existingSession.agentBrowserNamespace,
+        socketDir:
+          existingSession.agentBrowserSocketRoot ||
+          existingSession.agentBrowserSocketDir,
+      });
+      try {
         await cleanupFailedStart(existingSession);
         unregisterSession(existingSession.sessionName);
+      } catch (error) {
+        existingSession.lifecycleStatus = 'recovery';
+        existingSession.cleanupError =
+          error instanceof Error ? error.message : String(error);
+        registerSession(existingSession);
+        console.error(
+          chalk.red('✗') +
+            ` Could not recover ${existingSession.sessionName}: ${existingSession.cleanupError}`,
+        );
+        process.exit(1);
+        return;
       }
-      clearSession(controlDir);
-      console.log(chalk.yellow('⚠') + chalk.dim(' Cleaned up the previous session'));
-    } else {
+    }
+    if (existingSessions.length > 0) {
       console.log(
-        chalk.yellow('⚠ A session is already active.') +
-          chalk.dim(' Run "proofshot stop" first, or use --force to override.'),
+        chalk.yellow('⚠') + chalk.dim(' Cleaned up stale session state'),
       );
-      return;
     }
   }
 
@@ -69,14 +99,25 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   const outputDir = path.resolve(config.output);
   const timestamp = generateTimestamp();
-  const sessionDirName = generateSessionDirName(timestamp, options.description || null);
-  const sessionDir = path.join(outputDir, sessionDirName);
   const sessionName = generateAgentBrowserSessionName(timestamp);
+  const sessionDirName = generateSessionDirName(timestamp, options.description || null);
+  const sessionDir = path.join(outputDir, `${sessionDirName}_${sessionName}`);
+  const agentBrowserNamespace = generateAgentBrowserNamespace(sessionName);
+  let socketRoot: string;
   let socketDir: string;
   let browserExecutable: string | null;
 
   try {
-    socketDir = prepareAgentBrowserSocketDir(sessionName);
+    socketRoot = prepareAgentBrowserSocketDir(
+      sessionName,
+      process.env,
+      undefined,
+      agentBrowserNamespace,
+    );
+    socketDir = resolveAgentBrowserRuntimeDir(
+      socketRoot,
+      agentBrowserNamespace,
+    );
     browserExecutable = discoverBrowserExecutable({
       configuredPath: options.browserExecutable || config.browser.executablePath,
     });
@@ -94,13 +135,18 @@ export async function startCommand(options: StartOptions): Promise<void> {
   }
 
   if (browserExecutable) config.browser.executablePath = browserExecutable;
-  setAgentBrowserDefaults({ configPath: config.browser.configPath, socketDir });
+  setAgentBrowserDefaults({
+    configPath: config.browser.configPath,
+    namespace: agentBrowserNamespace,
+    socketDir: socketRoot,
+  });
 
   ensureOutputDir(outputDir);
   ensureOutputDir(sessionDir);
 
   const videoPath = path.join(sessionDir, 'session.webm');
   const serverErrorLog = path.join(sessionDir, 'server.log');
+  const networkEvidence = preparePrivateNetworkEvidence(sessionDir);
 
   const provenance = captureGitProvenance(process.cwd(), [outputDir]);
 
@@ -140,14 +186,24 @@ export async function startCommand(options: StartOptions): Promise<void> {
     targetUrl: openUrl,
     headless: config.headless,
     agentBrowserSocketDir: socketDir,
+    agentBrowserSocketRoot: socketRoot,
+    agentBrowserNamespace,
     agentBrowserConfigPath: config.browser.configPath,
+    privateEvidenceDir: networkEvidence.privateDirectory,
+    networkHarPath: networkEvidence.harPath,
+    networkRequestsPath: networkEvidence.requestsPath,
+    networkSummaryPath: networkEvidence.summaryPath,
+    networkCaptureStarted: false,
+    networkCaptureActive: false,
+    networkEvidenceAvailable: false,
+    networkCaptureError: null,
     serverProcess: null,
     browserProcess: null,
     environment: null,
     viewport: { width: config.viewport.width, height: config.viewport.height },
   };
-  persistOwnedSession(session, controlDir);
-  const signalHandlers = installStartSignalHandlers(session, controlDir);
+  persistOwnedSession(session);
+  const signalHandlers = installStartSignalHandlers(session);
 
   let failureContext = 'start the session';
   try {
@@ -164,7 +220,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         new Date(session.startedAt).getTime(),
         (environmentState) => {
           session.environment = environmentState;
-          persistOwnedSession(session, controlDir);
+          persistOwnedSession(session);
         },
       );
       console.log(chalk.green('✓') + ' Environment and log capture started');
@@ -180,12 +236,12 @@ export async function startCommand(options: StartOptions): Promise<void> {
         (startedServer) => {
           session.serverAlreadyRunning = false;
           session.serverProcess = startedServer.process;
-          persistOwnedSession(session, controlDir);
+          persistOwnedSession(session);
         },
       );
       session.serverAlreadyRunning = false;
       session.serverProcess = server.process;
-      persistOwnedSession(session, controlDir);
+      persistOwnedSession(session);
       console.log(chalk.green('✓') + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk.dim(`  Server logs → ${serverErrorLog}`));
     } else if (!config.environment) {
@@ -195,7 +251,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     failureContext = 'open browser';
     console.log(chalk.dim('Opening browser...'));
     session.browserLaunchAttempted = true;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
     openBrowser(openUrl, config.viewport, config.headless, sessionName, config.browser);
     session.browserProcess = captureAgentBrowserProcessIdentity(socketDir, sessionName);
     if (!session.browserProcess) {
@@ -204,8 +260,15 @@ export async function startCommand(options: StartOptions): Promise<void> {
       );
     }
     session.targetUrl = getPageUrl(sessionName) || openUrl;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
     console.log(chalk.green('✓') + ' Browser ready');
+
+    failureContext = 'start private network capture';
+    startPrivateNetworkCapture(sessionName);
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    persistOwnedSession(session);
+    console.log(chalk.green('✓') + ' Private network capture started');
 
     failureContext = 'initialize recording';
     const RECORDING_RETRIES = 3;
@@ -245,7 +308,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     const interruptionSignal = getTerminationSignal(error);
     try {
       await cleanupFailedStart(session);
-      clearOwnedSession(session, controlDir);
+      clearOwnedSession(session);
       console.error(
         chalk.red('✗') +
           ` Failed to ${failureContext}: ${error.message}\n` +
@@ -255,7 +318,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       session.lifecycleStatus = 'recovery';
       session.cleanupError =
         cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-      persistOwnedSession(session, controlDir);
+      persistOwnedSession(session);
       console.error(
         chalk.red('✗') +
           ` Failed to ${failureContext}: ${error.message}\n` +
@@ -275,7 +338,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   session.recordingActive = true;
   session.lifecycleStatus = 'active';
-  persistOwnedSession(session, controlDir);
+  persistOwnedSession(session);
   signalHandlers.remove();
 
   console.log('');
@@ -302,19 +365,16 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log(`When done, run: ${chalk.white('proofshot stop')}`);
 }
 
-function persistOwnedSession(session: SessionState, controlDir: string): void {
-  saveSession(session, controlDir);
+function persistOwnedSession(session: SessionState): void {
   registerSession(session);
 }
 
-function clearOwnedSession(session: SessionState, controlDir: string): void {
-  clearSession(controlDir);
+function clearOwnedSession(session: SessionState): void {
   unregisterSession(session.sessionName);
 }
 
 function installStartSignalHandlers(
   session: SessionState,
-  controlDir: string,
 ): { isHandling: () => boolean; remove: () => void } {
   let handlingSignal = false;
   const handlers = new Map<NodeJS.Signals, () => void>();
@@ -327,13 +387,13 @@ function installStartSignalHandlers(
       handlingSignal = true;
       void cleanupFailedStart(session)
         .then(() => {
-          clearOwnedSession(session, controlDir);
+          clearOwnedSession(session);
           process.exit(signal === 'SIGINT' ? 130 : 143);
         })
         .catch((error) => {
           session.lifecycleStatus = 'recovery';
           session.cleanupError = error instanceof Error ? error.message : String(error);
-          persistOwnedSession(session, controlDir);
+          persistOwnedSession(session);
           process.exit(1);
         });
     };

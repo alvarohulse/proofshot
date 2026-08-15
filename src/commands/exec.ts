@@ -1,6 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import {
+  writePrivateAgentBrowserResult,
+  type AgentBrowserResultReceipt,
+} from '../browser/evidence.js';
+import {
+  buildSanitizedCommandIntent,
+  classifyInteraction,
+  sanitizeDiagnosticMessage,
+  sanitizePageUrl,
+  type InteractionCategory,
+  type SanitizedCommandIntent,
+} from '../browser/provenance.js';
 import { loadConfig, normalizeViewport } from '../utils/config.js';
 import {
   ab,
@@ -9,14 +21,12 @@ import {
   setAgentBrowserDefaults,
 } from '../utils/exec.js';
 import {
-  loadSession,
   resolveSessionControlDir,
-  saveSession,
-  type SessionState,
 } from '../session/state.js';
 import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
 import { getPageUrl } from '../browser/session.js';
 import { registerSession } from '../session/registry.js';
+import { resolveLiveSession } from '../session/selection.js';
 
 const SESSION_LOG_FILENAME = 'session-log.json';
 const SESSION_LOG_LOCK_TIMEOUT_MS = 5000;
@@ -24,18 +34,26 @@ const SESSION_LOG_STALE_LOCK_MS = 120000;
 
 export interface SessionLogEntry {
   action: string;
+  category?: InteractionCategory;
+  intent?: SanitizedCommandIntent;
   relativeTimeSec: number;
   timestamp: string;
+  durationMs?: number;
   outcome?: 'passed' | 'failed';
   expectedSelector?: string;
   error?: string;
   pageUrl?: string;
+  agentBrowserResult?: AgentBrowserResultReceipt;
   element?: {
     label: string;
     bbox: { x: number; y: number; width: number; height: number };
     viewport: { width: number; height: number };
   };
 }
+
+type ExecOptions = {
+  session?: string;
+};
 
 /**
  * Load existing session log entries from disk.
@@ -79,11 +97,18 @@ function resolveScreenshotPath(args: string[], sessionDir: string): string[] {
  * to prevent the shell from interpreting parentheses, brackets, etc.
  * For other commands, simple joining is fine.
  */
-export function buildShellCommand(args: string[], sessionName?: string): string {
+export function buildShellCommand(
+  args: string[],
+  sessionName?: string,
+  structuredOutput = false,
+): string {
   if (args[0] === 'eval' && args.length > 1) {
     const jsCode = args.slice(1).join(' ');
     const escaped = jsCode.replace(/'/g, "'\\''");
-    return buildAgentBrowserCommand(`eval '${escaped}'`, { session: sessionName });
+    return buildAgentBrowserCommand(`eval '${escaped}'`, {
+      json: structuredOutput,
+      session: sessionName,
+    });
   }
 
   const quotedArgs = args.map((arg) => {
@@ -93,7 +118,10 @@ export function buildShellCommand(args: string[], sessionName?: string): string 
     }
     return arg;
   });
-  return buildAgentBrowserCommand(quotedArgs.join(' '), { session: sessionName });
+  return buildAgentBrowserCommand(quotedArgs.join(' '), {
+    json: structuredOutput,
+    session: sessionName,
+  });
 }
 
 export function translateProofShotExecArgs(args: string[]): {
@@ -213,8 +241,12 @@ function isRefTargetedAction(args: string[]): boolean {
  * 6. Pass through to agent-browser and return its output
  * 7. If action was `set viewport`, update cached viewport in session state
  */
-export async function execCommand(args: string[]): Promise<void> {
-  const action = args.join(' ');
+export async function execCommand(
+  args: string[],
+  options: ExecOptions = {},
+): Promise<void> {
+  const intent = buildSanitizedCommandIntent(args);
+  const action = intent.summary;
   const translated = translateProofShotExecArgs(args);
   let loggedEntry: SessionLogEntry | null = null;
   let sessionLogPath: string | null = null;
@@ -222,10 +254,14 @@ export async function execCommand(args: string[]): Promise<void> {
   // Load session state
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
-  const session = loadSession(controlDir);
+  const session = resolveLiveSession({
+    controlDir,
+    sessionName: options.session,
+  });
   setAgentBrowserDefaults({
     configPath: session?.agentBrowserConfigPath || config.browser.configPath,
-    socketDir: session?.agentBrowserSocketDir,
+    namespace: session?.agentBrowserNamespace,
+    socketDir: session?.agentBrowserSocketRoot || session?.agentBrowserSocketDir,
   });
 
   if (session && !session.recordingActive) {
@@ -271,9 +307,11 @@ export async function execCommand(args: string[]): Promise<void> {
 
     const entry: SessionLogEntry = {
       action,
+      category: classifyInteraction(args),
+      intent,
       relativeTimeSec,
       timestamp: now.toISOString(),
-      expectedSelector: translated.expectedSelector,
+      expectedSelector: sanitizeDiagnosticMessage(translated.expectedSelector),
     };
     if (elementData) {
       entry.element = elementData;
@@ -288,7 +326,12 @@ export async function execCommand(args: string[]): Promise<void> {
   }
 
   // Build shell command with proper quoting
-  const shellCmd = buildShellCommand(resolvedArgs, session?.sessionName);
+  const shellCmd = buildShellCommand(
+    resolvedArgs,
+    session?.sessionName,
+    Boolean(session),
+  );
+  const executionStartedAt = Date.now();
 
   // Pass through to agent-browser
   try {
@@ -300,7 +343,7 @@ export async function execCommand(args: string[]): Promise<void> {
     });
     if (
       translated.expectedSelector &&
-      result.trim().toLowerCase() !== 'true'
+      !assertionPassed(result)
     ) {
       const assertionError = new Error(
         `Expected selector to be visible: ${translated.expectedSelector}`,
@@ -308,15 +351,33 @@ export async function execCommand(args: string[]): Promise<void> {
       assertionError.status = 1;
       throw assertionError;
     }
-    if (result.trim()) {
-      process.stdout.write(result);
+    const displayedResult = session ? unwrapStructuredOutput(result) : result;
+    if (displayedResult.trim()) {
+      process.stdout.write(displayedResult);
       // Ensure trailing newline
-      if (!result.endsWith('\n')) {
+      if (!displayedResult.endsWith('\n')) {
         process.stdout.write('\n');
       }
     }
-    const pageUrl = session ? getPageUrl(session.sessionName) || undefined : undefined;
-    persistActionOutcome(loggedEntry, sessionLogPath, 'passed', undefined, pageUrl);
+    const pageUrl = session
+      ? sanitizePageUrl(getPageUrl(session.sessionName) || undefined)
+      : undefined;
+    const agentBrowserResult = session
+      ? writePrivateAgentBrowserResult({
+          sessionDir: session.sessionDir,
+          rawOutput: result,
+          success: true,
+        })
+      : undefined;
+    persistActionOutcome(
+      loggedEntry,
+      sessionLogPath,
+      'passed',
+      undefined,
+      pageUrl,
+      Date.now() - executionStartedAt,
+      agentBrowserResult,
+    );
   } catch (error: any) {
     // Print stderr and exit with the same code
     const stderr = error?.stderr?.toString?.() || '';
@@ -326,11 +387,26 @@ export async function execCommand(args: string[]): Promise<void> {
     if (!stdout && !stderr && error?.message) {
       process.stderr.write(`${error.message}\n`);
     }
+    const rawErrorOutput = stdout || stderr;
+    const persistedError = sanitizeDiagnosticMessage(
+      stderr.trim() || stdout.trim() || `agent-browser exited with status ${error?.status || 1}`,
+    );
+    const agentBrowserResult = session
+      ? writePrivateAgentBrowserResult({
+          sessionDir: session.sessionDir,
+          rawOutput: rawErrorOutput,
+          success: false,
+          error: persistedError,
+        })
+      : undefined;
     persistActionOutcome(
       loggedEntry,
       sessionLogPath,
       'failed',
-      stderr.trim() || stdout.trim() || error?.message,
+      persistedError,
+      undefined,
+      Date.now() - executionStartedAt,
+      agentBrowserResult,
     );
     process.exit(error?.status || 1);
   }
@@ -344,7 +420,6 @@ export async function execCommand(args: string[]): Promise<void> {
       const vp = normalizeViewport(JSON.parse(vpJson));
       if (vp) {
         session.viewport = vp;
-        saveSession(session, controlDir);
         registerSession(session);
       }
     } catch {
@@ -359,6 +434,8 @@ function persistActionOutcome(
   outcome: 'passed' | 'failed',
   error?: string,
   pageUrl?: string,
+  durationMs?: number,
+  agentBrowserResult?: AgentBrowserResultReceipt,
 ): void {
   if (!entry || !logPath) {
     return;
@@ -369,6 +446,12 @@ function persistActionOutcome(
   }
   if (pageUrl) {
     entry.pageUrl = pageUrl;
+  }
+  if (durationMs !== undefined) {
+    entry.durationMs = durationMs;
+  }
+  if (agentBrowserResult) {
+    entry.agentBrowserResult = agentBrowserResult;
   }
   updateSessionLog(logPath, (entries) => {
     const matchingEntry = [...entries]
@@ -386,8 +469,56 @@ function persistActionOutcome(
       if (pageUrl) {
         matchingEntry.pageUrl = pageUrl;
       }
+      if (durationMs !== undefined) {
+        matchingEntry.durationMs = durationMs;
+      }
+      if (agentBrowserResult) {
+        matchingEntry.agentBrowserResult = agentBrowserResult;
+      }
     }
   });
+}
+
+function assertionPassed(rawOutput: string): boolean {
+  if (rawOutput.trim().toLowerCase() === 'true') {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(rawOutput) as {
+      data?: boolean | { visible?: unknown };
+    };
+    if (typeof parsed.data === 'boolean') {
+      return parsed.data;
+    }
+    return parsed.data?.visible === true;
+  } catch {
+    return false;
+  }
+}
+
+function unwrapStructuredOutput(rawOutput: string): string {
+  try {
+    const parsed = JSON.parse(rawOutput) as { data?: unknown };
+    if (
+      typeof parsed.data === 'string' ||
+      typeof parsed.data === 'number' ||
+      typeof parsed.data === 'boolean'
+    ) {
+      return String(parsed.data);
+    }
+    if (typeof parsed.data !== 'object' || parsed.data === null) {
+      return rawOutput;
+    }
+    const data = parsed.data as Record<string, unknown>;
+    for (const key of ['url', 'title', 'text', 'value', 'snapshot']) {
+      if (typeof data[key] === 'string') {
+        return data[key];
+      }
+    }
+    return rawOutput;
+  } catch {
+    return rawOutput;
+  }
 }
 
 function updateSessionLog(

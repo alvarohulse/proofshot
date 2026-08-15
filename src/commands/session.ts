@@ -7,14 +7,8 @@ import {
   registerSession,
   unregisterSession,
 } from '../session/registry.js';
-import {
-  clearSession,
-  hasActiveSession,
-  loadSession,
-  saveSession,
-  type SessionState,
-} from '../session/state.js';
-import { ownedProcessTreeIsAlive } from '../utils/process.js';
+import { sessionHasVerifiedLiveOwnership } from '../session/selection.js';
+import type { SessionState } from '../session/state.js';
 
 type SessionStatus = 'active' | 'starting' | 'recovery' | 'stale';
 
@@ -71,18 +65,17 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
   for (const session of sessions) {
     setAgentBrowserDefaults({
       configPath: session.agentBrowserConfigPath,
-      socketDir: session.agentBrowserSocketDir,
+      namespace: session.agentBrowserNamespace,
+      socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
     });
     try {
       await cleanupFailedStart(session);
-      clearMatchingControlState(session);
       unregisterSession(session.sessionName);
       console.log(`${chalk.green('✓')} Cleaned ${session.sessionName}`);
     } catch (error) {
       failures += 1;
       session.lifecycleStatus = 'recovery';
       session.cleanupError = error instanceof Error ? error.message : String(error);
-      persistMatchingControlState(session);
       registerSession(session);
       console.error(`${chalk.red('✗')} Kept ${session.sessionName}: ${session.cleanupError}`);
     }
@@ -90,38 +83,6 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
 
   if (failures > 0) {
     process.exitCode = 1;
-  }
-}
-
-function clearMatchingControlState(session: SessionState): void {
-  const controlDir = session.controlDir ?? session.outputDir;
-  if (!hasActiveSession(controlDir)) return;
-  const activeSession = loadControlSessionSafely(controlDir);
-  if (activeSession?.sessionName === session.sessionName) {
-    clearSession(controlDir);
-    return;
-  }
-  throw new Error(
-    `Control state at ${controlDir} is corrupt or belongs to another session; it was not removed.`,
-  );
-}
-
-function persistMatchingControlState(session: SessionState): void {
-  const controlDir = session.controlDir ?? session.outputDir;
-  const activeSession = loadControlSessionSafely(controlDir);
-  if (
-    !hasActiveSession(controlDir) ||
-    activeSession?.sessionName === session.sessionName
-  ) {
-    saveSession(session, controlDir);
-  }
-}
-
-function loadControlSessionSafely(controlDir: string): SessionState | null {
-  try {
-    return loadSession(controlDir);
-  } catch {
-    return null;
   }
 }
 
@@ -162,10 +123,7 @@ function getSessionStatus(session: SessionState): SessionStatus {
   if (session.lifecycleStatus === 'starting') {
     return 'starting';
   }
-  if (
-    (session.browserProcess && ownedProcessTreeIsAlive(session.browserProcess)) ||
-    (session.serverProcess && ownedProcessTreeIsAlive(session.serverProcess))
-  ) {
+  if (sessionHasVerifiedLiveOwnership(session)) {
     return 'active';
   }
   return 'stale';

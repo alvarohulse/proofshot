@@ -2,14 +2,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
 import { loadConfig } from '../utils/config.js';
-import { hasActiveSession, resolveSessionControlDir } from '../session/state.js';
+import { resolveSessionControlDir } from '../session/state.js';
+import {
+  listSessionsForControlDir,
+  sessionHasVerifiedLiveOwnership,
+} from '../session/selection.js';
 
 export async function cleanCommand(): Promise<void> {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
   const outputDir = path.resolve(config.output);
 
-  if (hasActiveSession(controlDir)) {
+  if (
+    listSessionsForControlDir(controlDir).some(sessionHasVerifiedLiveOwnership)
+  ) {
     console.error(
       chalk.red('✗') +
         ' Cannot clean while a ProofShot session owns browser or server processes.\n' +

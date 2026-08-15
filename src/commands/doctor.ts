@@ -2,8 +2,12 @@ import chalk from 'chalk';
 import { PROOFSHOT_VERSION } from '../version.js';
 import { findConfigPath, loadConfig } from '../utils/config.js';
 import { findExecutablePath, readCommandVersion } from '../utils/process.js';
-import { loadSession, resolveSessionControlDir } from '../session/state.js';
+import { resolveSessionControlDir } from '../session/state.js';
 import { listRegisteredSessions } from '../session/registry.js';
+import {
+  listSessionsForControlDir,
+  sessionHasVerifiedLiveOwnership,
+} from '../session/selection.js';
 
 function statusLabel(ok: boolean, text: string): string {
   return ok ? `${chalk.green('✓')} ${text}` : `${chalk.yellow('⚠')} ${text}`;
@@ -17,7 +21,10 @@ export async function doctorCommand(): Promise<void> {
   const configPath = findConfigPath();
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
-  const session = loadSession(controlDir);
+  const activeSessions = listSessionsForControlDir(controlDir).filter(
+    sessionHasVerifiedLiveOwnership,
+  );
+  const session = activeSessions.length === 1 ? activeSessions[0] : null;
   const registeredSessions = listRegisteredSessions();
 
   const agentBrowserPath = findExecutablePath('agent-browser');
@@ -46,7 +53,8 @@ export async function doctorCommand(): Promise<void> {
   printLine('Version', ffmpegVersion || chalk.dim('not available'));
   console.log('');
 
-  console.log(statusLabel(Boolean(session), 'active session'));
+  console.log(statusLabel(activeSessions.length > 0, 'active session'));
+  printLine('Active here', String(activeSessions.length));
   printLine('Sessions', String(registeredSessions.length));
   if (session) {
     printLine('Session dir', session.sessionDir);
@@ -54,6 +62,9 @@ export async function doctorCommand(): Promise<void> {
     printLine('Port', String(session.port));
     if (session.targetUrl) printLine('Target', session.targetUrl);
   } else {
-    printLine('Session dir', chalk.dim('none'));
+    printLine(
+      'Session dir',
+      activeSessions.length > 1 ? chalk.dim('multiple; use session list') : chalk.dim('none'),
+    );
   }
 }

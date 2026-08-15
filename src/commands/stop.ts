@@ -8,10 +8,13 @@ import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
 import {
-  loadSession,
-  clearSession,
+  finalizePrivateNetworkCapture,
+  loadSanitizedNetworkSummary,
+  type SanitizedNetworkSummary,
+} from '../browser/evidence.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
+import {
   resolveSessionControlDir,
-  saveSession,
   type SessionState,
 } from '../session/state.js';
 import {
@@ -20,6 +23,7 @@ import {
   stopOwnedServer,
 } from '../session/lifecycle.js';
 import { registerSession, unregisterSession } from '../session/registry.js';
+import { resolveLiveSession } from '../session/selection.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import {
@@ -72,6 +76,7 @@ function parseTimestampedServerLog(
 
 interface StopOptions {
   noClose?: boolean;
+  session?: string;
 }
 
 export async function stopCommand(options: StopOptions): Promise<void> {
@@ -79,7 +84,10 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const controlDir = resolveSessionControlDir(config.output);
 
   // Load session state
-  const session = loadSession(controlDir);
+  const session = resolveLiveSession({
+    controlDir,
+    sessionName: options.session,
+  });
   if (!session) {
     console.log(
       chalk.dim('No active session found; all owned processes are already stopped.'),
@@ -88,7 +96,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
   setAgentBrowserDefaults({
     configPath: session.agentBrowserConfigPath || config.browser.configPath,
-    socketDir: session.agentBrowserSocketDir,
+    namespace: session.agentBrowserNamespace,
+    socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
   });
 
   if (session.bundleComplete) {
@@ -97,7 +106,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       const browserSessionAddressable = canAddressOwnedBrowserSession(session);
       await stopOwnedBrowser(session);
       session.browserRetained = false;
-      clearOwnedSession(session, controlDir);
+      clearOwnedSession(session);
       if (browserSessionAddressable) {
         console.log(chalk.green('✓') + ' Retained browser closed; proof artifacts were already bundled.');
       } else {
@@ -111,7 +120,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         chalk.dim('Proof artifacts are already bundled; the owned browser remains intentionally open.'),
       );
     } else {
-      clearOwnedSession(session, controlDir);
+      clearOwnedSession(session);
       console.log(chalk.dim('Proof artifacts are already bundled and all owned processes are stopped.'));
     }
     return;
@@ -122,7 +131,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   session.lifecycleStatus = 'stopping';
   session.cleanupError = null;
   session.stoppedAt ||= new Date().toISOString();
-  persistOwnedSession(session, controlDir);
+  persistOwnedSession(session);
   const retryingStoppedSession = !session.recordingActive;
   const recordingWasActive =
     session.recordingActive || Boolean(session.recordingStartedAt);
@@ -192,7 +201,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         : 0;
     // Persist evidence before any cleanup step can fail. A retry must not turn
     // successfully collected browser facts into an "unavailable" claim.
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   } else if (priorConsoleEvidenceAvailable) {
     if (fs.existsSync(consoleErrorsPath)) {
       consoleErrors = fs.readFileSync(consoleErrorsPath, 'utf-8');
@@ -211,7 +220,46 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   } else {
     session.consoleEvidenceAvailable = false;
     session.consoleErrorCount = 0;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
+  }
+
+  let networkSummary: SanitizedNetworkSummary | null =
+    loadSanitizedNetworkSummary(session.networkSummaryPath);
+  if (
+    browserSessionAvailable &&
+    session.networkCaptureActive &&
+    session.privateEvidenceDir &&
+    session.networkHarPath &&
+    session.networkRequestsPath &&
+    session.networkSummaryPath
+  ) {
+    console.log(chalk.dim('Collecting private network evidence...'));
+    try {
+      networkSummary = finalizePrivateNetworkCapture(session.sessionName, {
+        privateDirectory: session.privateEvidenceDir,
+        harPath: session.networkHarPath,
+        requestsPath: session.networkRequestsPath,
+        summaryPath: session.networkSummaryPath,
+      });
+      session.networkEvidenceAvailable = true;
+      session.networkCaptureError = null;
+    } catch (error) {
+      session.networkEvidenceAvailable = false;
+      session.networkCaptureError =
+        sanitizeDiagnosticMessage(
+          error instanceof Error ? error.message : String(error),
+        ) || 'network capture failed';
+      console.log(
+        chalk.yellow('⚠') +
+          ` Private network evidence was incomplete: ${session.networkCaptureError}`,
+      );
+    }
+    session.networkCaptureActive = false;
+    persistOwnedSession(session);
+  } else if (session.networkCaptureStarted && !networkSummary) {
+    session.networkEvidenceAvailable = false;
+    session.networkCaptureActive = false;
+    persistOwnedSession(session);
   }
 
   // Step 2: Stop recording
@@ -220,7 +268,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     stopRecording(session.sessionName);
   }
   session.recordingActive = false;
-  persistOwnedSession(session, controlDir);
+  persistOwnedSession(session);
 
   // Step 3: Close browser (unless --no-close)
   const cleanupErrors: unknown[] = [];
@@ -245,7 +293,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     session.environment.healthFailures = captures
       .filter((capture) => !processIdentityMatches(capture.process))
       .map((capture) => capture.sourceId);
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
   const finalizedEnvironment = session.environment;
   if (session.environment && !session.environmentStopped) {
@@ -253,7 +301,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     try {
       await stopOwnedEnvironment(session.environment);
       session.environmentStopped = true;
-      persistOwnedSession(session, controlDir);
+      persistOwnedSession(session);
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -278,7 +326,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     session.lifecycleStatus = 'recovery';
     session.cleanupError =
       cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
     throw cleanupError;
   }
 
@@ -326,7 +374,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     trimOffsetSec = recordingStartOffsetSec + videoTrimOffsetSec;
     session.videoTrimComplete = true;
     session.trimOffsetSec = trimOffsetSec;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
 
   // Step 6: Count errors
@@ -345,7 +393,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   if (browserSessionAvailable) {
     session.consoleEvidenceAvailable = true;
     session.consoleErrorCount = consoleErrorCount;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
 
   // Extract errors from server log using multi-language patterns
@@ -400,7 +448,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
   if (!session.sessionLogAdjusted) {
     session.sessionLogAdjusted = true;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
 
   // Apply trimOffsetSec to log entries (same adjustment as session log)
@@ -425,6 +473,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     consoleEntries: viewerConsoleEntries,
     serverEntries: viewerServerEntries,
     environment: finalizedEnvironment,
+    networkSummary,
+    networkEvidenceRequired: session.networkCaptureStarted === true,
   });
 
   const viewerPath = writeViewer(sessionDir, {
@@ -468,9 +518,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   session.browserRetained = Boolean(options.noClose);
   if (session.browserRetained) {
     session.lifecycleStatus = 'active';
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   } else {
-    clearOwnedSession(session, controlDir);
+    clearOwnedSession(session);
   }
 
   // Step 9: Print results
@@ -598,13 +648,11 @@ function writeTextFileAtomically(filePath: string, contents: string): void {
   }
 }
 
-function persistOwnedSession(session: SessionState, controlDir: string): void {
-  saveSession(session, controlDir);
+function persistOwnedSession(session: SessionState): void {
   registerSession(session);
 }
 
-function clearOwnedSession(session: SessionState, controlDir: string): void {
-  clearSession(controlDir);
+function clearOwnedSession(session: SessionState): void {
   unregisterSession(session.sessionName);
 }
 
