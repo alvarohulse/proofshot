@@ -2,9 +2,11 @@ import chalk from 'chalk';
 import { cleanupFailedStart } from '../session/lifecycle.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import {
+  claimSessionOperation,
   getRegisteredSession,
   listRegisteredSessions,
   registerSession,
+  releaseSessionOperation,
   unregisterSession,
 } from '../session/registry.js';
 import { sessionHasVerifiedLiveOwnership } from '../session/selection.js';
@@ -63,6 +65,18 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
 
   let failures = 0;
   for (const session of sessions) {
+    let recoveryLease;
+    try {
+      recoveryLease = claimSessionOperation(session, 'recovery');
+    } catch (error) {
+      failures += 1;
+      console.error(
+        `${chalk.red('✗')} Kept ${session.sessionName}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      continue;
+    }
     setAgentBrowserDefaults({
       allowedDomains: session.agentBrowserAllowedDomains,
       configPath: session.agentBrowserConfigPath,
@@ -71,6 +85,7 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
     });
     try {
       await cleanupFailedStart(session);
+      releaseSessionOperation(session, recoveryLease);
       unregisterSession(session.sessionName);
       console.log(`${chalk.green('✓')} Cleaned ${session.sessionName}`);
     } catch (error) {
@@ -79,6 +94,10 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
       session.cleanupError = error instanceof Error ? error.message : String(error);
       registerSession(session);
       console.error(`${chalk.red('✗')} Kept ${session.sessionName}: ${session.cleanupError}`);
+    } finally {
+      if (session.operationLease?.id === recoveryLease.id) {
+        releaseSessionOperation(session, recoveryLease);
+      }
     }
   }
 

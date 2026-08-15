@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => ({
   stopOwnedBrowser: vi.fn(),
   stopOwnedServer: vi.fn(),
   canAddressOwnedBrowserSession: vi.fn(),
+  claimSessionOperation: vi.fn(),
   registerSession: vi.fn(),
+  releaseSessionOperation: vi.fn(),
   unregisterSession: vi.fn(),
   stopOwnedEnvironment: vi.fn(),
   writeViewer: vi.fn(),
@@ -48,7 +50,9 @@ vi.mock('../session/lifecycle.js', () => ({
   stopOwnedServer: mocks.stopOwnedServer,
 }));
 vi.mock('../session/registry.js', () => ({
+  claimSessionOperation: mocks.claimSessionOperation,
   registerSession: mocks.registerSession,
+  releaseSessionOperation: mocks.releaseSessionOperation,
   unregisterSession: mocks.unregisterSession,
 }));
 vi.mock('../session/selection.js', () => ({
@@ -131,6 +135,24 @@ beforeEach(() => {
   mocks.stopOwnedServer.mockResolvedValue(undefined);
   mocks.stopOwnedEnvironment.mockResolvedValue(undefined);
   mocks.canAddressOwnedBrowserSession.mockReturnValue(true);
+  mocks.claimSessionOperation.mockImplementation((claimedSession) => {
+    const lease = {
+      id: 'stop-lease',
+      kind: 'stop',
+      owner: {
+        pid: process.pid,
+        processGroupId: process.pid,
+        sessionId: process.pid,
+        startTime: 'test',
+      },
+      startedAt: new Date().toISOString(),
+    };
+    claimedSession.operationLease = lease;
+    return lease;
+  });
+  mocks.releaseSessionOperation.mockImplementation((claimedSession) => {
+    delete claimedSession.operationLease;
+  });
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 

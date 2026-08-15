@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  claimSessionOperation: vi.fn(),
   cleanupFailedStart: vi.fn(),
   getRegisteredSession: vi.fn(),
   listRegisteredSessions: vi.fn(),
   registerSession: vi.fn(),
+  releaseSessionOperation: vi.fn(),
   unregisterSession: vi.fn(),
   clearSession: vi.fn(),
   hasActiveSession: vi.fn(),
@@ -18,9 +20,11 @@ vi.mock('../session/lifecycle.js', () => ({
   cleanupFailedStart: mocks.cleanupFailedStart,
 }));
 vi.mock('../session/registry.js', () => ({
+  claimSessionOperation: mocks.claimSessionOperation,
   getRegisteredSession: mocks.getRegisteredSession,
   listRegisteredSessions: mocks.listRegisteredSessions,
   registerSession: mocks.registerSession,
+  releaseSessionOperation: mocks.releaseSessionOperation,
   unregisterSession: mocks.unregisterSession,
 }));
 vi.mock('../session/state.js', () => ({
@@ -43,6 +47,24 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   mocks.cleanupFailedStart.mockResolvedValue(undefined);
+  mocks.claimSessionOperation.mockImplementation((session) => {
+    const lease = {
+      id: 'recovery-lease',
+      kind: 'recovery',
+      owner: {
+        pid: process.pid,
+        processGroupId: process.pid,
+        sessionId: process.pid,
+        startTime: 'test',
+      },
+      startedAt: new Date().toISOString(),
+    };
+    session.operationLease = lease;
+    return lease;
+  });
+  mocks.releaseSessionOperation.mockImplementation((session) => {
+    delete session.operationLease;
+  });
   mocks.hasActiveSession.mockReturnValue(true);
   mocks.ownedProcessTreeIsAlive.mockReturnValue(false);
 });

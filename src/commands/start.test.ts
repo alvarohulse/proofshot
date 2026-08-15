@@ -28,7 +28,10 @@ const mocks = vi.hoisted(() => ({
   captureAgentBrowserProcessIdentity: vi.fn(),
   cleanupFailedStart: vi.fn(),
   startOwnedEnvironment: vi.fn(),
+  claimSessionOperation: vi.fn(),
   registerSession: vi.fn(),
+  releaseSessionOperation: vi.fn(),
+  sessionHasLiveOperation: vi.fn(),
   unregisterSession: vi.fn(),
   execSync: vi.fn(),
 }));
@@ -90,7 +93,10 @@ vi.mock('../environment/runtime.js', () => ({
 }));
 
 vi.mock('../session/registry.js', () => ({
+  claimSessionOperation: mocks.claimSessionOperation,
   registerSession: mocks.registerSession,
+  releaseSessionOperation: mocks.releaseSessionOperation,
+  sessionHasLiveOperation: mocks.sessionHasLiveOperation,
   unregisterSession: mocks.unregisterSession,
 }));
 
@@ -141,6 +147,26 @@ describe('startCommand', () => {
       startTime: '12345',
     });
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
+    mocks.claimSessionOperation.mockImplementation((session, kind) => {
+      const lease = {
+        id: `${kind}-lease`,
+        kind,
+        owner: {
+          pid: process.pid,
+          processGroupId: process.pid,
+          sessionId: process.pid,
+          startTime: 'test',
+        },
+        startedAt: new Date().toISOString(),
+      };
+      session.operationLease = lease;
+      mocks.registerSession(session);
+      return lease;
+    });
+    mocks.releaseSessionOperation.mockImplementation((session) => {
+      delete session.operationLease;
+    });
+    mocks.sessionHasLiveOperation.mockReturnValue(false);
     mocks.startOwnedEnvironment.mockResolvedValue(null);
     mocks.preparePrivateNetworkEvidence.mockReturnValue({
       privateDirectory: '/audit/private/agent-browser',

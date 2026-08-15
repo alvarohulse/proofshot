@@ -24,7 +24,13 @@ import {
   type SessionState,
 } from '../session/state.js';
 import { cleanupFailedStart } from '../session/lifecycle.js';
-import { registerSession, unregisterSession } from '../session/registry.js';
+import {
+  claimSessionOperation,
+  registerSession,
+  releaseSessionOperation,
+  sessionHasLiveOperation,
+  unregisterSession,
+} from '../session/registry.js';
 import {
   listSessionsForControlDir,
   sessionHasVerifiedLiveOwnership,
@@ -50,6 +56,20 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   if (options.force) {
     const existingSessions = listSessionsForControlDir(controlDir);
+    const operationSessions = existingSessions.filter((session) =>
+      sessionHasLiveOperation(session),
+    );
+    if (operationSessions.length > 0) {
+      console.error(
+        chalk.red('✗') +
+          ' --force cannot take over a live ProofShot operation.\n' +
+          chalk.dim(
+            `  ${operationSessions[0].sessionName} is still ${operationSessions[0].operationLease?.kind || 'running'}.`,
+          ),
+      );
+      process.exit(1);
+      return;
+    }
     const liveSessions = existingSessions.filter(sessionHasVerifiedLiveOwnership);
     if (liveSessions.length > 0) {
       console.error(
@@ -63,6 +83,19 @@ export async function startCommand(options: StartOptions): Promise<void> {
       return;
     }
     for (const existingSession of existingSessions) {
+      let recoveryLease;
+      try {
+        recoveryLease = claimSessionOperation(existingSession, 'recovery');
+      } catch (error) {
+        console.error(
+          chalk.red('✗') +
+            ` Could not claim recovery for ${existingSession.sessionName}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+        );
+        process.exit(1);
+        return;
+      }
       setAgentBrowserDefaults({
         allowedDomains: existingSession.agentBrowserAllowedDomains,
         configPath:
@@ -74,6 +107,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       });
       try {
         await cleanupFailedStart(existingSession);
+        releaseSessionOperation(existingSession, recoveryLease);
         unregisterSession(existingSession.sessionName);
       } catch (error) {
         existingSession.lifecycleStatus = 'recovery';
@@ -86,6 +120,10 @@ export async function startCommand(options: StartOptions): Promise<void> {
         );
         process.exit(1);
         return;
+      } finally {
+        if (existingSession.operationLease?.id === recoveryLease.id) {
+          releaseSessionOperation(existingSession, recoveryLease);
+        }
       }
     }
     if (existingSessions.length > 0) {
@@ -210,8 +248,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
     environment: null,
     viewport: { width: config.viewport.width, height: config.viewport.height },
   };
-  persistOwnedSession(session);
-  const signalHandlers = installStartSignalHandlers(session);
+  const startLease = claimSessionOperation(session, 'start');
+  const signalHandlers = installStartSignalHandlers(session, startLease);
 
   let failureContext = 'start the session';
   try {
@@ -317,6 +355,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     const interruptionSignal = getTerminationSignal(error);
     try {
       await cleanupFailedStart(session);
+      releaseSessionOperation(session, startLease);
       clearOwnedSession(session);
       console.error(
         chalk.red('✗') +
@@ -328,6 +367,9 @@ export async function startCommand(options: StartOptions): Promise<void> {
       session.cleanupError =
         cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
       persistOwnedSession(session);
+      if (session.operationLease?.id === startLease.id) {
+        releaseSessionOperation(session, startLease);
+      }
       console.error(
         chalk.red('✗') +
           ` Failed to ${failureContext}: ${error.message}\n` +
@@ -348,6 +390,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   session.recordingActive = true;
   session.lifecycleStatus = 'active';
   persistOwnedSession(session);
+  releaseSessionOperation(session, startLease);
   signalHandlers.remove();
 
   console.log('');
@@ -395,6 +438,7 @@ function clearOwnedSession(session: SessionState): void {
 
 function installStartSignalHandlers(
   session: SessionState,
+  lease: NonNullable<SessionState['operationLease']>,
 ): { isHandling: () => boolean; remove: () => void } {
   let handlingSignal = false;
   const handlers = new Map<NodeJS.Signals, () => void>();
@@ -407,6 +451,7 @@ function installStartSignalHandlers(
       handlingSignal = true;
       void cleanupFailedStart(session)
         .then(() => {
+          releaseSessionOperation(session, lease);
           clearOwnedSession(session);
           process.exit(signal === 'SIGINT' ? 130 : 143);
         })
@@ -414,6 +459,9 @@ function installStartSignalHandlers(
           session.lifecycleStatus = 'recovery';
           session.cleanupError = error instanceof Error ? error.message : String(error);
           persistOwnedSession(session);
+          if (session.operationLease?.id === lease.id) {
+            releaseSessionOperation(session, lease);
+          }
           process.exit(1);
         });
     };

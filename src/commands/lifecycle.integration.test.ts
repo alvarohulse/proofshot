@@ -229,6 +229,14 @@ if (command === 'network' && detail[0] === 'har' && detail[1] === 'stop') {
   }
   process.exit(0);
 }
+if (
+  command === 'record' &&
+  detail[0] === 'stop' &&
+  process.env.FAKE_AGENT_BROWSER_DELAY_RECORD_STOP === '1'
+) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+  process.exit(0);
+}
 if (command === 'hang') {
   spawnSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
@@ -242,6 +250,9 @@ if (command === 'close') {
   } catch {}
   try { fs.unlinkSync(pidPath); } catch {}
   try { fs.unlinkSync(statePath); } catch {}
+  if (process.env.FAKE_AGENT_BROWSER_DELAY_CLOSE_AFTER_KILL === '1') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500);
+  }
   process.exit(0);
 }
 if (jsonOutput) {
@@ -313,9 +324,12 @@ function readRegisteredSessions(env: NodeJS.ProcessEnv): any[] {
   if (!fs.existsSync(directory)) {
     return [];
   }
-  return fs.readdirSync(directory).map((file) =>
-    JSON.parse(fs.readFileSync(path.join(directory, file), 'utf-8')),
-  );
+  return fs
+    .readdirSync(directory)
+    .filter((file) => file.endsWith('.json'))
+    .map((file) =>
+      JSON.parse(fs.readFileSync(path.join(directory, file), 'utf-8')),
+    );
 }
 
 beforeAll(() => {
@@ -332,6 +346,92 @@ afterEach(async () => {
 });
 
 describe('isolated CLI lifecycle', () => {
+  it('refuses --force while another start owns the lifecycle operation', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const startEnv = isolatedEnvironment(audit, tools, {
+      FAKE_AGENT_BROWSER_HANG_OPEN: '1',
+    });
+    const forceEnv = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(startEnv.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = spawn(
+      process.execPath,
+      [
+        cliPath,
+        'start',
+        '--url',
+        'https://example.invalid/starting',
+        '--browser-executable',
+        tools.browserPath,
+      ],
+      {
+        cwd: audit,
+        env: startEnv,
+        detached: true,
+        stdio: 'pipe',
+      },
+    );
+    let startOutput = '';
+    start.stdout?.on('data', (chunk) => {
+      startOutput += chunk.toString();
+    });
+    start.stderr?.on('data', (chunk) => {
+      startOutput += chunk.toString();
+    });
+    const daemon = await waitForLatestDaemon(tools.browserLog);
+    const daemonIdentity = captureProcessIdentity(daemon.daemonPid);
+    if (daemonIdentity) {
+      cleanupProcesses.push(daemonIdentity);
+    }
+    const [startingSession] = readRegisteredSessions(startEnv);
+    expect(startingSession.operationLease).toMatchObject({ kind: 'start' });
+
+    const forcedStart = runCli(audit, forceEnv, [
+      'start',
+      '--force',
+      '--url',
+      'https://example.invalid/replacement',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+
+    expect(forcedStart.status, `${forcedStart.stdout}\n${forcedStart.stderr}`).toBe(1);
+    expect(forcedStart.stderr).toContain(
+      '--force cannot take over a live ProofShot operation',
+    );
+    const openCalls = fs
+      .readFileSync(tools.browserLog, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((call) => call.command === 'open');
+    expect(openCalls).toHaveLength(1);
+
+    process.kill(-start.pid!, 'SIGTERM');
+    const exitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('interrupted start did not finish')),
+        10000,
+      );
+      start.once('close', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+    expect(exitCode, startOutput).toBe(143);
+    await waitForProcessExit(daemon.daemonPid);
+    expect(readRegisteredSessions(startEnv)).toEqual([]);
+    expect(fs.readdirSync(registryDirectory(startEnv))).toEqual([]);
+    if (daemonIdentity) {
+      cleanupProcesses.splice(cleanupProcesses.indexOf(daemonIdentity), 1);
+    }
+  }, 30000);
+
   it('refuses --force while exact live ownership is verified', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);
@@ -379,6 +479,76 @@ describe('isolated CLI lifecycle', () => {
     expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
     await waitForProcessExit(session.browserProcess.pid);
     cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
+  }, 30000);
+
+  it('refuses --force while stop finalizes after exact browser cleanup', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = runCli(audit, env, [
+      'start',
+      '--url',
+      'https://example.invalid/stopping',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    const [session] = readRegisteredSessions(env);
+    cleanupProcesses.push(session.browserProcess);
+
+    const stop = spawn(process.execPath, [cliPath, 'stop'], {
+      cwd: audit,
+      env: {
+        ...env,
+        FAKE_AGENT_BROWSER_DELAY_CLOSE_AFTER_KILL: '1',
+      },
+      stdio: 'pipe',
+    });
+    let stopOutput = '';
+    stop.stdout?.on('data', (chunk) => {
+      stopOutput += chunk.toString();
+    });
+    stop.stderr?.on('data', (chunk) => {
+      stopOutput += chunk.toString();
+    });
+    await waitForProcessExit(session.browserProcess.pid);
+    const [stoppingSession] = readRegisteredSessions(env);
+    expect(stoppingSession.operationLease).toMatchObject({ kind: 'stop' });
+    expect(stoppingSession.lifecycleStatus).toBe('stopping');
+
+    const forcedStart = runCli(audit, env, [
+      'start',
+      '--force',
+      '--url',
+      'https://example.invalid/replacement',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+
+    expect(forcedStart.status, `${forcedStart.stdout}\n${forcedStart.stderr}`).toBe(1);
+    expect(forcedStart.stderr).toContain(
+      '--force cannot take over a live ProofShot operation',
+    );
+    const stopExitCode = await new Promise<number | null>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error('delayed stop did not finish')),
+        10000,
+      );
+      stop.once('close', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    });
+    expect(stopExitCode, stopOutput).toBe(0);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
+    expect(readRegisteredSessions(env)).toEqual([]);
+    expect(fs.readdirSync(registryDirectory(env))).toEqual([]);
   }, 30000);
 
   it('allows --force to replace only proven stale ownership', async () => {
@@ -715,6 +885,111 @@ describe('isolated CLI lifecycle', () => {
     expect(interruptedVerdict.reasons).toContain(
       '1 browser action(s) had no recorded outcome.',
     );
+  }, 30000);
+
+  it('finishes exact recording teardown after stop is interrupted', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    for (const target of ['first-stop', 'second-stop']) {
+      const start = runCli(audit, env, [
+        'start',
+        '--url',
+        `https://example.invalid/${target}`,
+        '--browser-executable',
+        tools.browserPath,
+      ]);
+      expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    }
+    const sessions = readRegisteredSessions(env).sort((left, right) =>
+      left.targetUrl.localeCompare(right.targetUrl),
+    );
+    cleanupProcesses.push(...sessions.map((session) => session.browserProcess));
+
+    const interruptedStop = spawn(
+      process.execPath,
+      [
+        cliPath,
+        'stop',
+        '--session',
+        sessions[0].sessionName,
+      ],
+      {
+        cwd: audit,
+        env: {
+          ...env,
+          FAKE_AGENT_BROWSER_DELAY_RECORD_STOP: '1',
+        },
+        detached: true,
+        stdio: 'pipe',
+      },
+    );
+    let stopOutput = '';
+    interruptedStop.stdout?.on('data', (chunk) => {
+      stopOutput += chunk.toString();
+    });
+    interruptedStop.stderr?.on('data', (chunk) => {
+      stopOutput += chunk.toString();
+    });
+    let recordingStopStarted = false;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const calls = fs
+        .readFileSync(tools.browserLog, 'utf-8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      if (
+        calls.some(
+          (call) =>
+            call.session === sessions[0].sessionName &&
+            call.command === 'record' &&
+            call.detail[0] === 'stop',
+        )
+      ) {
+        recordingStopStarted = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(recordingStopStarted).toBe(true);
+    process.kill(interruptedStop.pid!, 'SIGTERM');
+    const stopExitCode = await new Promise<number | null>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error('interrupted stop did not finish')),
+        10000,
+      );
+      interruptedStop.once('close', (code) => {
+        clearTimeout(timeout);
+        resolve(code);
+      });
+    });
+
+    expect(stopExitCode, stopOutput).toBe(143);
+    await waitForProcessExit(sessions[0].browserProcess.pid);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(sessions[0].browserProcess), 1);
+    expect(processIsAlive(sessions[1].browserProcess.pid)).toBe(true);
+    expect(
+      readRegisteredSessions(env).map((session) => session.sessionName),
+    ).toEqual([sessions[1].sessionName]);
+
+    const unaffectedExec = runCli(audit, env, [
+      'exec',
+      '--session',
+      sessions[1].sessionName,
+      'get',
+      'url',
+    ]);
+    expect(unaffectedExec.status, `${unaffectedExec.stdout}\n${unaffectedExec.stderr}`).toBe(0);
+    const finalStop = runCli(audit, env, ['stop']);
+    expect(finalStop.status, `${finalStop.stdout}\n${finalStop.stderr}`).toBe(0);
+    await waitForProcessExit(sessions[1].browserProcess.pid);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(sessions[1].browserProcess), 1);
   }, 30000);
 
   it('shares custom-output control across processes and stops idempotently', async () => {

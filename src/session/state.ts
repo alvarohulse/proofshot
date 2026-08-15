@@ -3,6 +3,15 @@ import { createHash, randomUUID } from 'crypto';
 import type { EnvironmentState } from '../environment/types.js';
 import type { ProcessIdentity } from '../utils/process.js';
 
+export type SessionOperationKind = 'exec' | 'recovery' | 'start' | 'stop';
+
+export type SessionOperationLease = {
+  id: string;
+  kind: SessionOperationKind;
+  owner: ProcessIdentity;
+  startedAt: string;
+};
+
 export interface SessionState {
   startedAt: string;
   recordingStartedAt?: string;
@@ -11,6 +20,7 @@ export interface SessionState {
   controlDir?: string;
   lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
   cleanupError?: string | null;
+  operationLease?: SessionOperationLease;
   description: string | null;
   outputDir: string;
   sessionDir: string;

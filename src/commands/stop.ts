@@ -22,7 +22,12 @@ import {
   stopOwnedBrowser,
   stopOwnedServer,
 } from '../session/lifecycle.js';
-import { registerSession, unregisterSession } from '../session/registry.js';
+import {
+  claimSessionOperation,
+  registerSession,
+  releaseSessionOperation,
+  unregisterSession,
+} from '../session/registry.js';
 import { resolveLiveSession } from '../session/selection.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
@@ -104,6 +109,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
   });
 
+  const stopLease = claimSessionOperation(session, 'stop');
+  try {
   if (session.bundleComplete) {
     if (session.browserRetained && !options.noClose) {
       console.log(chalk.dim('Closing retained browser...'));
@@ -585,10 +592,19 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       console.log(chalk.dim(`  ... and ${serverErrorLines.length - 10} more (see SUMMARY.md)`));
     }
   }
+  // Most browser finalization calls are synchronous. Yield once before
+  // removing handlers so a signal received during them is reflected in the
+  // command's final exit status after exact teardown finishes.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     const interruptedBy = stopSignals.remove();
     if (interruptedBy) {
       process.exitCode = interruptedBy === 'SIGINT' ? 130 : 143;
+    }
+  }
+  } finally {
+    if (session.operationLease?.id === stopLease.id) {
+      releaseSessionOperation(session, stopLease);
     }
   }
 }

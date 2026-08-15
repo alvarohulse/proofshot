@@ -22,7 +22,11 @@ import {
 } from '../session/state.js';
 import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
 import { getPageUrl } from '../browser/session.js';
-import { registerSession } from '../session/registry.js';
+import {
+  claimSessionOperation,
+  registerSession,
+  releaseSessionOperation,
+} from '../session/registry.js';
 import { resolveLiveSession } from '../session/selection.js';
 import {
   appendSessionLogEntry,
@@ -252,6 +256,8 @@ export async function execCommand(
     return;
   }
 
+  const execLease = claimSessionOperation(session, 'exec');
+  try {
   // Resolve args (screenshot path rewriting)
   let resolvedArgs = translated.agentBrowserArgs;
   if (session) {
@@ -378,7 +384,8 @@ export async function execCommand(
       Date.now() - executionStartedAt,
       agentBrowserResult,
     );
-    process.exit(error?.status || 1);
+    process.exitCode = error?.status || 1;
+    return;
   }
 
   // If the action was `set viewport`, update cached viewport in session state
@@ -394,6 +401,11 @@ export async function execCommand(
       }
     } catch {
       // Non-critical — viewport cache stays stale
+    }
+  }
+  } finally {
+    if (session.operationLease?.id === execLease.id) {
+      releaseSessionOperation(session, execLease);
     }
   }
 }
