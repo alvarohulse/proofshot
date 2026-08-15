@@ -5,6 +5,7 @@ import { execFileSync } from 'child_process';
 import { findExecutablePath } from '../utils/process.js';
 
 const REQUIRED_AGENT_BROWSER_VERSION = '0.34.0';
+const REQUIRED_AGENT_BROWSER_VERSION_OUTPUT = /^(?:agent-browser\s+)?0\.34\.0$/i;
 const INCOMPATIBLE_ENVIRONMENT_KEYS = [
   'AGENT_BROWSER_ARGS',
   'AGENT_BROWSER_AUTO_CONNECT',
@@ -98,10 +99,11 @@ export type AgentBrowserRuntime = {
 export function resolveAgentBrowserRuntime(
   env: NodeJS.ProcessEnv = process.env,
 ): AgentBrowserRuntime {
-  const executablePath = findExecutablePath('agent-browser');
-  if (!executablePath) {
+  const discoveredExecutablePath = findExecutablePath('agent-browser');
+  if (!discoveredExecutablePath) {
     throw new Error('agent-browser executable was not found on PATH.');
   }
+  const executablePath = path.resolve(discoveredExecutablePath);
 
   const output = execFileSync(executablePath, ['--version'], {
     encoding: 'utf-8',
@@ -110,7 +112,11 @@ export function resolveAgentBrowserRuntime(
     timeout: 5000,
   }).trim();
   const version = parseAgentBrowserVersion(output);
-  if (!version || version.join('.') !== REQUIRED_AGENT_BROWSER_VERSION) {
+  if (
+    !version ||
+    version.join('.') !== REQUIRED_AGENT_BROWSER_VERSION ||
+    !REQUIRED_AGENT_BROWSER_VERSION_OUTPUT.test(output)
+  ) {
     throw new Error(
       `ProofShot requires exactly agent-browser ${REQUIRED_AGENT_BROWSER_VERSION}; received ${output || 'no version output'}.`,
     );

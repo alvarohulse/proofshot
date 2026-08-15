@@ -119,6 +119,11 @@ describe('agent-browser isolation', () => {
       'requires exactly agent-browser 0.34.0',
     );
 
+    mocks.execFileSync.mockReturnValueOnce('agent-browser 0.34.0-beta.1\n');
+    expect(() => resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toThrow(
+      'requires exactly agent-browser 0.34.0',
+    );
+
     mocks.execFileSync.mockReturnValueOnce('agent-browser 0.34.0\n');
     expect(resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toEqual({
       executablePath: '/opt/node24/bin/agent-browser',
@@ -128,6 +133,22 @@ describe('agent-browser isolation', () => {
       '/opt/node24/bin/agent-browser',
       ['--version'],
       expect.objectContaining({ env: { PATH: '/usr/bin' } }),
+    );
+  });
+
+  it('normalizes a discovered executable to an absolute path before probing it', () => {
+    mocks.findExecutablePath.mockReturnValue('./tools/agent-browser');
+    mocks.execFileSync.mockReturnValueOnce('0.34.0\n');
+    const executablePath = path.resolve('./tools/agent-browser');
+
+    expect(resolveAgentBrowserRuntime({ PATH: './tools' })).toEqual({
+      executablePath,
+      version: '0.34.0',
+    });
+    expect(mocks.execFileSync).toHaveBeenCalledWith(
+      executablePath,
+      ['--version'],
+      expect.any(Object),
     );
   });
 
