@@ -375,6 +375,54 @@ describe('isolated CLI lifecycle', () => {
     cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
   }, 30000);
 
+  it('allows --force to replace only proven stale ownership', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = runCli(audit, env, [
+      'start',
+      '--url',
+      'https://example.invalid/stale',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    const [staleSession] = readRegisteredSessions(env);
+    await terminateOwnedProcessTree(staleSession.browserProcess, { graceMs: 300 });
+    await waitForProcessExit(staleSession.browserProcess.pid);
+
+    const replacement = runCli(audit, env, [
+      'start',
+      '--force',
+      '--url',
+      'https://example.invalid/replacement',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(replacement.status, `${replacement.stdout}\n${replacement.stderr}`).toBe(0);
+    expect(replacement.stdout).toContain('Cleaned up stale session state');
+    const [replacementSession] = readRegisteredSessions(env);
+    expect(replacementSession.sessionName).not.toBe(staleSession.sessionName);
+    expect(replacementSession.targetUrl).toBe(
+      'https://example.invalid/replacement',
+    );
+    cleanupProcesses.push(replacementSession.browserProcess);
+
+    const stop = runCli(audit, env, ['stop']);
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    await waitForProcessExit(replacementSession.browserProcess.pid);
+    cleanupProcesses.splice(
+      cleanupProcesses.indexOf(replacementSession.browserProcess),
+      1,
+    );
+  }, 30000);
+
   it('isolates two sessions and requires an exact target only while ambiguous', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);
@@ -426,6 +474,11 @@ describe('isolated CLI lifecycle', () => {
     expect(openCalls.every((call) => call.allowedDomains === 'example.invalid')).toBe(
       true,
     );
+    const inventory = runCli(audit, env, ['session', 'list', '--json']);
+    expect(inventory.status, `${inventory.stdout}\n${inventory.stderr}`).toBe(0);
+    expect(
+      JSON.parse(inventory.stdout).sessions.map((entry: { id: string }) => entry.id),
+    ).toEqual(expect.arrayContaining(sessions.map((session) => session.sessionName)));
 
     const ambiguousExec = runCli(audit, env, ['exec', 'get', 'url']);
     expect(ambiguousExec.status).toBe(1);
