@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   loadSession: vi.fn(),
   saveSession: vi.fn(),
   setAgentBrowserDefaults: vi.fn(),
+  backfillSessionAgentBrowserRuntime: vi.fn(),
   ownedProcessTreeIsAlive: vi.fn(),
 }));
 
@@ -35,6 +36,10 @@ vi.mock('../session/state.js', () => ({
 }));
 vi.mock('../utils/exec.js', () => ({
   setAgentBrowserDefaults: mocks.setAgentBrowserDefaults,
+}));
+vi.mock('../session/browser-runtime.js', () => ({
+  backfillSessionAgentBrowserRuntime:
+    mocks.backfillSessionAgentBrowserRuntime,
 }));
 vi.mock('../utils/process.js', () => ({
   ownedProcessTreeIsAlive: mocks.ownedProcessTreeIsAlive,
@@ -67,6 +72,7 @@ beforeEach(() => {
   });
   mocks.hasActiveSession.mockReturnValue(true);
   mocks.ownedProcessTreeIsAlive.mockReturnValue(false);
+  mocks.backfillSessionAgentBrowserRuntime.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -117,6 +123,33 @@ describe('session commands', () => {
     expect(session.cleanupError).toBe('identity mismatch');
     expect(mocks.registerSession).toHaveBeenCalledWith(session);
     expect(mocks.unregisterSession).not.toHaveBeenCalled();
+  });
+
+  it('persists an exact runtime before cleaning a legacy session', async () => {
+    const session = buildSession({ agentBrowserExecutablePath: undefined });
+    mocks.getRegisteredSession.mockReturnValue(session);
+    mocks.backfillSessionAgentBrowserRuntime.mockImplementation(
+      (legacySession) => {
+        legacySession.agentBrowserExecutablePath =
+          '/opt/node24/bin/agent-browser';
+        legacySession.agentBrowserVersion = '0.34.0';
+        return true;
+      },
+    );
+
+    await sessionCleanCommand({ session: session.sessionName });
+
+    expect(mocks.registerSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentBrowserExecutablePath: '/opt/node24/bin/agent-browser',
+        agentBrowserVersion: '0.34.0',
+      }),
+    );
+    expect(mocks.setAgentBrowserDefaults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        executablePath: '/opt/node24/bin/agent-browser',
+      }),
+    );
   });
 
   it('does not unregister another concurrent session', async () => {

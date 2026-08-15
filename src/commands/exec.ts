@@ -20,6 +20,7 @@ import {
 import {
   resolveSessionControlDir,
 } from '../session/state.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
 import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
 import { getPageUrl } from '../browser/session.js';
 import {
@@ -224,14 +225,6 @@ export async function execCommand(
     operation: 'exec',
     sessionName: options.session,
   });
-  setAgentBrowserDefaults({
-    allowedDomains: session?.agentBrowserAllowedDomains,
-    configPath: session?.agentBrowserConfigPath || config.browser.configPath,
-    executablePath: session?.agentBrowserExecutablePath,
-    namespace: session?.agentBrowserNamespace,
-    socketDir: session?.agentBrowserSocketRoot || session?.agentBrowserSocketDir,
-  });
-
   if (!session) {
     console.error(
       'Error: No active ProofShot session matches this worktree.\n' +
@@ -260,6 +253,16 @@ export async function execCommand(
 
   const execLease = claimSessionOperation(session, 'exec');
   try {
+  if (backfillSessionAgentBrowserRuntime(session)) {
+    registerSession(session);
+  }
+  setAgentBrowserDefaults({
+    allowedDomains: session.agentBrowserAllowedDomains,
+    configPath: session.agentBrowserConfigPath || config.browser.configPath,
+    executablePath: session.agentBrowserExecutablePath,
+    namespace: session.agentBrowserNamespace,
+    socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
+  });
   const pageUrlBefore = capturePageUrl(session.sessionName);
   // Resolve args (screenshot path rewriting)
   let resolvedArgs = translated.agentBrowserArgs;

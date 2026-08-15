@@ -17,6 +17,7 @@ import {
   resolveSessionControlDir,
   type SessionState,
 } from '../session/state.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
 import {
   canAddressOwnedBrowserSession,
   stopOwnedBrowser,
@@ -103,6 +104,11 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     );
     return;
   }
+  const stopLease = claimSessionOperation(session, 'stop');
+  try {
+  if (backfillSessionAgentBrowserRuntime(session)) {
+    persistOwnedSession(session);
+  }
   setAgentBrowserDefaults({
     allowedDomains: session.agentBrowserAllowedDomains,
     configPath: session.agentBrowserConfigPath || config.browser.configPath,
@@ -110,9 +116,6 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     namespace: session.agentBrowserNamespace,
     socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
   });
-
-  const stopLease = claimSessionOperation(session, 'stop');
-  try {
   if (session.bundleComplete) {
     if (session.browserRetained && !options.noClose) {
       console.log(chalk.dim('Closing retained browser...'));

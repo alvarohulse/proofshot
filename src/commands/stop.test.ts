@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   execFileSync: vi.fn(),
   finalizePrivateNetworkCapture: vi.fn(),
   loadSanitizedNetworkSummary: vi.fn(),
+  backfillSessionAgentBrowserRuntime: vi.fn(),
 }));
 
 vi.mock('../utils/config.js', async (importOriginal) => ({
@@ -63,6 +64,10 @@ vi.mock('../session/registry.js', () => ({
 }));
 vi.mock('../session/selection.js', () => ({
   resolveLiveSession: mocks.loadSession,
+}));
+vi.mock('../session/browser-runtime.js', () => ({
+  backfillSessionAgentBrowserRuntime:
+    mocks.backfillSessionAgentBrowserRuntime,
 }));
 vi.mock('../environment/runtime.js', () => ({
   stopOwnedEnvironment: mocks.stopOwnedEnvironment,
@@ -147,6 +152,7 @@ beforeEach(() => {
   mocks.stopOwnedServer.mockResolvedValue(undefined);
   mocks.stopOwnedEnvironment.mockResolvedValue(undefined);
   mocks.canAddressOwnedBrowserSession.mockReturnValue(true);
+  mocks.backfillSessionAgentBrowserRuntime.mockReturnValue(false);
   mocks.claimSessionOperation.mockImplementation((claimedSession) => {
     const lease = {
       id: 'stop-lease',

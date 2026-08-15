@@ -10,6 +10,7 @@ import {
   unregisterSession,
 } from '../session/registry.js';
 import { sessionHasVerifiedLiveOwnership } from '../session/selection.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
 import type { SessionState } from '../session/state.js';
 
 type SessionStatus = 'active' | 'starting' | 'recovery' | 'stale';
@@ -77,14 +78,17 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
       );
       continue;
     }
-    setAgentBrowserDefaults({
-      allowedDomains: session.agentBrowserAllowedDomains,
-      configPath: session.agentBrowserConfigPath,
-      executablePath: session.agentBrowserExecutablePath,
-      namespace: session.agentBrowserNamespace,
-      socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
-    });
     try {
+      if (backfillSessionAgentBrowserRuntime(session)) {
+        registerSession(session);
+      }
+      setAgentBrowserDefaults({
+        allowedDomains: session.agentBrowserAllowedDomains,
+        configPath: session.agentBrowserConfigPath,
+        executablePath: session.agentBrowserExecutablePath,
+        namespace: session.agentBrowserNamespace,
+        socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
+      });
       await cleanupFailedStart(session);
       releaseSessionOperation(session, recoveryLease);
       unregisterSession(session.sessionName);

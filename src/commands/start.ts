@@ -28,6 +28,7 @@ import {
   resolveSessionControlDir,
   type SessionState,
 } from '../session/state.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
 import { cleanupFailedStart } from '../session/lifecycle.js';
 import {
   claimSessionOperation,
@@ -101,17 +102,20 @@ export async function startCommand(options: StartOptions): Promise<void> {
         process.exit(1);
         return;
       }
-      setAgentBrowserDefaults({
-        allowedDomains: existingSession.agentBrowserAllowedDomains,
-        configPath:
-          existingSession.agentBrowserConfigPath || config.browser.configPath,
-        executablePath: existingSession.agentBrowserExecutablePath,
-        namespace: existingSession.agentBrowserNamespace,
-        socketDir:
-          existingSession.agentBrowserSocketRoot ||
-          existingSession.agentBrowserSocketDir,
-      });
       try {
+        if (backfillSessionAgentBrowserRuntime(existingSession)) {
+          registerSession(existingSession);
+        }
+        setAgentBrowserDefaults({
+          allowedDomains: existingSession.agentBrowserAllowedDomains,
+          configPath:
+            existingSession.agentBrowserConfigPath || config.browser.configPath,
+          executablePath: existingSession.agentBrowserExecutablePath,
+          namespace: existingSession.agentBrowserNamespace,
+          socketDir:
+            existingSession.agentBrowserSocketRoot ||
+            existingSession.agentBrowserSocketDir,
+        });
         await cleanupFailedStart(existingSession);
         releaseSessionOperation(existingSession, recoveryLease);
         unregisterSession(existingSession.sessionName);

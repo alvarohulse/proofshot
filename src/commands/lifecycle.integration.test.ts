@@ -607,6 +607,67 @@ describe('isolated CLI lifecycle', () => {
     );
   }, 30000);
 
+  it('backfills an exact runtime for legacy session state', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = runCli(audit, env, [
+      'start',
+      '--url',
+      'https://example.invalid/legacy-runtime',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    const [session] = readRegisteredSessions(env);
+    cleanupProcesses.push(session.browserProcess);
+    const registryPath = path.join(
+      registryDirectory(env),
+      `${session.sessionName}.json`,
+    );
+    delete session.agentBrowserExecutablePath;
+    delete session.agentBrowserVersion;
+    fs.writeFileSync(registryPath, JSON.stringify(session, null, 2) + '\n');
+
+    const exec = runCli(audit, env, [
+      'exec',
+      '--session',
+      session.sessionName,
+      'get',
+      'url',
+    ]);
+
+    expect(exec.status, `${exec.stdout}\n${exec.stderr}`).toBe(0);
+    expect(exec.stdout).toContain('https://example.invalid/legacy-runtime');
+    const [backfilledSession] = readRegisteredSessions(env);
+    expect(backfilledSession.agentBrowserExecutablePath).toBe(
+      path.join(tools.binDir, 'agent-browser'),
+    );
+    expect(backfilledSession.agentBrowserVersion).toBe('0.34.0');
+
+    delete backfilledSession.agentBrowserExecutablePath;
+    delete backfilledSession.agentBrowserVersion;
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify(backfilledSession, null, 2) + '\n',
+    );
+
+    const stop = runCli(audit, env, [
+      'stop',
+      '--session',
+      session.sessionName,
+    ]);
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    await waitForProcessExit(session.browserProcess.pid);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
+  }, 30000);
+
   it('isolates two sessions and requires an exact target only while ambiguous', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);
