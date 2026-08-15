@@ -114,6 +114,13 @@ describe('browser interaction provenance', () => {
     ).toBe('open https://api.example.com/ --headers [REDACTED]');
     expect(
       buildSanitizedCommandIntent([
+        'open',
+        'https://api.example.com',
+        '--headers={"Authorization":"Bearer private-inline-token"}',
+      ]).summary,
+    ).toBe('open https://api.example.com/ --headers=[REDACTED]');
+    expect(
+      buildSanitizedCommandIntent([
         'keyboard',
         'inserttext',
         'private-keyboard-value',

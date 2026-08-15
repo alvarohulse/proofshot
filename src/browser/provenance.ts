@@ -319,6 +319,15 @@ function sanitizeArguments(command: string, args: string[]): string[] {
       redactNext = false;
       continue;
     }
+    const equalsIndex = argument.indexOf('=');
+    if (
+      index > 0 &&
+      equalsIndex > 0 &&
+      SECRET_FLAG.test(argument.slice(0, equalsIndex))
+    ) {
+      sanitized.push(`${argument.slice(0, equalsIndex)}=${REDACTED}`);
+      continue;
+    }
     if (index > 0 && SECRET_FLAG.test(argument)) {
       sanitized.push(argument);
       redactNext = true;
