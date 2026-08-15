@@ -590,6 +590,10 @@ function buildVerdict(
   const pendingExpectedSelectors = options.actions.filter(
     (action) => action.expectedSelector && action.outcome === undefined,
   );
+  const hasSyntheticDomMutation = options.actions.some(
+    (action) =>
+      action.category === 'synthetic-dom' || /^eval\b/i.test(action.action),
+  );
   const fatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === 'fatal',
   ).length;
@@ -624,6 +628,11 @@ function buildVerdict(
       : []),
     ...(reusedScreenshotPaths > 0
       ? ['One or more screenshot paths were reused by multiple actions.']
+      : []),
+    ...(hasSyntheticDomMutation
+      ? [
+          'Synthetic DOM mutation is diagnostic-only and cannot serve as final behavioral proof.',
+        ]
       : []),
   ];
   const status: VerdictStatus =
