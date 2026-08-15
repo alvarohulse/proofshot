@@ -326,6 +326,55 @@ afterEach(async () => {
 });
 
 describe('isolated CLI lifecycle', () => {
+  it('refuses --force while exact live ownership is verified', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = runCli(audit, env, [
+      'start',
+      '--url',
+      'https://example.invalid/live',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    const [session] = readRegisteredSessions(env);
+    cleanupProcesses.push(session.browserProcess);
+    const registryPath = path.join(
+      registryDirectory(env),
+      `${session.sessionName}.json`,
+    );
+    const registryBefore = fs.readFileSync(registryPath, 'utf-8');
+    const browserLogBefore = fs.readFileSync(tools.browserLog, 'utf-8');
+
+    const forcedStart = runCli(audit, env, [
+      'start',
+      '--force',
+      '--url',
+      'https://example.invalid/replacement',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(forcedStart.status).toBe(1);
+    expect(forcedStart.stderr).toContain(
+      '--force cannot clean a verified live ProofShot session',
+    );
+    expect(fs.readFileSync(registryPath, 'utf-8')).toBe(registryBefore);
+    expect(fs.readFileSync(tools.browserLog, 'utf-8')).toBe(browserLogBefore);
+    expect(processIsAlive(session.browserProcess.pid)).toBe(true);
+
+    const stop = runCli(audit, env, ['stop']);
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    await waitForProcessExit(session.browserProcess.pid);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
+  }, 30000);
+
   it('isolates two sessions and requires an exact target only while ambiguous', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);
