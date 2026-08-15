@@ -7,6 +7,7 @@ import {
 import {
   buildSanitizedCommandIntent,
   classifyInteraction,
+  parseAgentBrowserBatchCommands,
   sanitizeDiagnosticMessage,
   sanitizePageUrl,
 } from '../browser/provenance.js';
@@ -39,6 +40,40 @@ type ExecOptions = {
   session?: string;
 };
 
+const MAX_BATCH_DEPTH = 8;
+const RESERVED_AGENT_BROWSER_FLAGS = new Set([
+  '--action-policy',
+  '--allow-file-access',
+  '--allowed-domains',
+  '--args',
+  '--auto-connect',
+  '--cdp',
+  '--config',
+  '--confirm-actions',
+  '--confirm-interactive',
+  '--device',
+  '--download-path',
+  '--enable',
+  '--engine',
+  '--executable-path',
+  '--extension',
+  '--headed',
+  '--ignore-https-errors',
+  '--init-script',
+  '--namespace',
+  '--no-auto-dialog',
+  '--profile',
+  '--provider',
+  '--proxy',
+  '--proxy-bypass',
+  '--session',
+  '--session-name',
+  '--socket-dir',
+  '--state',
+  '--user-agent',
+  '-p',
+]);
+
 /**
  * For screenshot commands, resolve relative paths into the session directory
  * so agents can just say `proofshot exec screenshot step-name.png`.
@@ -68,6 +103,7 @@ export function buildShellCommand(
   sessionName?: string,
   structuredOutput = false,
 ): string {
+  assertControlledAgentBrowserCommand(args);
   if (args[0] === 'eval' && args.length > 1) {
     const jsCode = args.slice(1).join(' ');
     const escaped = jsCode.replace(/'/g, "'\\''");
@@ -88,6 +124,53 @@ export function buildShellCommand(
     json: structuredOutput,
     session: sessionName,
   });
+}
+
+export function assertControlledAgentBrowserCommand(args: string[]): void {
+  assertControlledAgentBrowserCommandAtDepth(args, 0);
+}
+
+function assertControlledAgentBrowserCommandAtDepth(
+  args: string[],
+  batchDepth: number,
+): void {
+  const command = args[0]?.toLowerCase();
+  if (command === 'connect' || command === 'state') {
+    throw new Error(
+      `agent-browser ${command} cannot override ProofShot-owned browser state.`,
+    );
+  }
+  if (
+    command === 'close' &&
+    args.some((argument) => normalizeFlag(argument) === '--all')
+  ) {
+    throw new Error(
+      'agent-browser close --all cannot target other ProofShot sessions.',
+    );
+  }
+
+  const reservedFlag = args
+    .map(normalizeFlag)
+    .find((argument) => RESERVED_AGENT_BROWSER_FLAGS.has(argument));
+  if (reservedFlag) {
+    throw new Error(
+      `${reservedFlag} is owned by ProofShot and cannot be passed through proofshot exec.`,
+    );
+  }
+
+  if (command !== 'batch') {
+    return;
+  }
+  if (batchDepth >= MAX_BATCH_DEPTH) {
+    throw new Error('Nested agent-browser batch commands exceed the safe depth.');
+  }
+  for (const nestedArgs of parseAgentBrowserBatchCommands(args)) {
+    assertControlledAgentBrowserCommandAtDepth(nestedArgs, batchDepth + 1);
+  }
+}
+
+function normalizeFlag(argument: string): string {
+  return argument.toLowerCase().split('=', 1)[0];
 }
 
 export function translateProofShotExecArgs(args: string[]): {
@@ -211,6 +294,7 @@ export async function execCommand(
   args: string[],
   options: ExecOptions = {},
 ): Promise<void> {
+  assertControlledAgentBrowserCommand(args);
   const intent = buildSanitizedCommandIntent(args);
   const action = intent.summary;
   const translated = translateProofShotExecArgs(args);

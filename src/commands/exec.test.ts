@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import {
+  assertControlledAgentBrowserCommand,
   buildShellCommand,
   translateProofShotExecArgs,
 } from './exec.js';
@@ -41,5 +42,64 @@ describe('buildShellCommand', () => {
       agentBrowserArgs: ['is', 'visible', '#ready'],
       expectedSelector: '#ready',
     });
+  });
+
+  it.each([
+    ['snapshot', '--session=another-session'],
+    ['open', 'https://example.com', '--allowed-domains=attacker.invalid'],
+    ['open', 'https://example.com', '--provider', 'browserbase'],
+    ['open', 'https://example.com', '--cdp=9222'],
+    ['open', 'https://example.com', '--profile', './shared-profile'],
+    ['open', 'https://example.com', '--state=./shared-state.json'],
+    ['open', 'https://example.com', '--config', './untrusted.json'],
+    ['open', 'https://example.com', '--executable-path=/tmp/browser'],
+    ['open', 'https://example.com', '--namespace=shared'],
+  ])('rejects ProofShot-owned global options: %j', (...args) => {
+    expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
+      'owned by ProofShot',
+    );
+  });
+
+  it('rejects commands that can escape the owned browser lifecycle', () => {
+    expect(() => assertControlledAgentBrowserCommand(['connect', '9222'])).toThrow(
+      'cannot override ProofShot-owned browser state',
+    );
+    expect(() =>
+      assertControlledAgentBrowserCommand(['state', 'load', './shared.json']),
+    ).toThrow('cannot override ProofShot-owned browser state');
+    expect(() =>
+      assertControlledAgentBrowserCommand(['close', '--all']),
+    ).toThrow('cannot target other ProofShot sessions');
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'batch',
+        'snapshot -i',
+        'open https://example.com --provider browserbase',
+      ]),
+    ).toThrow('--provider is owned by ProofShot');
+  });
+
+  it('preserves legitimate command-specific options', () => {
+    expect(() =>
+      assertControlledAgentBrowserCommand(['snapshot', '-i', '--depth', '3']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'find',
+        'role',
+        'button',
+        'click',
+        '--name',
+        'Submit',
+      ]),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'open',
+        'https://example.com',
+        '--headers',
+        '{"X-Test":"proof"}',
+      ]),
+    ).not.toThrow();
   });
 });

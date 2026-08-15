@@ -134,10 +134,7 @@ function classifyBatchInteraction(
     return 'synthetic-dom';
   }
 
-  const nestedCommands = args
-    .slice(1)
-    .filter((argument) => !['--bail', '--json'].includes(argument))
-    .flatMap(parseBatchArgument);
+  const nestedCommands = parseAgentBrowserBatchCommands(args);
   if (nestedCommands.length === 0) {
     return 'unknown';
   }
@@ -151,6 +148,13 @@ function classifyBatchInteraction(
 
   const uniqueCategories = new Set(categories);
   return uniqueCategories.size === 1 ? categories[0] : 'unknown';
+}
+
+export function parseAgentBrowserBatchCommands(args: string[]): string[][] {
+  return args
+    .slice(1)
+    .filter((argument) => !['--bail', '--json'].includes(argument))
+    .flatMap(parseBatchArgument);
 }
 
 function parseBatchArgument(value: string): string[][] {
