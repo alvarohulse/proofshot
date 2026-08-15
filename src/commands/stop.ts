@@ -95,6 +95,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     return;
   }
   setAgentBrowserDefaults({
+    allowedDomains: session.agentBrowserAllowedDomains,
     configPath: session.agentBrowserConfigPath || config.browser.configPath,
     namespace: session.agentBrowserNamespace,
     socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,

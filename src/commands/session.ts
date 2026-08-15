@@ -64,6 +64,7 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
   let failures = 0;
   for (const session of sessions) {
     setAgentBrowserDefaults({
+      allowedDomains: session.agentBrowserAllowedDomains,
       configPath: session.agentBrowserConfigPath,
       namespace: session.agentBrowserNamespace,
       socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,

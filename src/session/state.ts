@@ -37,6 +37,7 @@ export interface SessionState {
   agentBrowserSocketDir?: string;
   agentBrowserSocketRoot?: string;
   agentBrowserNamespace?: string;
+  agentBrowserAllowedDomains?: string[];
   agentBrowserConfigPath?: string;
   privateEvidenceDir?: string;
   networkHarPath?: string;

@@ -137,6 +137,7 @@ function isSessionState(value: unknown): value is SessionState {
     isOptionalString(session.agentBrowserSocketDir) &&
     isOptionalString(session.agentBrowserSocketRoot) &&
     isOptionalString(session.agentBrowserNamespace) &&
+    isOptionalStringArray(session.agentBrowserAllowedDomains) &&
     isOptionalString(session.agentBrowserConfigPath) &&
     isOptionalString(session.privateEvidenceDir) &&
     isOptionalString(session.networkHarPath) &&
@@ -155,6 +156,13 @@ function isSessionState(value: unknown): value is SessionState {
 
 function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === 'string';
+}
+
+function isOptionalStringArray(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((entry) => typeof entry === 'string'))
+  );
 }
 
 function isOptionalBoolean(value: unknown): boolean {

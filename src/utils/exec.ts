@@ -12,6 +12,7 @@ export class ProofShotError extends Error {
 }
 
 export interface AgentBrowserCommandOptions {
+  allowedDomains?: string[];
   configPath?: string;
   json?: boolean;
   namespace?: string;
@@ -22,21 +23,26 @@ export interface AgentBrowserCommandOptions {
 
 let defaultAgentBrowserOptions: Pick<
   AgentBrowserCommandOptions,
-  'configPath' | 'namespace' | 'socketDir'
+  'allowedDomains' | 'configPath' | 'namespace' | 'socketDir'
 > = {};
 
 export function setAgentBrowserDefaults(
   options: Pick<
     AgentBrowserCommandOptions,
-    'configPath' | 'namespace' | 'socketDir'
+    'allowedDomains' | 'configPath' | 'namespace' | 'socketDir'
   >,
 ): void {
   defaultAgentBrowserOptions = { ...options };
 }
 
 export function getAgentBrowserEnvironment(
-  options: Pick<AgentBrowserCommandOptions, 'namespace' | 'socketDir'> = {},
+  options: Pick<
+    AgentBrowserCommandOptions,
+    'allowedDomains' | 'namespace' | 'socketDir'
+  > = {},
 ): NodeJS.ProcessEnv {
+  const allowedDomains =
+    options.allowedDomains ?? defaultAgentBrowserOptions.allowedDomains;
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
   const namespace = options.namespace ?? defaultAgentBrowserOptions.namespace;
   return {
@@ -45,6 +51,9 @@ export function getAgentBrowserEnvironment(
       process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || '1800000',
     ...(socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}),
     ...(namespace ? { AGENT_BROWSER_NAMESPACE: namespace } : {}),
+    ...(allowedDomains && allowedDomains.length > 0
+      ? { AGENT_BROWSER_ALLOWED_DOMAINS: allowedDomains.join(',') }
+      : {}),
   };
 }
 

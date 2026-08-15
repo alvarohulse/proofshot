@@ -63,6 +63,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     }
     for (const existingSession of existingSessions) {
       setAgentBrowserDefaults({
+        allowedDomains: existingSession.agentBrowserAllowedDomains,
         configPath:
           existingSession.agentBrowserConfigPath || config.browser.configPath,
         namespace: existingSession.agentBrowserNamespace,
@@ -97,6 +98,12 @@ export async function startCommand(options: StartOptions): Promise<void> {
   if (options.output) config.output = options.output;
   if (options.headed !== undefined) config.headless = !options.headed;
 
+  const baseUrl = `http://localhost:${config.devServer.port}`;
+  const openUrl = options.url || baseUrl;
+  const agentBrowserAllowedDomains = resolveAgentBrowserAllowedDomains(
+    openUrl,
+    config.browser.allowedDomains,
+  );
   const outputDir = path.resolve(config.output);
   const timestamp = generateTimestamp();
   const sessionName = generateAgentBrowserSessionName(timestamp);
@@ -136,6 +143,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   if (browserExecutable) config.browser.executablePath = browserExecutable;
   setAgentBrowserDefaults({
+    allowedDomains: agentBrowserAllowedDomains,
     configPath: config.browser.configPath,
     namespace: agentBrowserNamespace,
     socketDir: socketRoot,
@@ -157,8 +165,6 @@ export async function startCommand(options: StartOptions): Promise<void> {
     description: options.description || null,
   });
 
-  const baseUrl = `http://localhost:${config.devServer.port}`;
-  const openUrl = options.url || baseUrl;
   const session: SessionState = {
     startedAt: new Date().toISOString(),
     startDirectory: process.cwd(),
@@ -188,6 +194,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     agentBrowserSocketDir: socketDir,
     agentBrowserSocketRoot: socketRoot,
     agentBrowserNamespace,
+    agentBrowserAllowedDomains,
     agentBrowserConfigPath: config.browser.configPath,
     privateEvidenceDir: networkEvidence.privateDirectory,
     networkHarPath: networkEvidence.harPath,
@@ -363,6 +370,17 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log(chalk.dim('  proofshot exec screenshot step.png    # Capture a moment'));
   console.log('');
   console.log(`When done, run: ${chalk.white('proofshot stop')}`);
+}
+
+export function resolveAgentBrowserAllowedDomains(
+  targetUrl: string,
+  configuredDomains: string[] = [],
+): string[] {
+  const normalizedTarget = targetUrl.includes('://')
+    ? targetUrl
+    : `http://${targetUrl}`;
+  const targetDomain = new URL(normalizedTarget).hostname;
+  return [...new Set([targetDomain, ...configuredDomains])].sort();
 }
 
 function persistOwnedSession(session: SessionState): void {

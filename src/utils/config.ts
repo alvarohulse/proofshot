@@ -17,6 +17,7 @@ export interface ViewportConfig {
 }
 
 export interface BrowserConfig {
+  allowedDomains?: string[];
   configPath?: string;
   executablePath?: string;
   ignoreHttpsErrors: boolean;
@@ -153,6 +154,7 @@ function validateConfig(value: unknown): void {
     assertOptionalString(value.browser.configPath, 'browser.configPath');
     assertOptionalString(value.browser.executablePath, 'browser.executablePath');
     assertOptionalBoolean(value.browser.ignoreHttpsErrors, 'browser.ignoreHttpsErrors');
+    assertOptionalStringArray(value.browser.allowedDomains, 'browser.allowedDomains');
   }
   validateEnvironment(value.environment);
   validateLogs(value.logs);
