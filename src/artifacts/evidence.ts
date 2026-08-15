@@ -587,8 +587,8 @@ function buildVerdict(
         action.expectedSelector && action.outcome === 'failed',
     )
     .map((action) => action.expectedSelector!);
-  const pendingExpectedSelectors = options.actions.filter(
-    (action) => action.expectedSelector && action.outcome === undefined,
+  const pendingActions = options.actions.filter(
+    (action) => action.outcome === undefined,
   );
   const hasSyntheticDomMutation = options.actions.some(
     (action) =>
@@ -621,9 +621,9 @@ function buildVerdict(
     ...(evidence.sources.some((source) => source.truncationCount > 0)
       ? ['One or more evidence sources were truncated.']
       : []),
-    ...(pendingExpectedSelectors.length > 0
+    ...(pendingActions.length > 0
       ? [
-          `${pendingExpectedSelectors.length} expected selector assertion(s) had no recorded outcome.`,
+          `${pendingActions.length} browser action(s) had no recorded outcome.`,
         ]
       : []),
     ...(reusedScreenshotPaths > 0
