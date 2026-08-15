@@ -103,7 +103,7 @@ For ref-targeted actions (`click @e3`, `fill @e5 "text"`, `type @e4 "hello"`):
 - Toast works from the action string alone
 - No ripple rendered (except scroll arrow for `scroll`)
 
-**Viewport caching:** Query viewport once at session start (in `startCommand`) and store in session state. In `execCommand()`, if the action starts with `set viewport`, re-query viewport via eval after execution and update the cached value in session state (call `saveSession()` with the new viewport).
+**Viewport caching:** Query viewport once at session start (in `startCommand`) and store it in the registered session state. In `execCommand()`, if the action starts with `set viewport`, re-query viewport via eval after execution and update that exact registry record.
 
 ### Failure handling
 
