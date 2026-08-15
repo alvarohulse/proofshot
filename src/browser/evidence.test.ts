@@ -1,11 +1,23 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildSanitizedNetworkSummary,
+  finalizePrivateNetworkCapture,
   writePrivateAgentBrowserResult,
 } from './evidence.js';
+
+const mocks = vi.hoisted(() => ({ ab: vi.fn() }));
+
+vi.mock('../utils/exec.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/exec.js')>()),
+  ab: mocks.ab,
+}));
+
+afterEach(() => {
+  mocks.ab.mockReset();
+});
 
 describe('private browser evidence', () => {
   it('produces a deterministic metadata-only network summary', () => {
@@ -84,6 +96,42 @@ describe('private browser evidence', () => {
       expect(evidence).not.toContain('private-cookie');
       expect(evidence).toContain('[REDACTED]');
       expect(fs.statSync(evidencePath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still stops HAR capture when the request inventory command fails', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-network-finalize-'),
+    );
+    const privateDirectory = path.join(sessionDir, 'private', 'agent-browser');
+    const paths = {
+      privateDirectory,
+      harPath: path.join(privateDirectory, 'network.har'),
+      requestsPath: path.join(privateDirectory, 'requests.json'),
+      summaryPath: path.join(sessionDir, 'network-summary.json'),
+    };
+    mocks.ab.mockImplementation((command: string) => {
+      if (command === 'network requests --json') {
+        throw new Error('request inventory failed');
+      }
+      if (command.startsWith('network har stop ')) {
+        fs.writeFileSync(paths.harPath, JSON.stringify({ log: { entries: [] } }));
+        return JSON.stringify({ success: true });
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      const summary = finalizePrivateNetworkCapture('ps-test', paths);
+
+      expect(summary.requestCount).toBe(0);
+      expect(mocks.ab).toHaveBeenCalledTimes(2);
+      expect(mocks.ab.mock.calls[1][0]).toContain('network har stop');
+      expect(fs.readFileSync(paths.requestsPath, 'utf-8')).toContain(
+        'request inventory failed',
+      );
     } finally {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     }
