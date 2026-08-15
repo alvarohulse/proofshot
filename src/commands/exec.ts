@@ -265,7 +265,16 @@ export async function execCommand(
     socketDir: session?.agentBrowserSocketRoot || session?.agentBrowserSocketDir,
   });
 
-  if (session && !session.recordingActive) {
+  if (!session) {
+    console.error(
+      'Error: No active ProofShot session matches this worktree.\n' +
+        'Run "proofshot start" first, or inspect recovery state with "proofshot session list".',
+    );
+    process.exit(1);
+    return;
+  }
+
+  if (!session.recordingActive) {
     console.error(
       'Error: Session has no active recording. Video capture is required.\n' +
         'Run "proofshot stop" to end this session, then start a new one.',
@@ -273,7 +282,7 @@ export async function execCommand(
     process.exit(1);
   }
 
-  if (session && !canAddressOwnedBrowserSession(session)) {
+  if (!canAddressOwnedBrowserSession(session)) {
     console.error(
       'Error: Browser ownership no longer matches this ProofShot session.\n' +
         'Refusing to address a possibly reused agent-browser session name.',

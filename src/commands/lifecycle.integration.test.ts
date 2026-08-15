@@ -496,6 +496,13 @@ describe('isolated CLI lifecycle', () => {
     await waitForProcessExit(sessions[1].browserProcess.pid);
     cleanupProcesses.splice(cleanupProcesses.indexOf(sessions[1].browserProcess), 1);
     expect(fs.readdirSync(registryDir)).toEqual([]);
+    const browserLogAfterStops = fs.readFileSync(tools.browserLog, 'utf-8');
+    const execWithoutSession = runCli(audit, env, ['exec', 'get', 'url']);
+    expect(execWithoutSession.status).toBe(1);
+    expect(execWithoutSession.stderr).toContain(
+      'No active ProofShot session matches this worktree',
+    );
+    expect(fs.readFileSync(tools.browserLog, 'utf-8')).toBe(browserLogAfterStops);
 
     for (const session of sessions) {
       const privateEvidenceDir = path.join(
