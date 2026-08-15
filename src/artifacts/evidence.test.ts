@@ -274,6 +274,37 @@ describe('canonical evidence and verdicts', () => {
       'Synthetic DOM mutation is diagnostic-only and cannot serve as final behavioral proof.',
     );
   });
+
+  it('marks interrupted browser actions without an outcome as incomplete', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-interrupted-action-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'interrupted-action',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'click @e1',
+          category: 'pointer-keyboard',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain(
+      '1 browser action(s) had no recorded outcome.',
+    );
+  });
 });
 
 function environmentEvent(
