@@ -41,6 +41,13 @@ type ExecOptions = {
 };
 
 const MAX_BATCH_DEPTH = 8;
+const PROOFSHOT_OWNED_COMMANDS = new Set([
+  'auth',
+  'close',
+  'connect',
+  'record',
+  'state',
+]);
 const RESERVED_AGENT_BROWSER_FLAGS = new Set([
   '--action-policy',
   '--allow-file-access',
@@ -135,17 +142,17 @@ function assertControlledAgentBrowserCommandAtDepth(
   batchDepth: number,
 ): void {
   const command = args[0]?.toLowerCase();
-  if (command === 'connect' || command === 'state') {
+  if (command && PROOFSHOT_OWNED_COMMANDS.has(command)) {
     throw new Error(
       `agent-browser ${command} cannot override ProofShot-owned browser state.`,
     );
   }
   if (
-    command === 'close' &&
-    args.some((argument) => normalizeFlag(argument) === '--all')
+    command === 'network' &&
+    args[1]?.toLowerCase() === 'har'
   ) {
     throw new Error(
-      'agent-browser close --all cannot target other ProofShot sessions.',
+      'agent-browser network HAR capture is owned by ProofShot.',
     );
   }
 

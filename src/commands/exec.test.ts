@@ -61,15 +61,20 @@ describe('buildShellCommand', () => {
   });
 
   it('rejects commands that can escape the owned browser lifecycle', () => {
-    expect(() => assertControlledAgentBrowserCommand(['connect', '9222'])).toThrow(
-      'cannot override ProofShot-owned browser state',
-    );
+    for (const args of [
+      ['auth', 'login', 'shared'],
+      ['close'],
+      ['connect', '9222'],
+      ['record', 'stop'],
+      ['state', 'load', './shared.json'],
+    ]) {
+      expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
+        'cannot override ProofShot-owned browser state',
+      );
+    }
     expect(() =>
-      assertControlledAgentBrowserCommand(['state', 'load', './shared.json']),
-    ).toThrow('cannot override ProofShot-owned browser state');
-    expect(() =>
-      assertControlledAgentBrowserCommand(['close', '--all']),
-    ).toThrow('cannot target other ProofShot sessions');
+      assertControlledAgentBrowserCommand(['network', 'har', 'stop']),
+    ).toThrow('HAR capture is owned by ProofShot');
     expect(() =>
       assertControlledAgentBrowserCommand([
         'batch',
@@ -100,6 +105,9 @@ describe('buildShellCommand', () => {
         '--headers',
         '{"X-Test":"proof"}',
       ]),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand(['network', 'requests']),
     ).not.toThrow();
   });
 });
