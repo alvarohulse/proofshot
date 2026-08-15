@@ -259,6 +259,7 @@ export async function execCommand(
 
   const execLease = claimSessionOperation(session, 'exec');
   try {
+  const pageUrlBefore = capturePageUrl(session.sessionName);
   // Resolve args (screenshot path rewriting)
   let resolvedArgs = translated.agentBrowserArgs;
   if (session) {
@@ -287,6 +288,7 @@ export async function execCommand(
       action,
       category: classifyInteraction(args),
       intent,
+      pageUrl: pageUrlBefore,
       relativeTimeSec,
       timestamp: now.toISOString(),
       expectedSelector: sanitizeDiagnosticMessage(translated.expectedSelector),
@@ -334,9 +336,7 @@ export async function execCommand(
         process.stdout.write('\n');
       }
     }
-    const pageUrl = session
-      ? sanitizePageUrl(getPageUrl(session.sessionName) || undefined)
-      : undefined;
+    const pageUrl = capturePageUrl(session.sessionName);
     const agentBrowserResult = session
       ? writePrivateAgentBrowserResult({
           command: intent.command,
@@ -381,7 +381,7 @@ export async function execCommand(
       sessionLogPath,
       'failed',
       persistedError,
-      undefined,
+      pageUrlBefore,
       Date.now() - executionStartedAt,
       agentBrowserResult,
     );
@@ -408,6 +408,14 @@ export async function execCommand(
     if (session.operationLease?.id === execLease.id) {
       releaseSessionOperation(session, execLease);
     }
+  }
+}
+
+function capturePageUrl(sessionName: string): string | undefined {
+  try {
+    return sanitizePageUrl(getPageUrl(sessionName) || undefined);
+  } catch {
+    return undefined;
   }
 }
 
