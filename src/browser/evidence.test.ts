@@ -113,12 +113,15 @@ describe('private browser evidence', () => {
       summaryPath: path.join(sessionDir, 'network-summary.json'),
     };
     mocks.ab.mockImplementation((command: string) => {
+      if (command.startsWith('network har stop ')) {
+        fs.writeFileSync(
+          `${paths.harPath}.pending`,
+          JSON.stringify({ log: { entries: [] } }),
+        );
+        return JSON.stringify({ success: true });
+      }
       if (command === 'network requests --json') {
         throw new Error('request inventory failed');
-      }
-      if (command.startsWith('network har stop ')) {
-        fs.writeFileSync(paths.harPath, JSON.stringify({ log: { entries: [] } }));
-        return JSON.stringify({ success: true });
       }
       throw new Error(`unexpected command: ${command}`);
     });
@@ -128,10 +131,96 @@ describe('private browser evidence', () => {
 
       expect(summary.requestCount).toBe(0);
       expect(mocks.ab).toHaveBeenCalledTimes(2);
-      expect(mocks.ab.mock.calls[1][0]).toContain('network har stop');
+      expect(mocks.ab.mock.calls[0][0]).toContain('network.har.pending');
+      expect(mocks.ab.mock.calls[1][0]).toBe('network requests --json');
+      expect(fs.existsSync(`${paths.harPath}.pending`)).toBe(false);
+      expect(fs.existsSync(paths.harPath)).toBe(true);
       expect(fs.readFileSync(paths.requestsPath, 'utf-8')).toContain(
         'request inventory failed',
       );
+    } finally {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it('adopts a complete pending HAR after interrupted finalization', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-network-recovery-'),
+    );
+    const privateDirectory = path.join(sessionDir, 'private', 'agent-browser');
+    fs.mkdirSync(privateDirectory, { recursive: true });
+    const paths = {
+      privateDirectory,
+      harPath: path.join(privateDirectory, 'network.har'),
+      requestsPath: path.join(privateDirectory, 'requests.json'),
+      summaryPath: path.join(sessionDir, 'network-summary.json'),
+    };
+    fs.writeFileSync(
+      `${paths.harPath}.pending`,
+      JSON.stringify({
+        log: {
+          entries: [
+            {
+              time: 4,
+              request: { method: 'GET', url: 'https://example.com/recovered' },
+              response: { status: 200 },
+            },
+          ],
+        },
+      }),
+    );
+    mocks.ab.mockImplementation((command: string) => {
+      if (command === 'network requests --json') {
+        return JSON.stringify({ success: true, data: [] });
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      const summary = finalizePrivateNetworkCapture('ps-test', paths);
+
+      expect(summary.requests).toEqual([
+        {
+          endpoint: 'https://example.com/recovered',
+          method: 'GET',
+          status: 200,
+          durationMs: 4,
+          error: null,
+        },
+      ]);
+      expect(mocks.ab).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(`${paths.harPath}.pending`)).toBe(false);
+      expect(fs.statSync(paths.harPath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an invalid HAR without adopting a partial final file', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-network-invalid-'),
+    );
+    const privateDirectory = path.join(sessionDir, 'private', 'agent-browser');
+    fs.mkdirSync(privateDirectory, { recursive: true });
+    const paths = {
+      privateDirectory,
+      harPath: path.join(privateDirectory, 'network.har'),
+      requestsPath: path.join(privateDirectory, 'requests.json'),
+      summaryPath: path.join(sessionDir, 'network-summary.json'),
+    };
+    mocks.ab.mockImplementation((command: string) => {
+      if (command.startsWith('network har stop ')) {
+        fs.writeFileSync(`${paths.harPath}.pending`, '{');
+        return JSON.stringify({ success: true });
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    try {
+      expect(() => finalizePrivateNetworkCapture('ps-test', paths)).toThrow(
+        'agent-browser did not write valid HAR evidence',
+      );
+      expect(fs.existsSync(paths.harPath)).toBe(false);
     } finally {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     }
