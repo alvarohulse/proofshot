@@ -68,48 +68,42 @@ describe('session commands', () => {
     );
   });
 
-  it('cleans one exact registered session and removes both state records', async () => {
+  it('cleans one exact registered session and removes its registry record', async () => {
     const session = buildSession({ lifecycleStatus: 'recovery' });
     mocks.getRegisteredSession.mockReturnValue(session);
-    mocks.loadSession.mockReturnValue(session);
 
     await sessionCleanCommand({ session: session.sessionName });
 
     expect(mocks.cleanupFailedStart).toHaveBeenCalledWith(session);
     expect(mocks.setAgentBrowserDefaults).toHaveBeenCalledWith({
       configPath: session.agentBrowserConfigPath,
+      namespace: session.agentBrowserNamespace,
       socketDir: session.agentBrowserSocketDir,
     });
-    expect(mocks.clearSession).toHaveBeenCalledWith(session.controlDir);
     expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
   });
 
   it('retains recovery state when exact cleanup still fails', async () => {
     const session = buildSession({ lifecycleStatus: 'recovery' });
     mocks.getRegisteredSession.mockReturnValue(session);
-    mocks.loadSession.mockReturnValue(session);
     mocks.cleanupFailedStart.mockRejectedValue(new Error('identity mismatch'));
 
     await sessionCleanCommand({ session: session.sessionName });
 
     expect(session.cleanupError).toBe('identity mismatch');
-    expect(mocks.saveSession).toHaveBeenCalledWith(session, session.controlDir);
     expect(mocks.registerSession).toHaveBeenCalledWith(session);
     expect(mocks.unregisterSession).not.toHaveBeenCalled();
   });
 
-  it('does not clear or overwrite a newer session control record', async () => {
+  it('does not unregister another concurrent session', async () => {
     const session = buildSession({ lifecycleStatus: 'recovery' });
     mocks.getRegisteredSession.mockReturnValue(session);
-    mocks.loadSession.mockReturnValue(buildSession({ sessionName: 'ps-newer-session' }));
 
     await sessionCleanCommand({ session: session.sessionName });
 
-    expect(mocks.clearSession).not.toHaveBeenCalled();
-    expect(mocks.saveSession).not.toHaveBeenCalled();
-    expect(mocks.unregisterSession).not.toHaveBeenCalled();
-    expect(mocks.registerSession).toHaveBeenCalledWith(session);
-    expect(session.cleanupError).toMatch(/belongs to another session/);
+    expect(mocks.unregisterSession).toHaveBeenCalledTimes(1);
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
+    expect(mocks.unregisterSession).not.toHaveBeenCalledWith('ps-newer-session');
   });
 });
 

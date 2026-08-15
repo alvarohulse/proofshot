@@ -51,6 +51,9 @@ vi.mock('../session/registry.js', () => ({
   registerSession: mocks.registerSession,
   unregisterSession: mocks.unregisterSession,
 }));
+vi.mock('../session/selection.js', () => ({
+  resolveLiveSession: mocks.loadSession,
+}));
 vi.mock('../environment/runtime.js', () => ({
   stopOwnedEnvironment: mocks.stopOwnedEnvironment,
 }));
@@ -174,8 +177,8 @@ describe('stopCommand retryability', () => {
     await expect(stopCommand({})).rejects.toThrow('simulated viewer write failure');
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
     expect(mocks.stopOwnedServer).toHaveBeenCalledWith(session);
-    expect(mocks.clearSession).not.toHaveBeenCalled();
-    expect(mocks.saveSession).toHaveBeenCalledWith(
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenCalledWith(
       expect.objectContaining({
         recordingActive: false,
         bundleComplete: false,
@@ -184,7 +187,6 @@ describe('stopCommand retryability', () => {
         sessionLogAdjusted: true,
         videoPath: path.join(session.sessionDir, 'session.mp4'),
       }),
-      path.join(root, 'proofshot-artifacts'),
     );
     expect(trimCalls).toBe(1);
     expect(conversionCalls).toBe(1);
@@ -212,7 +214,7 @@ describe('stopCommand retryability', () => {
       consoleOutput: 'console evidence',
       viewport: session.viewport,
     });
-    expect(mocks.clearSession).toHaveBeenCalledWith(path.join(root, 'proofshot-artifacts'));
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
     expect(fs.readFileSync(summaryPath, 'utf-8')).toBe(summaryBefore);
     expect(fs.statSync(summaryPath).mtimeMs).toBe(summaryMtimeBefore);
   });
@@ -285,7 +287,7 @@ describe('stopCommand retryability', () => {
     expect(mocks.stopRecording).not.toHaveBeenCalled();
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
     expect(mocks.stopOwnedServer).toHaveBeenCalledWith(session);
-    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
     expect(mocks.writeViewer).toHaveBeenCalledWith(
       session.sessionDir,
       expect.objectContaining({ consoleEvidenceAvailable: false }),
@@ -307,7 +309,7 @@ describe('stopCommand retryability', () => {
     await stopCommand({});
 
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
-    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
     expect(console.log).toHaveBeenCalledWith(
       expect.stringContaining('skipped session-name close'),
     );
@@ -331,7 +333,6 @@ describe('stopCommand retryability', () => {
       lifecycleStatus: 'recovery',
       cleanupError: 'Cleanup failed: environment identity mismatch',
     });
-    expect(mocks.clearSession).not.toHaveBeenCalled();
     expect(mocks.unregisterSession).not.toHaveBeenCalled();
   });
 });
