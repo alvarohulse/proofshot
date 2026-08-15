@@ -53,7 +53,18 @@ export function finalizePrivateNetworkCapture(
   paths: PrivateNetworkEvidencePaths,
 ): SanitizedNetworkSummary {
   preparePrivateDirectory(paths.privateDirectory);
-  const requests = ab('network requests --json', { session: sessionName });
+  let requests: string;
+  try {
+    requests = ab('network requests --json', { session: sessionName });
+  } catch (error) {
+    requests = JSON.stringify({
+      success: false,
+      data: null,
+      error: sanitizeDiagnosticMessage(
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+  }
   writePrivateTextFile(
     paths.requestsPath,
     requests.trim() ? `${requests.trim()}\n` : '{"success":true,"data":[]}\n',
