@@ -53,6 +53,7 @@ export function finalizePrivateNetworkCapture(
   paths: PrivateNetworkEvidencePaths,
 ): SanitizedNetworkSummary {
   preparePrivateDirectory(paths.privateDirectory);
+  const har = finalizePrivateHarCapture(sessionName, paths.harPath);
   let requests: string;
   try {
     requests = ab('network requests --json', { session: sessionName });
@@ -69,19 +70,76 @@ export function finalizePrivateNetworkCapture(
     paths.requestsPath,
     requests.trim() ? `${requests.trim()}\n` : '{"success":true,"data":[]}\n',
   );
-  ab(
-    `network har stop ${quoteShellArgument(paths.harPath)} --json`,
-    { session: sessionName },
-  );
-  if (!fs.existsSync(paths.harPath)) {
-    throw new Error('agent-browser did not write the requested HAR evidence.');
-  }
-  fs.chmodSync(paths.harPath, 0o600);
-  const summary = buildSanitizedNetworkSummary(
-    JSON.parse(fs.readFileSync(paths.harPath, 'utf-8')),
-  );
+  const summary = buildSanitizedNetworkSummary(har);
   writeJsonFile(paths.summaryPath, summary);
   return summary;
+}
+
+function finalizePrivateHarCapture(
+  sessionName: string,
+  harPath: string,
+): unknown {
+  const finalizedHar = readValidHarFile(harPath);
+  if (finalizedHar !== null) {
+    fs.chmodSync(harPath, 0o600);
+    return finalizedHar;
+  }
+
+  const pendingPath = `${harPath}.pending`;
+  const pendingHar = readValidHarFile(pendingPath);
+  if (pendingHar !== null) {
+    adoptPendingHar(pendingPath, harPath);
+    return pendingHar;
+  }
+  removeInvalidHarFile(harPath);
+  removeInvalidHarFile(pendingPath);
+
+  let stopError: unknown;
+  try {
+    ab(`network har stop ${quoteShellArgument(pendingPath)} --json`, {
+      session: sessionName,
+    });
+  } catch (error) {
+    stopError = error;
+  }
+
+  const capturedHar = readValidHarFile(pendingPath);
+  if (capturedHar === null) {
+    if (stopError) {
+      throw stopError;
+    }
+    throw new Error('agent-browser did not write valid HAR evidence.');
+  }
+  adoptPendingHar(pendingPath, harPath);
+  return capturedHar;
+}
+
+function readValidHarFile(filePath: string): unknown | null {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    const value = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown;
+    buildSanitizedNetworkSummary(value);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function adoptPendingHar(pendingPath: string, harPath: string): void {
+  fs.chmodSync(pendingPath, 0o600);
+  if (fs.existsSync(harPath)) {
+    fs.unlinkSync(harPath);
+  }
+  fs.renameSync(pendingPath, harPath);
+  fs.chmodSync(harPath, 0o600);
+}
+
+function removeInvalidHarFile(filePath: string): void {
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
 }
 
 export function loadSanitizedNetworkSummary(
