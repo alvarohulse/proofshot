@@ -1,4 +1,5 @@
 import { execSync, type ChildProcess } from 'child_process';
+import { getIsolatedAgentBrowserEnvironment } from '../browser/isolation.js';
 import { spawnShellCommand } from './process.js';
 
 export class ProofShotError extends Error {
@@ -46,7 +47,7 @@ export function getAgentBrowserEnvironment(
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
   const namespace = options.namespace ?? defaultAgentBrowserOptions.namespace;
   return {
-    ...process.env,
+    ...getIsolatedAgentBrowserEnvironment(process.env),
     AGENT_BROWSER_IDLE_TIMEOUT_MS:
       process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || '1800000',
     ...(socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}),

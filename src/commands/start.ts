@@ -9,6 +9,11 @@ import {
   startPrivateNetworkCapture,
 } from '../browser/evidence.js';
 import { sanitizePageUrl } from '../browser/provenance.js';
+import {
+  assertSupportedAgentBrowserVersion,
+  loadIsolatedAgentBrowserConfig,
+  writeIsolatedAgentBrowserConfig,
+} from '../browser/isolation.js';
 import { startRecording } from '../browser/capture.js';
 import { discoverBrowserExecutable, browserSetupError } from '../browser/discovery.js';
 import {
@@ -152,8 +157,14 @@ export async function startCommand(options: StartOptions): Promise<void> {
   let socketRoot: string;
   let socketDir: string;
   let browserExecutable: string | null;
+  let agentBrowserVersion: string;
+  let isolatedAgentBrowserConfig: Record<string, unknown>;
 
   try {
+    isolatedAgentBrowserConfig = loadIsolatedAgentBrowserConfig(
+      config.browser.configPath,
+    );
+    agentBrowserVersion = assertSupportedAgentBrowserVersion();
     socketRoot = prepareAgentBrowserSocketDir(
       sessionName,
       process.env,
@@ -167,11 +178,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     browserExecutable = discoverBrowserExecutable({
       configuredPath: options.browserExecutable || config.browser.executablePath,
     });
-    if (
-      !browserExecutable &&
-      !process.env.AGENT_BROWSER_PROVIDER &&
-      !process.env.AGENT_BROWSER_CDP
-    ) {
+    if (!browserExecutable) {
       throw browserSetupError();
     }
   } catch (error: any) {
@@ -181,12 +188,6 @@ export async function startCommand(options: StartOptions): Promise<void> {
   }
 
   if (browserExecutable) config.browser.executablePath = browserExecutable;
-  setAgentBrowserDefaults({
-    allowedDomains: agentBrowserAllowedDomains,
-    configPath: config.browser.configPath,
-    namespace: agentBrowserNamespace,
-    socketDir: socketRoot,
-  });
 
   ensureOutputDir(outputDir);
   ensureOutputDir(sessionDir);
@@ -194,6 +195,16 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const videoPath = path.join(sessionDir, 'session.webm');
   const serverErrorLog = path.join(sessionDir, 'server.log');
   const networkEvidence = preparePrivateNetworkEvidence(sessionDir);
+  const agentBrowserConfigPath = writeIsolatedAgentBrowserConfig(
+    networkEvidence.privateDirectory,
+    isolatedAgentBrowserConfig,
+  );
+  setAgentBrowserDefaults({
+    allowedDomains: agentBrowserAllowedDomains,
+    configPath: agentBrowserConfigPath,
+    namespace: agentBrowserNamespace,
+    socketDir: socketRoot,
+  });
 
   const provenance = captureGitProvenance(process.cwd(), [outputDir]);
 
@@ -234,7 +245,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
     agentBrowserSocketRoot: socketRoot,
     agentBrowserNamespace,
     agentBrowserAllowedDomains,
-    agentBrowserConfigPath: config.browser.configPath,
+    agentBrowserConfigPath,
+    agentBrowserVersion,
     privateEvidenceDir: networkEvidence.privateDirectory,
     networkHarPath: networkEvidence.harPath,
     networkRequestsPath: networkEvidence.requestsPath,
