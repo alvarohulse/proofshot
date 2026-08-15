@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 import { findExecutablePath } from '../utils/process.js';
 
@@ -93,6 +93,7 @@ export function writeIsolatedAgentBrowserConfig(
 
 export type AgentBrowserRuntime = {
   executablePath: string;
+  sha256: string;
   version: string;
 };
 
@@ -103,7 +104,35 @@ export function resolveAgentBrowserRuntime(
   if (!discoveredExecutablePath) {
     throw new Error('agent-browser executable was not found on PATH.');
   }
-  const executablePath = path.resolve(discoveredExecutablePath);
+  return resolveAgentBrowserRuntimeAtPath(discoveredExecutablePath, env);
+}
+
+export function assertAgentBrowserRuntime(
+  expected: AgentBrowserRuntime,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const actual = resolveAgentBrowserRuntimeAtPath(expected.executablePath, env);
+  if (
+    actual.executablePath !== expected.executablePath ||
+    actual.version !== expected.version ||
+    actual.sha256 !== expected.sha256
+  ) {
+    throw new Error(
+      'The pinned agent-browser executable changed after this ProofShot session started.',
+    );
+  }
+}
+
+export function resolveAgentBrowserRuntimeAtPath(
+  discoveredExecutablePath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): AgentBrowserRuntime {
+  let executablePath: string;
+  try {
+    executablePath = fs.realpathSync(path.resolve(discoveredExecutablePath));
+  } catch {
+    throw new Error('The pinned agent-browser executable is no longer available.');
+  }
 
   const output = execFileSync(executablePath, ['--version'], {
     encoding: 'utf-8',
@@ -123,6 +152,7 @@ export function resolveAgentBrowserRuntime(
   }
   return {
     executablePath,
+    sha256: createHash('sha256').update(fs.readFileSync(executablePath)).digest('hex'),
     version: version.join('.'),
   };
 }

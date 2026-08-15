@@ -340,6 +340,7 @@ function isSessionState(value: unknown): value is SessionState {
     isOptionalStringArray(session.agentBrowserAllowedDomains) &&
     isOptionalString(session.agentBrowserConfigPath) &&
     isOptionalString(session.agentBrowserExecutablePath) &&
+    isOptionalString(session.agentBrowserExecutableSha256) &&
     isOptionalString(session.agentBrowserVersion) &&
     isOptionalString(session.privateEvidenceDir) &&
     isOptionalString(session.networkHarPath) &&

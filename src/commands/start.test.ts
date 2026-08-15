@@ -158,6 +158,7 @@ describe('startCommand', () => {
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
     mocks.resolveAgentBrowserRuntime.mockReturnValue({
       executablePath: '/opt/node24/bin/agent-browser',
+      sha256: 'a'.repeat(64),
       version: '0.34.0',
     });
     mocks.loadIsolatedAgentBrowserConfig.mockReturnValue({});
@@ -306,6 +307,7 @@ describe('startCommand', () => {
       agentBrowserAllowedDomains: ['127.0.0.1'],
       agentBrowserConfigPath: '/audit/private/agent-browser/config.json',
       agentBrowserExecutablePath: '/opt/node24/bin/agent-browser',
+      agentBrowserExecutableSha256: 'a'.repeat(64),
       agentBrowserVersion: '0.34.0',
     });
     expect(finalState.controlDir).toBe('/project/proofshot-artifacts');

@@ -163,6 +163,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   let socketDir: string;
   let browserExecutable: string | null;
   let agentBrowserExecutablePath: string;
+  let agentBrowserExecutableSha256: string;
   let agentBrowserVersion: string;
   let isolatedAgentBrowserConfig: Record<string, unknown>;
 
@@ -172,6 +173,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     );
     const agentBrowserRuntime = resolveAgentBrowserRuntime();
     agentBrowserExecutablePath = agentBrowserRuntime.executablePath;
+    agentBrowserExecutableSha256 = agentBrowserRuntime.sha256;
     agentBrowserVersion = agentBrowserRuntime.version;
     socketRoot = prepareAgentBrowserSocketDir(
       sessionName,
@@ -256,6 +258,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     agentBrowserAllowedDomains,
     agentBrowserConfigPath,
     agentBrowserExecutablePath,
+    agentBrowserExecutableSha256,
     agentBrowserVersion,
     privateEvidenceDir: networkEvidence.privateDirectory,
     networkHarPath: networkEvidence.harPath,

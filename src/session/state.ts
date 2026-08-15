@@ -47,6 +47,7 @@ export interface SessionState {
   agentBrowserAllowedDomains?: string[];
   agentBrowserConfigPath?: string;
   agentBrowserExecutablePath?: string;
+  agentBrowserExecutableSha256?: string;
   agentBrowserVersion?: string;
   privateEvidenceDir?: string;
   networkHarPath?: string;

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -17,6 +18,7 @@ vi.mock('../utils/process.js', () => ({
 }));
 
 import {
+  assertAgentBrowserRuntime,
   getIsolatedAgentBrowserEnvironment,
   loadIsolatedAgentBrowserConfig,
   parseAgentBrowserVersion,
@@ -25,11 +27,16 @@ import {
 } from './isolation.js';
 
 const createdDirectories: string[] = [];
+const RUNTIME_SOURCE = '#!/usr/bin/env node\n';
+let runtimeExecutablePath: string;
 
 beforeEach(() => {
   mocks.execFileSync.mockReset();
   mocks.findExecutablePath.mockReset();
-  mocks.findExecutablePath.mockReturnValue('/opt/node24/bin/agent-browser');
+  const directory = createDirectory();
+  runtimeExecutablePath = path.join(directory, 'agent-browser');
+  fs.writeFileSync(runtimeExecutablePath, RUNTIME_SOURCE, { mode: 0o755 });
+  mocks.findExecutablePath.mockReturnValue(runtimeExecutablePath);
 });
 
 afterEach(() => {
@@ -126,27 +133,32 @@ describe('agent-browser isolation', () => {
 
     mocks.execFileSync.mockReturnValueOnce('agent-browser 0.34.0\n');
     expect(resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toEqual({
-      executablePath: '/opt/node24/bin/agent-browser',
+      executablePath: runtimeExecutablePath,
+      sha256: createHash('sha256').update(RUNTIME_SOURCE).digest('hex'),
       version: '0.34.0',
     });
     expect(mocks.execFileSync).toHaveBeenLastCalledWith(
-      '/opt/node24/bin/agent-browser',
+      runtimeExecutablePath,
       ['--version'],
       expect.objectContaining({ env: { PATH: '/usr/bin' } }),
     );
   });
 
   it('normalizes a discovered executable to an absolute path before probing it', () => {
-    mocks.findExecutablePath.mockReturnValue('./tools/agent-browser');
+    const relativeExecutablePath = path.relative(
+      process.cwd(),
+      runtimeExecutablePath,
+    );
+    mocks.findExecutablePath.mockReturnValue(relativeExecutablePath);
     mocks.execFileSync.mockReturnValueOnce('0.34.0\n');
-    const executablePath = path.resolve('./tools/agent-browser');
 
     expect(resolveAgentBrowserRuntime({ PATH: './tools' })).toEqual({
-      executablePath,
+      executablePath: runtimeExecutablePath,
+      sha256: createHash('sha256').update(RUNTIME_SOURCE).digest('hex'),
       version: '0.34.0',
     });
     expect(mocks.execFileSync).toHaveBeenCalledWith(
-      executablePath,
+      runtimeExecutablePath,
       ['--version'],
       expect.any(Object),
     );
@@ -159,6 +171,43 @@ describe('agent-browser isolation', () => {
       'agent-browser executable was not found',
     );
     expect(mocks.execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects same-path executable replacement after a session starts', () => {
+    mocks.execFileSync.mockReturnValue('agent-browser 0.34.0\n');
+    const runtime = resolveAgentBrowserRuntime({ PATH: '/usr/bin' });
+    fs.writeFileSync(runtimeExecutablePath, `${RUNTIME_SOURCE}// replaced\n`);
+
+    expect(() =>
+      assertAgentBrowserRuntime(runtime, { PATH: '/usr/bin' }),
+    ).toThrow('executable changed');
+  });
+
+  it('pins the canonical executable when its discovery symlink is retargeted', () => {
+    const directory = createDirectory();
+    const firstTarget = path.join(directory, 'agent-browser-first');
+    const secondTarget = path.join(directory, 'agent-browser-second');
+    const symlinkPath = path.join(directory, 'agent-browser');
+    fs.writeFileSync(firstTarget, RUNTIME_SOURCE, { mode: 0o755 });
+    fs.writeFileSync(secondTarget, `${RUNTIME_SOURCE}// second\n`, {
+      mode: 0o755,
+    });
+    fs.symlinkSync(firstTarget, symlinkPath);
+    mocks.findExecutablePath.mockReturnValue(symlinkPath);
+    mocks.execFileSync.mockReturnValue('agent-browser 0.34.0\n');
+    const runtime = resolveAgentBrowserRuntime({ PATH: '/usr/bin' });
+
+    fs.unlinkSync(symlinkPath);
+    fs.symlinkSync(secondTarget, symlinkPath);
+
+    expect(() =>
+      assertAgentBrowserRuntime(runtime, { PATH: '/usr/bin' }),
+    ).not.toThrow();
+    expect(mocks.execFileSync).toHaveBeenLastCalledWith(
+      firstTarget,
+      ['--version'],
+      expect.any(Object),
+    );
   });
 });
 
