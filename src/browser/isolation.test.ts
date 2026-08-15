@@ -3,18 +3,24 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  execFileSync: vi.fn(),
+  findExecutablePath: vi.fn(),
+}));
 
 vi.mock('child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('child_process')>()),
   execFileSync: mocks.execFileSync,
 }));
+vi.mock('../utils/process.js', () => ({
+  findExecutablePath: mocks.findExecutablePath,
+}));
 
 import {
-  assertSupportedAgentBrowserVersion,
   getIsolatedAgentBrowserEnvironment,
   loadIsolatedAgentBrowserConfig,
   parseAgentBrowserVersion,
+  resolveAgentBrowserRuntime,
   writeIsolatedAgentBrowserConfig,
 } from './isolation.js';
 
@@ -22,6 +28,8 @@ const createdDirectories: string[] = [];
 
 beforeEach(() => {
   mocks.execFileSync.mockReset();
+  mocks.findExecutablePath.mockReset();
+  mocks.findExecutablePath.mockReturnValue('/opt/node24/bin/agent-browser');
 });
 
 afterEach(() => {
@@ -100,16 +108,36 @@ describe('agent-browser isolation', () => {
     expect(parseAgentBrowserVersion('unknown')).toBeNull();
   });
 
-  it('requires agent-browser 0.34.0 or newer before launch', () => {
+  it('resolves one executable and requires exactly agent-browser 0.34.0', () => {
     mocks.execFileSync.mockReturnValueOnce('agent-browser 0.33.1\n');
-    expect(() => assertSupportedAgentBrowserVersion({ PATH: '/usr/bin' })).toThrow(
-      'requires agent-browser >=0.34.0',
+    expect(() => resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toThrow(
+      'requires exactly agent-browser 0.34.0',
+    );
+
+    mocks.execFileSync.mockReturnValueOnce('agent-browser 0.35.0\n');
+    expect(() => resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toThrow(
+      'requires exactly agent-browser 0.34.0',
     );
 
     mocks.execFileSync.mockReturnValueOnce('agent-browser 0.34.0\n');
-    expect(assertSupportedAgentBrowserVersion({ PATH: '/usr/bin' })).toBe(
-      '0.34.0',
+    expect(resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toEqual({
+      executablePath: '/opt/node24/bin/agent-browser',
+      version: '0.34.0',
+    });
+    expect(mocks.execFileSync).toHaveBeenLastCalledWith(
+      '/opt/node24/bin/agent-browser',
+      ['--version'],
+      expect.objectContaining({ env: { PATH: '/usr/bin' } }),
     );
+  });
+
+  it('fails before version probing when agent-browser is unavailable', () => {
+    mocks.findExecutablePath.mockReturnValue(null);
+
+    expect(() => resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toThrow(
+      'agent-browser executable was not found',
+    );
+    expect(mocks.execFileSync).not.toHaveBeenCalled();
   });
 });
 

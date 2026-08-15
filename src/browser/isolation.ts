@@ -2,8 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
+import { findExecutablePath } from '../utils/process.js';
 
-const MINIMUM_AGENT_BROWSER_VERSION = [0, 34, 0] as const;
+const REQUIRED_AGENT_BROWSER_VERSION = '0.34.0';
 const INCOMPATIBLE_ENVIRONMENT_KEYS = [
   'AGENT_BROWSER_ARGS',
   'AGENT_BROWSER_AUTO_CONNECT',
@@ -89,22 +90,35 @@ export function writeIsolatedAgentBrowserConfig(
   return configPath;
 }
 
-export function assertSupportedAgentBrowserVersion(
+export type AgentBrowserRuntime = {
+  executablePath: string;
+  version: string;
+};
+
+export function resolveAgentBrowserRuntime(
   env: NodeJS.ProcessEnv = process.env,
-): string {
-  const output = execFileSync('agent-browser', ['--version'], {
+): AgentBrowserRuntime {
+  const executablePath = findExecutablePath('agent-browser');
+  if (!executablePath) {
+    throw new Error('agent-browser executable was not found on PATH.');
+  }
+
+  const output = execFileSync(executablePath, ['--version'], {
     encoding: 'utf-8',
     env: getIsolatedAgentBrowserEnvironment(env),
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 5000,
   }).trim();
   const version = parseAgentBrowserVersion(output);
-  if (!version || compareVersions(version, MINIMUM_AGENT_BROWSER_VERSION) < 0) {
+  if (!version || version.join('.') !== REQUIRED_AGENT_BROWSER_VERSION) {
     throw new Error(
-      `ProofShot requires agent-browser >=0.34.0; received ${output || 'no version output'}.`,
+      `ProofShot requires exactly agent-browser ${REQUIRED_AGENT_BROWSER_VERSION}; received ${output || 'no version output'}.`,
     );
   }
-  return version.join('.');
+  return {
+    executablePath,
+    version: version.join('.'),
+  };
 }
 
 export function getIsolatedAgentBrowserEnvironment(
@@ -139,17 +153,4 @@ function assertIsolatedAgentBrowserEnvironment(env: NodeJS.ProcessEnv): void {
 
 function normalizeConfigKey(key: string): string {
   return key.toLowerCase().replace(/[-_]/g, '');
-}
-
-function compareVersions(
-  left: readonly number[],
-  right: readonly number[],
-): number {
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const difference = (left[index] || 0) - (right[index] || 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return 0;
 }

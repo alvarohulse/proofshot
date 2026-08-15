@@ -648,6 +648,25 @@ describe('isolated CLI lifecycle', () => {
     );
     expect(sessions[0].agentBrowserAllowedDomains).toEqual(['example.invalid']);
     expect(sessions[1].agentBrowserAllowedDomains).toEqual(['example.invalid']);
+    expect(sessions[0].agentBrowserExecutablePath).toBe(
+      tools.binDir + path.sep + 'agent-browser',
+    );
+    expect(sessions[1].agentBrowserExecutablePath).toBe(
+      tools.binDir + path.sep + 'agent-browser',
+    );
+    const decoyBinDir = path.join(base, 'decoy-bin');
+    const decoyLog = path.join(base, 'decoy-agent-browser.log');
+    fs.mkdirSync(decoyBinDir, { recursive: true });
+    const decoyAgentBrowser = path.join(decoyBinDir, 'agent-browser');
+    fs.writeFileSync(
+      decoyAgentBrowser,
+      `#!/bin/sh\nprintf 'invoked\\n' >> ${shellQuote(decoyLog)}\nexit 88\n`,
+    );
+    fs.chmodSync(decoyAgentBrowser, 0o755);
+    const postStartEnv = {
+      ...env,
+      PATH: `${decoyBinDir}${path.delimiter}${env.PATH}`,
+    };
     const openCalls = fs
       .readFileSync(tools.browserLog, 'utf-8')
       .trim()
@@ -669,7 +688,7 @@ describe('isolated CLI lifecycle', () => {
     expect(ambiguousExec.stderr).toContain('Multiple active ProofShot sessions');
 
     for (const session of sessions) {
-      const explicitExec = runCli(audit, env, [
+      const explicitExec = runCli(audit, postStartEnv, [
         'exec',
         '--session',
         session.sessionName,
@@ -681,7 +700,7 @@ describe('isolated CLI lifecycle', () => {
     }
 
     const secret = 'proofshot-secret-value';
-    const secretExec = runCli(audit, env, [
+    const secretExec = runCli(audit, postStartEnv, [
       'exec',
       '--session',
       sessions[0].sessionName,
@@ -715,7 +734,7 @@ describe('isolated CLI lifecycle', () => {
     );
     expect(fs.statSync(privateResultPath).mode & 0o777).toBe(0o600);
 
-    const failedExec = runCli(audit, env, [
+    const failedExec = runCli(audit, postStartEnv, [
       'exec',
       '--session',
       sessions[0].sessionName,
@@ -733,7 +752,7 @@ describe('isolated CLI lifecycle', () => {
     expect(ambiguousStop.status).toBe(1);
     expect(ambiguousStop.stderr).toContain('Multiple active ProofShot sessions');
 
-    const explicitStop = runCli(audit, env, [
+    const explicitStop = runCli(audit, postStartEnv, [
       'stop',
       '--session',
       sessions[0].sessionName,
@@ -742,11 +761,12 @@ describe('isolated CLI lifecycle', () => {
     await waitForProcessExit(sessions[0].browserProcess.pid);
     cleanupProcesses.splice(cleanupProcesses.indexOf(sessions[0].browserProcess), 1);
 
-    const implicitStop = runCli(audit, env, ['stop']);
+    const implicitStop = runCli(audit, postStartEnv, ['stop']);
     expect(implicitStop.status, `${implicitStop.stdout}\n${implicitStop.stderr}`).toBe(0);
     await waitForProcessExit(sessions[1].browserProcess.pid);
     cleanupProcesses.splice(cleanupProcesses.indexOf(sessions[1].browserProcess), 1);
     expect(fs.readdirSync(registryDir)).toEqual([]);
+    expect(fs.existsSync(decoyLog)).toBe(false);
     const browserLogAfterStops = fs.readFileSync(tools.browserLog, 'utf-8');
     const execWithoutSession = runCli(audit, env, ['exec', 'get', 'url']);
     expect(execWithoutSession.status).toBe(1);

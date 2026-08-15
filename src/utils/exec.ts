@@ -15,6 +15,7 @@ export class ProofShotError extends Error {
 export interface AgentBrowserCommandOptions {
   allowedDomains?: string[];
   configPath?: string;
+  executablePath?: string;
   json?: boolean;
   namespace?: string;
   session?: string;
@@ -24,13 +25,13 @@ export interface AgentBrowserCommandOptions {
 
 let defaultAgentBrowserOptions: Pick<
   AgentBrowserCommandOptions,
-  'allowedDomains' | 'configPath' | 'namespace' | 'socketDir'
+  'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
 > = {};
 
 export function setAgentBrowserDefaults(
   options: Pick<
     AgentBrowserCommandOptions,
-    'allowedDomains' | 'configPath' | 'namespace' | 'socketDir'
+    'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
   >,
 ): void {
   defaultAgentBrowserOptions = { ...options };
@@ -67,7 +68,7 @@ export function buildAgentBrowserCommand(
   command: string,
   options: Pick<
     AgentBrowserCommandOptions,
-    'configPath' | 'json' | 'session'
+    'configPath' | 'executablePath' | 'json' | 'session'
   > = {},
 ): string {
   const mergedOptions = {
@@ -81,7 +82,13 @@ export function buildAgentBrowserCommand(
     ? ` --session ${quoteShellArgument(mergedOptions.session)}`
     : '';
   const jsonFlag = mergedOptions.json ? ' --json' : '';
-  return `agent-browser${configFlag}${sessionFlag}${jsonFlag} ${command}`;
+  if (!mergedOptions.executablePath) {
+    throw new Error(
+      'agent-browser executable path has not been verified for this ProofShot operation.',
+    );
+  }
+  const executable = quoteShellArgument(mergedOptions.executablePath);
+  return `${executable}${configFlag}${sessionFlag}${jsonFlag} ${command}`;
 }
 
 /**

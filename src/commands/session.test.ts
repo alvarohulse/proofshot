@@ -100,6 +100,7 @@ describe('session commands', () => {
     expect(mocks.setAgentBrowserDefaults).toHaveBeenCalledWith({
       allowedDomains: session.agentBrowserAllowedDomains,
       configPath: session.agentBrowserConfigPath,
+      executablePath: session.agentBrowserExecutablePath,
       namespace: session.agentBrowserNamespace,
       socketDir: session.agentBrowserSocketDir,
     });
@@ -145,6 +146,7 @@ function buildSession(overrides: Record<string, unknown> = {}): any {
     serverCommand: null,
     serverAlreadyRunning: true,
     recordingActive: false,
+    agentBrowserExecutablePath: '/opt/node24/bin/agent-browser',
     browserLaunchAttempted: false,
     browserProcess: null,
     serverProcess: null,

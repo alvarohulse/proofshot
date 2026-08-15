@@ -227,6 +227,7 @@ export async function execCommand(
   setAgentBrowserDefaults({
     allowedDomains: session?.agentBrowserAllowedDomains,
     configPath: session?.agentBrowserConfigPath || config.browser.configPath,
+    executablePath: session?.agentBrowserExecutablePath,
     namespace: session?.agentBrowserNamespace,
     socketDir: session?.agentBrowserSocketRoot || session?.agentBrowserSocketDir,
   });

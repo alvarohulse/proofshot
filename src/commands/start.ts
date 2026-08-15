@@ -10,8 +10,8 @@ import {
 } from '../browser/evidence.js';
 import { sanitizePageUrl } from '../browser/provenance.js';
 import {
-  assertSupportedAgentBrowserVersion,
   loadIsolatedAgentBrowserConfig,
+  resolveAgentBrowserRuntime,
   writeIsolatedAgentBrowserConfig,
 } from '../browser/isolation.js';
 import { startRecording } from '../browser/capture.js';
@@ -105,6 +105,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         allowedDomains: existingSession.agentBrowserAllowedDomains,
         configPath:
           existingSession.agentBrowserConfigPath || config.browser.configPath,
+        executablePath: existingSession.agentBrowserExecutablePath,
         namespace: existingSession.agentBrowserNamespace,
         socketDir:
           existingSession.agentBrowserSocketRoot ||
@@ -157,6 +158,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   let socketRoot: string;
   let socketDir: string;
   let browserExecutable: string | null;
+  let agentBrowserExecutablePath: string;
   let agentBrowserVersion: string;
   let isolatedAgentBrowserConfig: Record<string, unknown>;
 
@@ -164,7 +166,9 @@ export async function startCommand(options: StartOptions): Promise<void> {
     isolatedAgentBrowserConfig = loadIsolatedAgentBrowserConfig(
       config.browser.configPath,
     );
-    agentBrowserVersion = assertSupportedAgentBrowserVersion();
+    const agentBrowserRuntime = resolveAgentBrowserRuntime();
+    agentBrowserExecutablePath = agentBrowserRuntime.executablePath;
+    agentBrowserVersion = agentBrowserRuntime.version;
     socketRoot = prepareAgentBrowserSocketDir(
       sessionName,
       process.env,
@@ -202,6 +206,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   setAgentBrowserDefaults({
     allowedDomains: agentBrowserAllowedDomains,
     configPath: agentBrowserConfigPath,
+    executablePath: agentBrowserExecutablePath,
     namespace: agentBrowserNamespace,
     socketDir: socketRoot,
   });
@@ -246,6 +251,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     agentBrowserNamespace,
     agentBrowserAllowedDomains,
     agentBrowserConfigPath,
+    agentBrowserExecutablePath,
     agentBrowserVersion,
     privateEvidenceDir: networkEvidence.privateDirectory,
     networkHarPath: networkEvidence.harPath,

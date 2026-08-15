@@ -80,6 +80,7 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
     setAgentBrowserDefaults({
       allowedDomains: session.agentBrowserAllowedDomains,
       configPath: session.agentBrowserConfigPath,
+      executablePath: session.agentBrowserExecutablePath,
       namespace: session.agentBrowserNamespace,
       socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
     });

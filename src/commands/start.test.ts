@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   captureAgentBrowserProcessIdentity: vi.fn(),
   cleanupFailedStart: vi.fn(),
   startOwnedEnvironment: vi.fn(),
-  assertSupportedAgentBrowserVersion: vi.fn(),
+  resolveAgentBrowserRuntime: vi.fn(),
   loadIsolatedAgentBrowserConfig: vi.fn(),
   writeIsolatedAgentBrowserConfig: vi.fn(),
   claimSessionOperation: vi.fn(),
@@ -73,7 +73,7 @@ vi.mock('../browser/runtime.js', () => ({
 }));
 
 vi.mock('../browser/isolation.js', () => ({
-  assertSupportedAgentBrowserVersion: mocks.assertSupportedAgentBrowserVersion,
+  resolveAgentBrowserRuntime: mocks.resolveAgentBrowserRuntime,
   loadIsolatedAgentBrowserConfig: mocks.loadIsolatedAgentBrowserConfig,
   writeIsolatedAgentBrowserConfig: mocks.writeIsolatedAgentBrowserConfig,
 }));
@@ -156,7 +156,10 @@ describe('startCommand', () => {
       startTime: '12345',
     });
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
-    mocks.assertSupportedAgentBrowserVersion.mockReturnValue('0.34.0');
+    mocks.resolveAgentBrowserRuntime.mockReturnValue({
+      executablePath: '/opt/node24/bin/agent-browser',
+      version: '0.34.0',
+    });
     mocks.loadIsolatedAgentBrowserConfig.mockReturnValue({});
     mocks.writeIsolatedAgentBrowserConfig.mockReturnValue(
       '/audit/private/agent-browser/config.json',
@@ -223,7 +226,7 @@ describe('startCommand', () => {
 
     await expect(startCommand({})).rejects.toThrow('process.exit:1');
 
-    expect(mocks.assertSupportedAgentBrowserVersion).not.toHaveBeenCalled();
+    expect(mocks.resolveAgentBrowserRuntime).not.toHaveBeenCalled();
     expect(mocks.ensureOutputDir).not.toHaveBeenCalled();
     expect(mocks.openBrowser).not.toHaveBeenCalled();
     expect(mocks.registerSession).not.toHaveBeenCalled();
@@ -281,6 +284,7 @@ describe('startCommand', () => {
       agentBrowserNamespace: 'psn-deadbeef1234',
       agentBrowserAllowedDomains: ['127.0.0.1'],
       agentBrowserConfigPath: '/audit/private/agent-browser/config.json',
+      agentBrowserExecutablePath: '/opt/node24/bin/agent-browser',
       agentBrowserVersion: '0.34.0',
     });
     expect(finalState.controlDir).toBe('/project/proofshot-artifacts');
