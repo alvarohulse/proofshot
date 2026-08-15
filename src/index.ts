@@ -37,7 +37,7 @@ export type {
   GitProvenance,
   ManifestArtifact,
 } from './session/manifest.js';
-export type { SessionLogEntry } from './commands/exec.js';
+export type { SessionLogEntry } from './session/action-log.js';
 export { convertVideoToMp4, trimVideo } from './commands/stop.js';
 export { writeMetadata, loadMetadata, findSessionsForBranch, type SessionMetadata } from './session/metadata.js';
 export { formatPRComment, type PRCommentData } from './artifacts/pr-format.js';

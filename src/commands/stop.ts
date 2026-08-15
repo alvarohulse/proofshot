@@ -34,7 +34,10 @@ import { loadMetadata } from '../session/metadata.js';
 import { writeArtifactManifest } from '../session/manifest.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { processIdentityMatches } from '../utils/process.js';
-import { loadSessionLog, type SessionLogEntry } from './exec.js';
+import {
+  loadSessionLog,
+  type SessionLogEntry,
+} from '../session/action-log.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
 
 /**

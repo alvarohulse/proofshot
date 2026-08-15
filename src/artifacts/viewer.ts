@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { SessionLogEntry } from '../commands/exec.js';
+import type { SessionLogEntry } from '../session/action-log.js';
 import type {
   CanonicalEvidence,
   EvidenceSourceSummary,

@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 import { PNG } from 'pngjs';
 import type { SanitizedNetworkSummary } from '../browser/evidence.js';
-import type { SessionLogEntry } from '../commands/exec.js';
+import type { SessionLogEntry } from '../session/action-log.js';
 import { loadEvidenceEvents } from '../environment/evidence.js';
 import type {
   EnvironmentState,

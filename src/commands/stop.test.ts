@@ -59,7 +59,9 @@ vi.mock('../environment/runtime.js', () => ({
 }));
 vi.mock('../artifacts/viewer.js', () => ({ writeViewer: mocks.writeViewer }));
 vi.mock('../utils/error-patterns.js', () => ({ extractServerErrors: mocks.extractServerErrors }));
-vi.mock('./exec.js', () => ({ loadSessionLog: mocks.loadSessionLog }));
+vi.mock('../session/action-log.js', () => ({
+  loadSessionLog: mocks.loadSessionLog,
+}));
 vi.mock('../utils/token-usage.js', () => ({ estimateTokenUsage: mocks.estimateTokenUsage }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
