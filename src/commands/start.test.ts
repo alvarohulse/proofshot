@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => ({
   captureAgentBrowserProcessIdentity: vi.fn(),
   cleanupFailedStart: vi.fn(),
   startOwnedEnvironment: vi.fn(),
+  assertSupportedAgentBrowserVersion: vi.fn(),
+  loadIsolatedAgentBrowserConfig: vi.fn(),
+  writeIsolatedAgentBrowserConfig: vi.fn(),
   claimSessionOperation: vi.fn(),
   registerSession: vi.fn(),
   releaseSessionOperation: vi.fn(),
@@ -67,6 +70,12 @@ vi.mock('../browser/runtime.js', () => ({
   prepareAgentBrowserSocketDir: mocks.prepareAgentBrowserSocketDir,
   resolveAgentBrowserRuntimeDir: mocks.resolveAgentBrowserRuntimeDir,
   captureAgentBrowserProcessIdentity: mocks.captureAgentBrowserProcessIdentity,
+}));
+
+vi.mock('../browser/isolation.js', () => ({
+  assertSupportedAgentBrowserVersion: mocks.assertSupportedAgentBrowserVersion,
+  loadIsolatedAgentBrowserConfig: mocks.loadIsolatedAgentBrowserConfig,
+  writeIsolatedAgentBrowserConfig: mocks.writeIsolatedAgentBrowserConfig,
 }));
 
 vi.mock('../artifacts/bundle.js', () => ({
@@ -147,6 +156,11 @@ describe('startCommand', () => {
       startTime: '12345',
     });
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
+    mocks.assertSupportedAgentBrowserVersion.mockReturnValue('0.34.0');
+    mocks.loadIsolatedAgentBrowserConfig.mockReturnValue({});
+    mocks.writeIsolatedAgentBrowserConfig.mockReturnValue(
+      '/audit/private/agent-browser/config.json',
+    );
     mocks.claimSessionOperation.mockImplementation((session, kind) => {
       const lease = {
         id: `${kind}-lease`,
@@ -202,6 +216,19 @@ describe('startCommand', () => {
     expect(mocks.unregisterSession).toHaveBeenCalledWith('ps-2026-04-deadbeef1234');
   });
 
+  it('refuses incompatible inherited browser state before creating evidence', async () => {
+    mocks.loadIsolatedAgentBrowserConfig.mockImplementationOnce(() => {
+      throw new Error('AGENT_BROWSER_PROFILE is incompatible');
+    });
+
+    await expect(startCommand({})).rejects.toThrow('process.exit:1');
+
+    expect(mocks.assertSupportedAgentBrowserVersion).not.toHaveBeenCalled();
+    expect(mocks.ensureOutputDir).not.toHaveBeenCalled();
+    expect(mocks.openBrowser).not.toHaveBeenCalled();
+    expect(mocks.registerSession).not.toHaveBeenCalled();
+  });
+
   it('clears discoverable registry state when recording never starts', async () => {
     mocks.startRecording.mockImplementation(() => {
       throw new Error('Recording already active');
@@ -253,6 +280,8 @@ describe('startCommand', () => {
       agentBrowserSocketRoot: '/run/user/1000/proofshot',
       agentBrowserNamespace: 'psn-deadbeef1234',
       agentBrowserAllowedDomains: ['127.0.0.1'],
+      agentBrowserConfigPath: '/audit/private/agent-browser/config.json',
+      agentBrowserVersion: '0.34.0',
     });
     expect(finalState.controlDir).toBe('/project/proofshot-artifacts');
   });

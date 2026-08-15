@@ -106,6 +106,10 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 let args = process.argv.slice(2);
+if (args[0] === '--version') {
+  process.stdout.write('agent-browser 0.34.0\\n');
+  process.exit(0);
+}
 let session = 'default';
 const sessionIndex = args.indexOf('--session');
 if (sessionIndex >= 0) {
@@ -242,6 +246,10 @@ if (command === 'hang') {
     stdio: 'ignore',
   });
   process.exit(0);
+}
+if (command === 'fail') {
+  process.stderr.write('simulated action failure\\n');
+  process.exit(7);
 }
 if (command === 'close') {
   try {
@@ -706,6 +714,20 @@ describe('isolated CLI lifecycle', () => {
       secretEntry.agentBrowserResult.evidencePath,
     );
     expect(fs.statSync(privateResultPath).mode & 0o777).toBe(0o600);
+
+    const failedExec = runCli(audit, env, [
+      'exec',
+      '--session',
+      sessions[0].sessionName,
+      'fail',
+    ]);
+    expect(failedExec.status).toBe(7);
+    const failedEntry = JSON.parse(fs.readFileSync(actionLogPath, 'utf-8')).at(-1);
+    expect(failedEntry).toMatchObject({
+      action: 'fail',
+      outcome: 'failed',
+      pageUrl: sessions[0].targetUrl,
+    });
 
     const ambiguousStop = runCli(audit, env, ['stop']);
     expect(ambiguousStop.status).toBe(1);
