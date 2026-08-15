@@ -8,6 +8,7 @@ import {
   preparePrivateNetworkEvidence,
   startPrivateNetworkCapture,
 } from '../browser/evidence.js';
+import { sanitizePageUrl } from '../browser/provenance.js';
 import { startRecording } from '../browser/capture.js';
 import { discoverBrowserExecutable, browserSetupError } from '../browser/discovery.js';
 import {
@@ -189,7 +190,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     sessionLogAdjusted: false,
     consoleEvidenceAvailable: false,
     consoleErrorCount: 0,
-    targetUrl: openUrl,
+    targetUrl: sanitizePageUrl(openUrl) || openUrl,
     headless: config.headless,
     agentBrowserSocketDir: socketDir,
     agentBrowserSocketRoot: socketRoot,
@@ -266,7 +267,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
         `Could not record the exact agent-browser daemon identity for session ${sessionName}.`,
       );
     }
-    session.targetUrl = getPageUrl(sessionName) || openUrl;
+    session.targetUrl =
+      sanitizePageUrl(getPageUrl(sessionName) || openUrl) || openUrl;
     persistOwnedSession(session);
     console.log(chalk.green('✓') + ' Browser ready');
 

@@ -374,6 +374,7 @@ export async function execCommand(
       : undefined;
     const agentBrowserResult = session
       ? writePrivateAgentBrowserResult({
+          command: intent.command,
           sessionDir: session.sessionDir,
           rawOutput: result,
           success: true,
@@ -403,6 +404,7 @@ export async function execCommand(
     );
     const agentBrowserResult = session
       ? writePrivateAgentBrowserResult({
+          command: intent.command,
           sessionDir: session.sessionDir,
           rawOutput: rawErrorOutput,
           success: false,

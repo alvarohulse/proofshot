@@ -100,6 +100,7 @@ export function buildSanitizedNetworkSummary(
 }
 
 export function writePrivateAgentBrowserResult(options: {
+  command: string;
   sessionDir: string;
   rawOutput: string;
   success: boolean;
@@ -116,7 +117,10 @@ export function writePrivateAgentBrowserResult(options: {
     actionsDirectory,
     `${Date.now()}-${randomUUID()}.json`,
   );
-  const result = parseStructuredResult(options.rawOutput, options.success, options.error);
+  const result = sanitizeStructuredResult(
+    parseStructuredResult(options.rawOutput, options.success, options.error),
+    options.command,
+  );
   writeJsonFile(filePath, result);
   const evidencePath = path
     .relative(options.sessionDir, filePath)
@@ -129,6 +133,48 @@ export function writePrivateAgentBrowserResult(options: {
       ? { error: sanitizeDiagnosticMessage(options.error) || 'agent-browser failed' }
       : {}),
   };
+}
+
+function sanitizeStructuredResult(value: unknown, command: string): unknown {
+  if (['auth', 'cookies', 'eval', 'storage'].includes(command)) {
+    const record = readRecord(value);
+    return {
+      success:
+        typeof record.success === 'boolean' ? record.success : true,
+      data: '[REDACTED]',
+      ...(typeof record.error === 'string'
+        ? { error: sanitizeDiagnosticMessage(record.error) }
+        : {}),
+    };
+  }
+  return sanitizeStructuredValue(value);
+}
+
+function sanitizeStructuredValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return sanitizeDiagnosticMessage(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(sanitizeStructuredValue);
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const namedSecret =
+    typeof record.name === 'string' &&
+    /authorization|cookie|credential|password|secret|token|api[-_]?key/i.test(
+      record.name,
+    );
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => {
+      const isSensitive =
+        /authorization|cookie|credential|password|secret|token|api[-_]?key/i.test(
+          key,
+        ) || (namedSecret && key === 'value');
+      return [key, isSensitive ? '[REDACTED]' : sanitizeStructuredValue(entry)];
+    }),
+  );
 }
 
 function parseStructuredResult(
