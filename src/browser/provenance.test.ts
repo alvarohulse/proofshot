@@ -30,11 +30,50 @@ describe('browser interaction provenance', () => {
     expect(classifyInteraction(['keyboard', 'type', 'private'])).toBe(
       'pointer-keyboard',
     );
+    expect(
+      classifyInteraction(['find', 'nth', '2', 'a', 'click']),
+    ).toBe('pointer-keyboard');
+    expect(classifyInteraction(['keyboard', 'inserttext', 'private'])).toBe(
+      'hybrid',
+    );
     expect(classifyInteraction(['keydown', 'Shift'])).toBe('pointer-keyboard');
     expect(classifyInteraction(['storage', 'get', 'theme'])).toBe('observation');
     expect(classifyInteraction(['storage', 'set', 'theme', 'dark'])).toBe('setup');
     expect(classifyInteraction(['network', 'requests'])).toBe('observation');
     expect(classifyInteraction(['network', 'har', 'start'])).toBe('setup');
+  });
+
+  it('rejects synthetic DOM mutation hidden in nested batch commands', () => {
+    const syntheticCommand = JSON.stringify([
+      'eval',
+      'document.querySelector("button").click()',
+    ]);
+    const nestedBatch = JSON.stringify([
+      'batch',
+      syntheticCommand,
+    ]);
+
+    expect(
+      classifyInteraction([
+        'batch',
+        '--bail',
+        '["open","https://example.com"]',
+        syntheticCommand,
+      ]),
+    ).toBe('synthetic-dom');
+    expect(
+      classifyInteraction(['batch', nestedBatch]),
+    ).toBe('synthetic-dom');
+    expect(
+      classifyInteraction([
+        'batch',
+        'open https://example.com',
+        'eval "document.body.click()"',
+      ]),
+    ).toBe('synthetic-dom');
+    expect(classifyInteraction(['batch', '["snapshot","-i"]'])).toBe(
+      'observation',
+    );
   });
 
   it('redacts typed values, credentials, scripts, and sensitive URL parameters', () => {
@@ -55,6 +94,31 @@ describe('browser interaction provenance', () => {
         "document.querySelector('#secret').value",
       ]).summary,
     ).toBe('eval [REDACTED_SCRIPT]');
+    expect(
+      buildSanitizedCommandIntent([
+        'find',
+        'nth',
+        '2',
+        '.card',
+        'fill',
+        'private-nth-value',
+      ]).summary,
+    ).toBe('find nth 2 .card fill [REDACTED]');
+    expect(
+      buildSanitizedCommandIntent([
+        'open',
+        'https://api.example.com',
+        '--headers',
+        '{"Authorization":"Bearer private-header-token"}',
+      ]).summary,
+    ).toBe('open https://api.example.com/ --headers [REDACTED]');
+    expect(
+      buildSanitizedCommandIntent([
+        'keyboard',
+        'inserttext',
+        'private-keyboard-value',
+      ]).summary,
+    ).toBe('keyboard inserttext [REDACTED]');
 
     const nestedSecrets = [
       buildSanitizedCommandIntent([
