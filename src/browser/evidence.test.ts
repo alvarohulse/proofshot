@@ -1,5 +1,11 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { buildSanitizedNetworkSummary } from './evidence.js';
+import {
+  buildSanitizedNetworkSummary,
+  writePrivateAgentBrowserResult,
+} from './evidence.js';
 
 describe('private browser evidence', () => {
   it('produces a deterministic metadata-only network summary', () => {
@@ -55,5 +61,31 @@ describe('private browser evidence', () => {
     expect(serialized).not.toContain('private-response-body');
     expect(serialized).not.toContain('private-customer');
     expect(serialized).not.toContain('private-error');
+  });
+
+  it('redacts sensitive structured results before writing local action evidence', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-private-result-'),
+    );
+    try {
+      const receipt = writePrivateAgentBrowserResult({
+        command: 'cookies',
+        sessionDir,
+        rawOutput: JSON.stringify({
+          success: true,
+          data: {
+            cookies: [{ name: 'session', value: 'private-cookie' }],
+          },
+        }),
+        success: true,
+      });
+      const evidencePath = path.join(sessionDir, receipt.evidencePath);
+      const evidence = fs.readFileSync(evidencePath, 'utf-8');
+      expect(evidence).not.toContain('private-cookie');
+      expect(evidence).toContain('[REDACTED]');
+      expect(fs.statSync(evidencePath).mode & 0o777).toBe(0o600);
+    } finally {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+    }
   });
 });
