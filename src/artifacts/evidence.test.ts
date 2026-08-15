@@ -238,6 +238,42 @@ describe('canonical evidence and verdicts', () => {
     });
     expect(verdict.status).toBe('INCOMPLETE');
   });
+
+  it('does not accept synthetic DOM mutation as final behavioral proof', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-synthetic-action-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'synthetic-action',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'eval [REDACTED_SCRIPT]',
+          category: 'synthetic-dom',
+          intent: {
+            command: 'eval',
+            summary: 'eval [REDACTED_SCRIPT]',
+          },
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain(
+      'Synthetic DOM mutation is diagnostic-only and cannot serve as final behavioral proof.',
+    );
+  });
 });
 
 function environmentEvent(
