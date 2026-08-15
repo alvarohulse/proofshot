@@ -37,6 +37,7 @@ describe('agent-browser isolation', () => {
       'AGENT_BROWSER_CDP',
       'AGENT_BROWSER_AUTO_CONNECT',
       'AGENT_BROWSER_PROFILE',
+      'AGENT_BROWSER_PLUGINS',
       'AGENT_BROWSER_STATE',
       'AGENT_BROWSER_SESSION_NAME',
     ]) {
@@ -54,6 +55,16 @@ describe('agent-browser isolation', () => {
     expect(() =>
       loadIsolatedAgentBrowserConfig(configPath, {}),
     ).toThrow('config key "profile"');
+  });
+
+  it('rejects plugin loading from an explicit config', () => {
+    const directory = createDirectory();
+    const configPath = path.join(directory, 'agent-browser.json');
+    fs.writeFileSync(configPath, JSON.stringify({ plugins: ['./plugin.js'] }));
+
+    expect(() => loadIsolatedAgentBrowserConfig(configPath, {})).toThrow(
+      'config key "plugins"',
+    );
   });
 
   it('copies a safe config into private per-session state', () => {
