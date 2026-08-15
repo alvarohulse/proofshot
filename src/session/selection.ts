@@ -5,10 +5,12 @@ import {
   getRegisteredSession,
   listRegisteredSessions,
 } from './registry.js';
+import { canAddressOwnedBrowserSession } from './lifecycle.js';
 import type { SessionState } from './state.js';
 
 type ResolveSessionOptions = {
   controlDir: string;
+  operation: 'exec' | 'stop';
   sessionName?: string;
 };
 
@@ -32,8 +34,12 @@ export function resolveLiveSession(
     return session;
   }
 
-  const sessions = listSessionsForControlDir(options.controlDir).filter(
+  const registeredSessions = listSessionsForControlDir(options.controlDir).filter(
     (session) => session.lifecycleStatus !== 'recovery',
+  );
+  const sessions = selectSessionsForOperation(
+    registeredSessions,
+    options.operation,
   );
   if (sessions.length === 0) {
     return null;
@@ -42,11 +48,41 @@ export function resolveLiveSession(
     return sessions[0];
   }
 
-  const choices = sessions.map((session) => `  ${session.sessionName}`).join('\n');
+  const choices = sessions
+    .map(
+      (session) =>
+        `  ${session.sessionName} (${session.lifecycleStatus || 'stale'})`,
+    )
+    .join('\n');
   throw new Error(
     'Multiple active ProofShot sessions match this worktree. ' +
       'Re-run with --session <id>:\n' +
       choices,
+  );
+}
+
+function selectSessionsForOperation(
+  sessions: SessionState[],
+  operation: ResolveSessionOptions['operation'],
+): SessionState[] {
+  if (operation === 'exec') {
+    return sessions.filter(
+      (session) =>
+        session.recordingActive && canAddressOwnedBrowserSession(session),
+    );
+  }
+
+  const liveSessions = sessions.filter(
+    (session) =>
+      sessionHasVerifiedLiveOwnership(session) ||
+      canAddressOwnedBrowserSession(session),
+  );
+  if (liveSessions.length > 0) {
+    return liveSessions;
+  }
+  return sessions.filter(
+    (session) =>
+      session.lifecycleStatus === 'stopping' && session.bundleComplete !== true,
   );
 }
 

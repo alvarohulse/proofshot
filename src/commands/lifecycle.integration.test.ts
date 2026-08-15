@@ -784,6 +784,64 @@ describe('isolated CLI lifecycle', () => {
     }
   }, 30000);
 
+  it('automatically selects the one live session when a stale record remains', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    for (const target of ['stale', 'live']) {
+      const start = runCli(audit, env, [
+        'start',
+        '--url',
+        `https://example.invalid/${target}`,
+        '--browser-executable',
+        tools.browserPath,
+      ]);
+      expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    }
+    const sessions = readRegisteredSessions(env);
+    const staleSession = sessions.find((session) =>
+      session.targetUrl.endsWith('/stale'),
+    );
+    const liveSession = sessions.find((session) =>
+      session.targetUrl.endsWith('/live'),
+    );
+    expect(staleSession).toBeDefined();
+    expect(liveSession).toBeDefined();
+    cleanupProcesses.push(staleSession.browserProcess, liveSession.browserProcess);
+    await terminateOwnedProcessTree(staleSession.browserProcess, { graceMs: 300 });
+    await waitForProcessExit(staleSession.browserProcess.pid);
+    cleanupProcesses.splice(
+      cleanupProcesses.indexOf(staleSession.browserProcess),
+      1,
+    );
+
+    const implicitExec = runCli(audit, env, ['exec', 'get', 'url']);
+    expect(implicitExec.status, `${implicitExec.stdout}\n${implicitExec.stderr}`).toBe(0);
+    expect(implicitExec.stdout.trim()).toBe(liveSession.targetUrl);
+
+    const staleCleanup = runCli(audit, env, [
+      'session',
+      'clean',
+      '--session',
+      staleSession.sessionName,
+    ]);
+    expect(
+      staleCleanup.status,
+      `${staleCleanup.stdout}\n${staleCleanup.stderr}`,
+    ).toBe(0);
+    const finalStop = runCli(audit, env, ['stop']);
+    expect(finalStop.status, `${finalStop.stdout}\n${finalStop.stderr}`).toBe(0);
+    await waitForProcessExit(liveSession.browserProcess.pid);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(liveSession.browserProcess), 1);
+    expect(readRegisteredSessions(env)).toEqual([]);
+  }, 30000);
+
   it('keeps both owned browsers isolated when one exec process is interrupted', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);
@@ -1093,7 +1151,7 @@ describe('isolated CLI lifecycle', () => {
     const mismatchedExec = runCli(nestedCwd, env, ['exec', 'get', 'url']);
     expect(mismatchedExec.status).toBe(1);
     expect(mismatchedExec.stderr).toContain(
-      'Browser ownership no longer matches this ProofShot session',
+      'No active ProofShot session matches this worktree',
     );
     expect(fs.readFileSync(tools.browserLog, 'utf-8')).toBe(
       browserLogBeforeMismatchedExec,

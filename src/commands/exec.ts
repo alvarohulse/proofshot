@@ -221,6 +221,7 @@ export async function execCommand(
   const controlDir = resolveSessionControlDir(config.output);
   const session = resolveLiveSession({
     controlDir,
+    operation: 'exec',
     sessionName: options.session,
   });
   setAgentBrowserDefaults({

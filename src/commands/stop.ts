@@ -94,6 +94,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   // Load session state
   const session = resolveLiveSession({
     controlDir,
+    operation: 'stop',
     sessionName: options.session,
   });
   if (!session) {
