@@ -248,7 +248,18 @@ if (command === 'hang') {
   });
   process.exit(0);
 }
-if (command === 'fail') {
+if (command === 'fill') {
+  process.stdout.write(JSON.stringify({
+    success: true,
+    data: { value: detail[1] },
+  }) + '\\n');
+  process.exit(0);
+}
+if (command === 'type') {
+  process.stderr.write('failed to type ' + detail[1] + '\\n');
+  process.exit(7);
+}
+if (command === 'click' && detail[0] === 'fail') {
   process.stderr.write('simulated action failure\\n');
   process.exit(7);
 }
@@ -878,6 +889,18 @@ describe('isolated CLI lifecycle', () => {
       expect(explicitExec.stdout).toContain(session.targetUrl);
     }
 
+    const failedAssertion = runCli(audit, postStartEnv, [
+      'exec',
+      '--session',
+      sessions[0].sessionName,
+      'assert-visible',
+      '#missing-result',
+    ]);
+    expect(failedAssertion.status).toBe(1);
+    expect(failedAssertion.stderr).toContain(
+      'Expected selector to be visible: #missing-result',
+    );
+
     const secret = 'proofshot-secret-value';
     const secretExec = runCli(audit, postStartEnv, [
       'exec',
@@ -888,6 +911,8 @@ describe('isolated CLI lifecycle', () => {
       secret,
     ]);
     expect(secretExec.status, `${secretExec.stdout}\n${secretExec.stderr}`).toBe(0);
+    expect(secretExec.stdout).not.toContain(secret);
+    expect(secretExec.stderr).not.toContain(secret);
     const actionLogPath = path.join(sessions[0].sessionDir, 'session-log.json');
     const actionLogText = fs.readFileSync(actionLogPath, 'utf-8');
     const actionEntries = JSON.parse(actionLogText);
@@ -912,17 +937,53 @@ describe('isolated CLI lifecycle', () => {
       secretEntry.agentBrowserResult.evidencePath,
     );
     expect(fs.statSync(privateResultPath).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(privateResultPath, 'utf-8')).not.toContain(secret);
+
+    const failedSecret = 'proofshot-failed-secret';
+    const failedSecretExec = runCli(audit, postStartEnv, [
+      'exec',
+      '--session',
+      sessions[0].sessionName,
+      'type',
+      '@e1',
+      failedSecret,
+    ]);
+    expect(failedSecretExec.status).toBe(7);
+    expect(failedSecretExec.stdout).not.toContain(failedSecret);
+    expect(failedSecretExec.stderr).not.toContain(failedSecret);
+    const failedSecretEntry = JSON.parse(
+      fs.readFileSync(actionLogPath, 'utf-8'),
+    ).at(-1);
+    expect(failedSecretEntry).toMatchObject({
+      action: 'type @e1 [REDACTED]',
+      outcome: 'failed',
+      error: expect.not.stringContaining(failedSecret),
+      agentBrowserResult: {
+        success: false,
+        evidencePath: expect.stringMatching(/^private\/agent-browser\/actions\//),
+      },
+    });
+    expect(
+      fs.readFileSync(
+        path.join(
+          sessions[0].sessionDir,
+          failedSecretEntry.agentBrowserResult.evidencePath,
+        ),
+        'utf-8',
+      ),
+    ).not.toContain(failedSecret);
 
     const failedExec = runCli(audit, postStartEnv, [
       'exec',
       '--session',
       sessions[0].sessionName,
+      'click',
       'fail',
     ]);
     expect(failedExec.status).toBe(7);
     const failedEntry = JSON.parse(fs.readFileSync(actionLogPath, 'utf-8')).at(-1);
     expect(failedEntry).toMatchObject({
-      action: 'fail',
+      action: 'click fail',
       outcome: 'failed',
       pageUrl: sessions[0].targetUrl,
     });

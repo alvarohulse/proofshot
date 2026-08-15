@@ -1,5 +1,7 @@
 import { execSync } from 'child_process';
 import {
+  formatAgentBrowserOutputForDisplay,
+  sanitizeAgentBrowserError,
   writePrivateAgentBrowserResult,
   type AgentBrowserResultReceipt,
 } from '../browser/evidence.js';
@@ -316,11 +318,16 @@ export async function execCommand(
     ) {
       const assertionError = new Error(
         `Expected selector to be visible: ${translated.expectedSelector}`,
-      ) as Error & { status: number };
+      ) as Error & { status: number; stderr: string };
       assertionError.status = 1;
+      assertionError.stderr = assertionError.message;
       throw assertionError;
     }
-    const displayedResult = session ? unwrapStructuredOutput(result) : result;
+    const displayedResult = formatAgentBrowserOutputForDisplay({
+      args,
+      rawOutput: result,
+      success: true,
+    });
     if (displayedResult.trim()) {
       process.stdout.write(displayedResult);
       // Ensure trailing newline
@@ -331,7 +338,7 @@ export async function execCommand(
     const pageUrl = capturePageUrl(session.sessionName);
     const agentBrowserResult = session
       ? writePrivateAgentBrowserResult({
-          command: intent.command,
+          args,
           sessionDir: session.sessionDir,
           rawOutput: result,
           success: true,
@@ -347,21 +354,40 @@ export async function execCommand(
       agentBrowserResult,
     );
   } catch (error: any) {
-    // Print stderr and exit with the same code
     const stderr = error?.stderr?.toString?.() || '';
     const stdout = error?.stdout?.toString?.() || '';
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr);
-    if (!stdout && !stderr && error?.message) {
-      process.stderr.write(`${error.message}\n`);
+    if (stdout) {
+      const displayedStdout = formatAgentBrowserOutputForDisplay({
+        args,
+        rawOutput: stdout,
+        success: false,
+      });
+      if (displayedStdout) {
+        process.stdout.write(`${displayedStdout}\n`);
+      }
+    }
+    if (stderr) {
+      process.stderr.write(
+        `${sanitizeAgentBrowserError(args, stderr.trim())}\n`,
+      );
+    }
+    if (!stdout && !stderr) {
+      process.stderr.write(
+        `agent-browser exited with status ${error?.status || 1}\n`,
+      );
     }
     const rawErrorOutput = stdout || stderr;
-    const persistedError = sanitizeDiagnosticMessage(
-      stderr.trim() || stdout.trim() || `agent-browser exited with status ${error?.status || 1}`,
+    const errorMessage =
+      stderr.trim() ||
+      stdout.trim() ||
+      `agent-browser exited with status ${error?.status || 1}`;
+    const persistedError = sanitizeAgentBrowserError(
+      args,
+      errorMessage,
     );
     const agentBrowserResult = session
       ? writePrivateAgentBrowserResult({
-          command: intent.command,
+          args,
           sessionDir: session.sessionDir,
           rawOutput: rawErrorOutput,
           success: false,
@@ -458,30 +484,5 @@ function assertionPassed(rawOutput: string): boolean {
     return parsed.data?.visible === true;
   } catch {
     return false;
-  }
-}
-
-function unwrapStructuredOutput(rawOutput: string): string {
-  try {
-    const parsed = JSON.parse(rawOutput) as { data?: unknown };
-    if (
-      typeof parsed.data === 'string' ||
-      typeof parsed.data === 'number' ||
-      typeof parsed.data === 'boolean'
-    ) {
-      return String(parsed.data);
-    }
-    if (typeof parsed.data !== 'object' || parsed.data === null) {
-      return rawOutput;
-    }
-    const data = parsed.data as Record<string, unknown>;
-    for (const key of ['url', 'title', 'text', 'value', 'snapshot']) {
-      if (typeof data[key] === 'string') {
-        return data[key];
-      }
-    }
-    return rawOutput;
-  } catch {
-    return rawOutput;
   }
 }

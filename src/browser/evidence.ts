@@ -4,9 +4,19 @@ import { randomUUID } from 'crypto';
 import { sanitizeDiagnosticMessage } from './provenance.js';
 import { ab, quoteShellArgument } from '../utils/exec.js';
 
+const SECRET_BEARING_FLAG =
+  /^(?:--)?(?:authorization|body|cookie|credential|headers?|password|secret|token|api[-_]?key)(?:=|$)/i;
+
 export type AgentBrowserResultReceipt = {
   success: boolean;
   evidencePath: string;
+  error?: string;
+};
+
+type AgentBrowserOutputOptions = {
+  args: string[];
+  rawOutput: string;
+  success: boolean;
   error?: string;
 };
 
@@ -186,7 +196,7 @@ export function buildSanitizedNetworkSummary(
 }
 
 export function writePrivateAgentBrowserResult(options: {
-  command: string;
+  args: string[];
   sessionDir: string;
   rawOutput: string;
   success: boolean;
@@ -205,7 +215,7 @@ export function writePrivateAgentBrowserResult(options: {
   );
   const result = sanitizeStructuredResult(
     parseStructuredResult(options.rawOutput, options.success, options.error),
-    options.command,
+    options.args,
   );
   writeJsonFile(filePath, result);
   const evidencePath = path
@@ -216,24 +226,111 @@ export function writePrivateAgentBrowserResult(options: {
     success: readSuccess(result, options.success),
     evidencePath,
     ...(options.error
-      ? { error: sanitizeDiagnosticMessage(options.error) || 'agent-browser failed' }
+      ? { error: sanitizeAgentBrowserError(options.args, options.error) }
       : {}),
   };
 }
 
-function sanitizeStructuredResult(value: unknown, command: string): unknown {
-  if (['auth', 'cookies', 'eval', 'storage'].includes(command)) {
+export function formatAgentBrowserOutputForDisplay(
+  options: AgentBrowserOutputOptions,
+): string {
+  const result = sanitizeStructuredResult(
+    parseStructuredResult(options.rawOutput, options.success, options.error),
+    options.args,
+  );
+  if (typeof result !== 'object' || result === null) {
+    return String(result);
+  }
+  const data = (result as { data?: unknown }).data;
+  if (
+    typeof data === 'string' ||
+    typeof data === 'number' ||
+    typeof data === 'boolean'
+  ) {
+    return String(data);
+  }
+  if (typeof data !== 'object' || data === null) {
+    return JSON.stringify(result);
+  }
+  const record = data as Record<string, unknown>;
+  for (const key of ['url', 'title', 'text', 'value', 'snapshot']) {
+    if (typeof record[key] === 'string') {
+      return record[key];
+    }
+  }
+  return JSON.stringify(result);
+}
+
+export function sanitizeAgentBrowserError(
+  args: string[],
+  error: string | undefined,
+): string {
+  if (commandResultMayContainSecrets(args)) {
+    return 'agent-browser command failed; sensitive details were redacted';
+  }
+  return sanitizeDiagnosticMessage(error) || 'agent-browser failed';
+}
+
+function sanitizeStructuredResult(value: unknown, args: string[]): unknown {
+  if (commandResultMayContainSecrets(args)) {
     const record = readRecord(value);
     return {
       success:
         typeof record.success === 'boolean' ? record.success : true,
       data: '[REDACTED]',
       ...(typeof record.error === 'string'
-        ? { error: sanitizeDiagnosticMessage(record.error) }
+        ? { error: sanitizeAgentBrowserError(args, record.error) }
         : {}),
     };
   }
   return sanitizeStructuredValue(value);
+}
+
+function commandResultMayContainSecrets(args: string[]): boolean {
+  const command = args[0]?.toLowerCase();
+  if (!command) {
+    return true;
+  }
+  if (args.slice(1).some((argument) => SECRET_BEARING_FLAG.test(argument))) {
+    return true;
+  }
+  if (
+    [
+      'auth',
+      'batch',
+      'cookies',
+      'eval',
+      'fill',
+      'network',
+      'select',
+      'storage',
+      'type',
+      'upload',
+    ].includes(command)
+  ) {
+    return true;
+  }
+  if (
+    command === 'keyboard' &&
+    ['inserttext', 'type'].includes(args[1]?.toLowerCase())
+  ) {
+    return true;
+  }
+  if (
+    command === 'set' &&
+    ['credentials', 'headers'].includes(args[1]?.toLowerCase())
+  ) {
+    return true;
+  }
+  if (command === 'get' && args[1]?.toLowerCase() === 'value') {
+    return true;
+  }
+  if (command === 'find') {
+    return ['fill', 'select', 'type'].some((action) =>
+      args.some((argument) => argument.toLowerCase() === action),
+    );
+  }
+  return false;
 }
 
 function sanitizeStructuredValue(value: unknown): unknown {
@@ -249,13 +346,13 @@ function sanitizeStructuredValue(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   const namedSecret =
     typeof record.name === 'string' &&
-    /authorization|cookie|credential|password|secret|token|api[-_]?key/i.test(
+    /authorization|body|cookie|credential|headers?|password|secret|token|api[-_]?key/i.test(
       record.name,
     );
   return Object.fromEntries(
     Object.entries(record).map(([key, entry]) => {
       const isSensitive =
-        /authorization|cookie|credential|password|secret|token|api[-_]?key/i.test(
+        /authorization|body|cookie|credential|headers?|password|secret|token|api[-_]?key/i.test(
           key,
         ) || (namedSecret && key === 'value');
       return [key, isSensitive ? '[REDACTED]' : sanitizeStructuredValue(entry)];

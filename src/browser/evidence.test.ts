@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildSanitizedNetworkSummary,
   finalizePrivateNetworkCapture,
+  formatAgentBrowserOutputForDisplay,
+  sanitizeAgentBrowserError,
   writePrivateAgentBrowserResult,
 } from './evidence.js';
 
@@ -81,7 +83,7 @@ describe('private browser evidence', () => {
     );
     try {
       const receipt = writePrivateAgentBrowserResult({
-        command: 'cookies',
+        args: ['cookies', 'get'],
         sessionDir,
         rawOutput: JSON.stringify({
           success: true,
@@ -99,6 +101,35 @@ describe('private browser evidence', () => {
     } finally {
       fs.rmSync(sessionDir, { recursive: true, force: true });
     }
+  });
+
+  it('keeps safe observations useful while redacting secret-bearing results', () => {
+    expect(
+      formatAgentBrowserOutputForDisplay({
+        args: ['snapshot', '-i'],
+        rawOutput: JSON.stringify({
+          success: true,
+          data: { snapshot: 'button "Submit" [ref=e1]' },
+        }),
+        success: true,
+      }),
+    ).toBe('button "Submit" [ref=e1]');
+    expect(
+      formatAgentBrowserOutputForDisplay({
+        args: ['fill', '@e1', 'private-value'],
+        rawOutput: JSON.stringify({
+          success: true,
+          data: { value: 'private-value' },
+        }),
+        success: true,
+      }),
+    ).toBe('[REDACTED]');
+    expect(
+      sanitizeAgentBrowserError(
+        ['type', '@e1', 'private-value'],
+        'failed to type private-value',
+      ),
+    ).not.toContain('private-value');
   });
 
   it('still stops HAR capture when the request inventory command fails', () => {
