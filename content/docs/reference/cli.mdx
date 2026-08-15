@@ -49,7 +49,7 @@ proofshot start [options]
 | `--headed` | Show the browser window (visible Chromium) | `false` |
 | `--output <dir>` | Custom output directory for artifacts | `./proofshot-artifacts` |
 | `--browser-executable <path>` | Use an exact Chrome/Chromium executable | auto-discovered |
-| `--force` | Clean up and replace an active session | `false` |
+| `--force` | Recover proven stale state; refuses live sessions/operations | `false` |
 
 **Examples:**
 
@@ -64,10 +64,10 @@ proofshot start --headed                                    # Show the browser w
 
 **What happens:**
 1. Starts either `--run` or the configured owned `environment` (the two are mutually exclusive), attaches every configured log source, and completes readiness checks
-2. Opens headless Chromium via agent-browser
-3. Navigates to `--url` (or `http://localhost:<port>`)
-4. Starts video recording (retries up to 3 times)
-5. Writes control `.session.json` to the configured/default output and durable `metadata.json` beside the evidence. A CLI-only `--output` changes evidence placement, not control discovery.
+2. Requires agent-browser 0.34+, a local Chromium executable, a safe per-session config, and a target-domain allowlist
+3. Creates a unique browser namespace/private evidence directory and registers an immutable session ID
+4. Navigates to `--url`, starts private HAR capture, and starts video recording
+5. Persists exact process identities and lifecycle operation ownership for cross-process recovery
 
 ---
 
@@ -81,17 +81,18 @@ proofshot stop [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
+| `--session <id>` | Stop one exact registered session | auto-select one live match |
 | `--no-close` | Keep the browser open after stopping | `false` |
 
 **What happens:**
-1. Collects console errors and output from the browser
-2. Stops video recording
+1. Claims the exact session operation and collects console errors/output
+2. Atomically finalizes private HAR evidence and a sanitized network summary, then stops video recording
 3. Closes the exact owned browser session (unless `--no-close`)
 4. Stops only the tmux session/server, direct processes, capture helpers, and dev-server process identities created by this ProofShot start
 5. Trims video dead time and converts the finalized recording to H.264 `session.mp4` (requires ffmpeg): 5s buffer before first action, 3s after last
 6. Scans `server.log` for errors across 10+ languages
 7. Generates `SUMMARY.md`, canonical `evidence.json`, structured `verdict.json`, `viewer.html`, and a hashed provenance manifest
-8. Clears `.session.json`, or retains it after `--no-close` until a later plain `stop` closes that exact browser
+8. Unregisters completed ownership, or retains the exact session after `--no-close` until a later plain `stop`
 
 Repeated `stop` calls are successful no-ops. If bundling fails, control state remains retryable; a later `stop` reuses already-collected artifacts instead of widening process cleanup.
 
@@ -102,7 +103,7 @@ Repeated `stop` calls are successful no-ops. If bundling fails, control state re
 Pass-through to agent-browser with automatic session logging. Captures timestamps, element bounding boxes, and resolves screenshot paths into the session directory.
 
 ```sh
-proofshot exec <command> [args...]
+proofshot exec [--session <id>] <command> [args...]
 ```
 
 **Examples:**
@@ -116,14 +117,15 @@ proofshot exec scroll down
 proofshot exec press Enter
 ```
 
-Every `exec` call appends an entry to `session-log.json` with:
+With one live session, `exec` selects it automatically. Multiple live sessions require `--session <id>`. Every call appends an entry to `session-log.json` with:
 - Relative timestamp from session start
-- The command and arguments
+- Sanitized command intent and interaction category
 - Passed/failed outcome and error text
+- Sanitized pre/post page context and duration
 - Expected selector for `assert-visible`
 - Element bounding box and label (for `click`, `fill`, `type` targeting `@eN` refs)
 
-This data powers the interactive viewer's timeline and overlays.
+This data powers the interactive viewer's timeline and overlays. Synthetic DOM actions are diagnostic only and force an incomplete final verdict. Raw structured agent-browser output stays in private local evidence.
 
 ---
 
@@ -201,6 +203,7 @@ Inspect durable recovery records and retry exact cleanup after an interrupted ru
 ```sh
 proofshot session list
 proofshot session clean --session <session-id>
+proofshot session clean --all
 ```
 
 `clean` validates persisted process/session identities. Identity mismatches remain in recovery state and never widen cleanup to a port, process name, or default tmux socket.
@@ -215,4 +218,4 @@ Remove the entire artifacts directory.
 proofshot clean
 ```
 
-Deletes `./proofshot-artifacts/` (or the configured output directory). No flags. If active or retained control state exists, `clean` refuses and asks you to run `proofshot stop` first so exact process ownership metadata is not discarded.
+Deletes `./proofshot-artifacts/` (or the configured output directory). No flags. If any matching registry state exists—including starting, stopping, stale, or recovery state—`clean` refuses until `proofshot stop` or `proofshot session clean` preserves the evidence/ownership invariant.

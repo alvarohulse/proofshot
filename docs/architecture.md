@@ -34,15 +34,14 @@ The choice of agent-browser as the browser automation layer is the most importan
 
 **Built-in recording.** Playwright's screencast API is exposed directly, so video capture works without ffmpeg. Finalization uses ffmpeg to trim the WebM capture and convert it to H.264 MP4.
 
-All browser commands in ProofShot go through a single function:
+All browser commands pass through one wrapper that injects the exact session, private config, namespace, socket root, allowlist, and a cleaned environment:
 
 ```typescript
 // src/utils/exec.ts
-export function ab(command: string, timeoutMs = 30000): string {
-  return execSync(`agent-browser ${command}`, {
-    encoding: 'utf-8',
-    timeout: timeoutMs,
-    stdio: ['pipe', 'pipe', 'pipe'],
+export function ab(command: string, options: AgentBrowserCommandOptions): string {
+  return execSync(buildAgentBrowserCommand(command, options), {
+    env: getAgentBrowserEnvironment(options),
+    timeout: options.timeoutMs ?? 30000,
   }).trim();
 }
 ```
@@ -57,12 +56,12 @@ ProofShot uses a three-phase model: **start**, **exec** (repeated), **stop**.
 proofshot start --run "npm run dev" --port 3000 --description "Login flow"
 ```
 
-1. Check if port is already occupied (fail fast if `--run` conflicts)
-2. Spawn dev server as a detached process, pipe stdout/stderr to `server.log`
-3. Wait for port to become available (polls every 500ms, 30s timeout)
-4. Open headless Chromium via agent-browser
-5. Start video recording (Playwright screencast → temporary `.webm`)
-6. Write `.session.json` to the artifacts directory
+1. Verify agent-browser 0.34+, reject inherited provider/CDP/profile/state modes, and copy a safe config into private per-session state
+2. Create a collision-safe session ID, namespace, socket root, domain allowlist, evidence directory, and immutable start-operation lease
+3. Spawn an exact-owned dev server/environment when configured and persist process identities before waiting for readiness
+4. Open fresh local Chromium and persist the daemon identity
+5. Start private HAR capture and video recording
+6. Register the session under the user state directory and write durable Git metadata beside its evidence
 
 Recording is mandatory. If it fails after 3 retries, the session aborts. Video proof is the whole point.
 
@@ -75,11 +74,11 @@ proofshot exec screenshot step-login.png
 
 Each `exec` call:
 
-1. Loads `.session.json`, validates recording is active
-2. For click/fill/type actions targeting `@eN` refs: captures element bounding box and label *before* execution (used for viewer overlays)
-3. Appends an entry to `session-log.json` with relative timestamp and element data
-4. Forwards the command to agent-browser
-5. Returns agent-browser's output
+1. Selects the single addressable recording or requires `--session <id>` when several live sessions match
+2. Claims an immutable exec-operation lease
+3. Captures pre-action page context plus element bounds/label when available
+4. Appends sanitized intent, interaction category, timing, outcome, and page context to `session-log.json`; raw structured output stays private
+5. Forwards the command to the exact agent-browser namespace and releases the lease
 
 The element data capture uses a multi-strategy approach because agent-browser's `get box` command doesn't accept refs directly:
 - Try to get the element's `id` attribute, then query by `#id`
@@ -92,14 +91,12 @@ The element data capture uses a multi-strategy approach because agent-browser's 
 proofshot stop
 ```
 
-1. Collect console errors and console output from the browser (point-in-time snapshots)
-2. Stop video recording
-3. Close browser (unless `--no-close`)
-4. **Finalize video** — remove dead time before the first action (5s buffer) and after the last action (3s buffer), convert to H.264 `session.mp4`, and adjust all `session-log.json` timestamps by the trim offset.
-5. **Extract server errors** — scan `server.log` with multi-language regex patterns
-6. Generate `SUMMARY.md` — markdown report with description, video link, screenshots, and errors
-7. Generate `viewer.html` — standalone interactive viewer
-8. Clear `.session.json`
+1. Claim a stop-operation lease and collect console evidence
+2. Flush HAR capture to a private pending file, validate it, atomically adopt it, and write a metadata-only network summary
+3. Stop video and close only exact owned browser/environment/server processes
+4. **Finalize video** — trim dead time, convert to H.264 `session.mp4`, and adjust action timestamps
+5. Generate canonical evidence, verdict, summary, viewer, and provenance manifest
+6. Unregister completed ownership, or retain the exact browser record after `--no-close`
 
 ## Interactive viewer
 
@@ -176,6 +173,9 @@ src/
 │   ├── pr.ts                 # GitHub PR description formatting
 │   └── clean.ts              # Artifact directory removal
 ├── browser/
+│   ├── isolation.ts          # Version gate, clean config/env, local-runtime policy
+│   ├── provenance.ts         # Interaction classification and secret-safe intent
+│   ├── evidence.ts           # Private structured/HAR evidence + sanitized summary
 │   ├── session.ts            # Browser open/close, console collection
 │   ├── capture.ts            # Recording start/stop, screenshots, diffs
 │   ├── navigate.ts           # URL navigation, snapshot
@@ -183,7 +183,10 @@ src/
 ├── server/
 │   └── start.ts              # Dev server spawn + port waiting
 ├── session/
-│   └── state.ts              # .session.json read/write/clear
+│   ├── registry.ts           # Global registry and per-session operation leases
+│   ├── selection.ts          # Operation-specific implicit/explicit resolution
+│   ├── lifecycle.ts          # Exact owned-process cleanup and recovery
+│   └── state.ts              # Session identity and evidence/process state
 ├── artifacts/
 │   ├── viewer.ts             # Interactive HTML viewer generation
 │   ├── summary.ts            # Markdown summary generation
@@ -203,10 +206,12 @@ src/
 
 **tsup with two entry points.** The CLI binary (`bin/proofshot.ts`) builds to a single file with a shebang. The library entry (`src/index.ts`) builds with code splitting and `.d.ts` generation. This supports both CLI usage and programmatic import by other tools.
 
-**Minimal dependencies.** Only three production dependencies: `commander` (CLI framework), `chalk` (terminal colors), `detect-port` (port checking). agent-browser is an optional peer dependency. This keeps the install fast and the supply chain small.
+**Pinned browser contract.** agent-browser 0.34.0 is an exact runtime dependency and requires Node 24. Managed installations use a dedicated launcher so project commands keep their repository runtime.
 
-**Session state in the output directory.** `.session.json` lives alongside artifacts, not in a global location. This allows parallel sessions in different projects and ensures `proofshot clean` removes everything.
+**Registry-backed session control.** User-state registry files point to per-run evidence while immutable IDs, namespaces, sockets, and operation leases allow concurrent sessions in the same worktree. `clean` refuses while any matching registry record remains.
+
+**Private evidence boundary.** Raw agent-browser JSON, HAR, response bodies, credentials, and customer data remain in a `0700` private tree with `0600` files. Manifests and PR publication exclude that tree.
 
 **Config file walk-up.** `proofshot.config.json` is searched from cwd upward to filesystem root, supporting monorepo layouts where config lives at the repo root.
 
-**Graceful degradation everywhere.** Missing ffmpeg skips video trimming and MP4 conversion, preserving the original WebM capture. Failed element data capture skips overlays. Browser already closed gets a silent catch. Console errors unavailable shows "0 errors". Non-critical failures never abort a session.
+**Fail closed at trust boundaries.** Wrong browser versions, shared/cloud browser modes, ownership mismatches, corrupt operation locks, synthetic final proof, and invalid private evidence cannot be presented as successful proof. Missing ffmpeg still preserves the original WebM.

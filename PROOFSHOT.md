@@ -1,26 +1,18 @@
-# ProofShot Visual Verification
+# ProofShot visual verification
 
-ProofShot is an open-source, agent-agnostic CLI that lets any AI coding agent verify its own work in a real browser — no vendor lock-in required.
+Explore UI behavior with the approved local agent-browser launcher, maintain User Stories/Use Cases/User Flows and iteration feedback under the task's persistent `~/data` directory, then record one fresh ProofShot session per finalized Use Case.
 
-After building or modifying UI features, verify with this workflow:
+```bash
+proofshot start --run "your-dev-command" --port PORT --description "UC-ID: behavior"
+proofshot exec snapshot -i
+proofshot exec click @e3
+proofshot exec assert-visible "#expected-result"
+proofshot exec screenshot step-result.png
+proofshot stop
+```
 
-1. Start: `proofshot start --run "your-dev-command" --port PORT --description "what you are verifying"`
-   If the server is already running, omit --run.
-2. Test: Use `proofshot exec` to navigate, click, fill forms, take screenshots
-3. Stop: `proofshot stop` — bundles video, screenshots, and error report
+With multiple sessions, pass the printed ID to `proofshot exec --session ID ...` and `proofshot stop --session ID`. Prefer pointer/keyboard actions, disclose hybrid input, and treat synthetic DOM mutation as diagnostic only. `FAIL`, `INCOMPLETE`, and `BLOCKED` are unsuccessful.
 
-ProofShot keeps all `proofshot exec` commands inside the same isolated `agent-browser` session that was created by `proofshot start`, so recording, screenshots, and browser actions stay aligned.
+Keep raw JSON, HAR, response bodies, credentials, and customer data private under the task's `~/data` evidence root. Report the local path without copying raw artifacts into prompts, scratch, PRs, or uploads. Copy only exercised final flows into PR User Testing instructions, then dry-run ordered explicit publication with repeated `--session` flags.
 
-Use `--url` on `start` when verification must begin on a specific target. In an isolated HOME, ProofShot discovers executable-only Chrome/Chromium installs from system/account locations; use `--browser-executable /absolute/path/to/chrome` to select one explicitly.
-
-Key proofshot exec commands:
-- `proofshot exec snapshot -i` — see interactive elements
-- `proofshot exec click @e3` — click an element
-- `proofshot exec fill @e2 "text"` — fill a form field
-- `proofshot exec screenshot step.png` — capture a moment
-
-Artifacts saved to ./proofshot-artifacts/ including video, screenshots, errors, and summary.
-Custom `--output` paths do not move active control state, so a separate `proofshot stop` still finds the session. `stop` is idempotent; after `stop --no-close`, run a later plain `stop` to close that exact retained browser without rebundling.
-You can customize browser launch behavior in `proofshot.config.json`, including HTTPS error ignoring, a custom browser executable path, and a project-specific `agent-browser` config path.
-
-Use `proofshot doctor` when the local setup looks wrong. It prints the current config path, browser mode, viewport, installed binaries, and any active ProofShot session.
+Browser tooling requires agent-browser 0.34+ through its Node 24 launcher; project commands continue to honor the repository runtime. Recover with `proofshot session list` and `proofshot session clean --session ID`, never broad process cleanup.

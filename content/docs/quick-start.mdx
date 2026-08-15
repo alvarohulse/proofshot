@@ -34,7 +34,7 @@ yarn global add proofshot
 </Tabs.Tab>
 </Tabs>
 
-This installs the CLI and downloads [agent-browser](https://github.com/vercel-labs/agent-browser) with headless Chromium.
+This installs the CLI and exact agent-browser 0.34.0 package. agent-browser requires Node 24; use the configured browser-tool launcher so project commands continue to honor their repository runtime.
 
 ### Install the skill for your AI agent
 
@@ -64,7 +64,7 @@ In your project directory, tell your AI agent to verify a feature. For example:
 
 > Verify the login page with proofshot. Start the dev server, check that the form renders, fill in credentials, and submit. Screenshot each step.
 
-The agent will run:
+Explore and refine the User Flow first, then record one fresh session for the finalized Use Case. The agent will run:
 
 ```sh
 proofshot start --run "npm run dev" --port 3000 --description "Login page verification"

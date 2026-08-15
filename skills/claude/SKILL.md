@@ -1,79 +1,48 @@
 ---
 name: proofshot
-description: Visual verification of UI features. Use after building or modifying any
-  UI component, page, or visual feature. Starts a verification session with video
-  recording and error capture, then you drive the browser to test, then stop to
-  bundle proof artifacts for the human.
+description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then record one fresh isolated ProofShot session per reviewable use case and retain local evidence.
 allowed-tools: Bash(proofshot:*), Bash(agent-browser:*)
 ---
 
-# ProofShot — Visual Verification Workflow
+# ProofShot visual verification
 
-ProofShot is an open-source, agent-agnostic CLI that lets you verify your own work in a real browser — video proof, screenshots, and error reports, no vendor lock-in.
+Use this workflow after a UI or visual behavior changes.
 
-## When to use
+## 1. Explore and write the brief
 
-Use ProofShot after:
-- Building a new UI feature or page
-- Modifying existing UI components
-- Fixing a visual bug
-- Any change that affects what the user sees
+Use the approved local `agent-browser` launcher before recording. Keep project commands on the repository runtime; browser tooling uses its separate Node 24 launcher and agent-browser 0.34.0 or newer.
 
-## The workflow (always follow these 3 steps)
+Maintain one Markdown brief in the task's persistent `~/data` directory. Define User Stories (actor, goal, benefit), stable Use Cases (preconditions, starting state, test data, success criteria), user-level User Flows, Iteration Feedback, and final User Testing instructions.
 
-### Step 1: Start the session
+## 2. Refine every flow
 
-```bash
-proofshot start --run "your-dev-command" --port PORT --description "what you are about to verify"
-```
+Exercise each flow repeatedly until it is correct, stable, and concise. Prefer pointer/keyboard-backed actions and disclose hybrid fill/select/checkbox behavior. `eval`, direct DOM clicks, setters, and dispatched events are diagnostics only and cannot be final proof.
 
-This opens a browser and begins recording. If the port is already in use, ProofShot leaves that unowned listener alone and asks you to choose another port or stop it explicitly.
-
-**Always use `--run`** to let proofshot start and capture your dev server output (server logs appear in the proof report).
-Only omit `--run` if the server was explicitly started by the user or another process — without it, no server logs are captured.
-
-If a previous session was not stopped cleanly, add `--force` to override it.
-For configured multi-service projects, let `environment` start the declared tmux panes or direct processes; do not launch duplicate services separately. Use `proofshot doctor` when browser, FFmpeg, or recovery state is unclear.
-
-### Step 2: Drive the browser and test
-
-Use proofshot exec to navigate, interact, and verify:
+## 3. Record one fresh session per Use Case
 
 ```bash
-proofshot exec snapshot -i                                    # See interactive elements
-proofshot exec open http://localhost:PORT/page                # Navigate to a page
-proofshot exec click @e3                                      # Click a button
-proofshot exec fill @e2 "test@example.com"                    # Fill a form field
-proofshot exec assert-visible "#expected-result"              # Record an explicit assertion
-proofshot exec screenshot step-NAME.png                       # Capture key moments
-```
-
-Take screenshots at important moments — these become the visual proof.
-Verify expected outcomes with assertion commands before taking screenshots. A screenshot alone is not a passing assertion.
-
-### Step 3: Stop and bundle the proof
-
-```bash
+proofshot start --run "your-dev-command" --port PORT --description "UC-ID: behavior"
+proofshot exec snapshot -i
+proofshot exec click @e3
+proofshot exec assert-visible "#expected-result"
+proofshot exec screenshot step-result.png
 proofshot stop
 ```
 
-This stops recording, collects console + server errors, and generates
-a SUMMARY.md with video, screenshots, and error report.
-Treat `FAIL`, `INCOMPLETE`, and `BLOCKED` verdicts as unsuccessful verification. If cleanup was interrupted, inspect `proofshot session list` and retry only the exact session with `proofshot session clean --session ID`.
+Omit `--run` only for an explicitly external server. With multiple sessions, use the printed ID in `proofshot exec --session ID ...` and `proofshot stop --session ID`. Record the final session ID and local evidence pointer in the brief.
 
-### Step 4 (optional): Post proof to the PR
+## 4. Inspect and retain
+
+`FAIL`, `INCOMPLETE`, and `BLOCKED` are unsuccessful. Keep raw JSON, HAR, response bodies, credentials, and customer data private under the task's `~/data` evidence root. Report paths without copying raw artifacts into prompts, scratch, PRs, or uploads.
+
+Recover interrupted cleanup with `proofshot session list` and `proofshot session clean --session ID`; never kill by process name or port. `--force` only recovers proven stale state.
+
+## 5. Publish curated proof
+
+Copy the exercised final flows into PR User Testing instructions. Dry-run explicit ordered publication, repeating `--session` in review order:
 
 ```bash
-proofshot pr              # Auto-detect PR from current branch
-proofshot pr 42           # Target a specific PR number
-proofshot pr 42 --session SESSION_ID --screenshot ARTIFACT_ID
+proofshot pr 42 --session SESSION_ID --screenshot step-result.png --dry-run
 ```
 
-This uploads screenshots and video to GitHub and posts a formatted comment on the PR. By default it uses the official GitHub contents API on a `proofshot-artifacts` branch. Use `--upload-provider github-web-attachments` if you specifically want GitHub attachment URLs.
-
-## Tips
-
-- Always include a meaningful --description so the human knows what was tested
-- Take screenshots before AND after key actions (e.g., before form submit, after redirect)
-- If you find errors during verification, fix them and re-run the workflow
-- Use `proofshot pr` after stopping to attach proof directly to the pull request
+Publish only curated media, sanitized summaries, and interaction disclosure.

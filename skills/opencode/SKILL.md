@@ -1,79 +1,16 @@
 ---
 name: proofshot
-description: Visual verification of UI features. Use after building or modifying any
-  UI component, page, or visual feature. Starts a verification session with video
-  recording and error capture, then you drive the browser to test, then stop to
-  bundle proof artifacts for the human.
+description: Explore UI behavior, refine user flows, then record one fresh isolated ProofShot session per reviewable use case.
 compatibility: opencode
 ---
 
-# ProofShot - Visual Verification Workflow
+# ProofShot visual verification
 
-ProofShot is an open-source, agent-agnostic CLI that lets you verify your own work in a real browser - video proof, screenshots, and error reports, no vendor lock-in.
+1. Explore with the approved local agent-browser launcher before recording. Keep project commands on the repository runtime and browser tooling on its separate Node 24/agent-browser 0.34+ launcher.
+2. Maintain a brief under the task's persistent `~/data` directory: User Stories; stable Use Cases with preconditions, starting state, test data, and success criteria; user-level User Flows; Iteration Feedback; and final User Testing instructions.
+3. Exercise and simplify every flow. Prefer pointer/keyboard actions, disclose hybrid fill/select/checkbox behavior, and use synthetic DOM mutation only for diagnosis.
+4. Record one fresh session per finalized Use Case with an explicit assertion and screenshot. With multiple sessions, use `proofshot exec --session ID ...` and `proofshot stop --session ID`.
+5. Treat `FAIL`, `INCOMPLETE`, and `BLOCKED` as unsuccessful. Retain the session ID and local evidence pointer. Keep raw JSON/HAR/bodies/credentials/customer data local under `~/data` and out of prompts, scratch, PRs, and uploads.
+6. Copy only exercised flows into PR User Testing instructions and dry-run explicit ordered publication with curated screenshots.
 
-## When to use
-
-Use ProofShot after:
-- Building a new UI feature or page
-- Modifying existing UI components
-- Fixing a visual bug
-- Any change that affects what the user sees
-
-## The workflow (always follow these 3 steps)
-
-### Step 1: Start the session
-
-```bash
-proofshot start --run "your-dev-command" --port PORT --description "what you are about to verify"
-```
-
-This opens a browser and begins recording. If the port is already in use, ProofShot leaves that unowned listener alone and asks you to choose another port or stop it explicitly.
-
-**Always use `--run`** to let proofshot start and capture your dev server output (server logs appear in the proof report).
-Only omit `--run` if the server was explicitly started by the user or another process - without it, no server logs are captured.
-
-If a previous session was not stopped cleanly, add `--force` to override it.
-For configured multi-service projects, let `environment` start the declared tmux panes or direct processes; do not launch duplicate services separately. Use `proofshot doctor` when browser, FFmpeg, or recovery state is unclear.
-
-### Step 2: Drive the browser and test
-
-Use proofshot exec to navigate, interact, and verify:
-
-```bash
-proofshot exec snapshot -i                                    # See interactive elements
-proofshot exec open http://localhost:PORT/page                # Navigate to a page
-proofshot exec click @e3                                      # Click a button
-proofshot exec fill @e2 "test@example.com"                    # Fill a form field
-proofshot exec assert-visible "#expected-result"              # Record an explicit assertion
-proofshot exec screenshot step-NAME.png                       # Capture key moments
-```
-
-Take screenshots at important moments - these become the visual proof.
-Verify expected outcomes with assertion commands before taking screenshots. A screenshot alone is not a passing assertion.
-
-### Step 3: Stop and bundle the proof
-
-```bash
-proofshot stop
-```
-
-This stops recording, collects console + server errors, and generates
-a SUMMARY.md with video, screenshots, and error report.
-Treat `FAIL`, `INCOMPLETE`, and `BLOCKED` verdicts as unsuccessful verification. If cleanup was interrupted, inspect `proofshot session list` and retry only the exact session with `proofshot session clean --session ID`.
-
-### Step 4 (optional): Post proof to the PR
-
-```bash
-proofshot pr              # Auto-detect PR from current branch
-proofshot pr 42           # Target a specific PR number
-proofshot pr 42 --session SESSION_ID --screenshot ARTIFACT_ID
-```
-
-This uploads screenshots and video to GitHub and posts a formatted comment on the PR. By default it uses the official GitHub contents API on a `proofshot-artifacts` branch. Use `--upload-provider github-web-attachments` if you specifically want GitHub attachment URLs.
-
-## Tips
-
-- Always include a meaningful --description so the human knows what was tested
-- Take screenshots before AND after key actions (e.g., before form submit, after redirect)
-- If you find errors during verification, fix them and re-run the workflow
-- Use `proofshot pr` after stopping to attach proof directly to the pull request
+Recover with `proofshot session list` and `proofshot session clean --session ID`; never kill by process name or port. `--force` refuses live sessions and operations.
