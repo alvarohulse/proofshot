@@ -4,7 +4,7 @@ const REDACTED_BATCH = '[REDACTED_BATCH]';
 const MAX_BATCH_DEPTH = 8;
 const SECRET_FLAG = /^(?:--)?(?:authorization|cookie|credential|headers|password|secret|token|api[-_]?key|body)$/i;
 const SECRET_QUERY_PARAMETER = /(?:auth|code|cookie|credential|key|password|secret|session|sig(?:nature)?|token)/i;
-const SECRET_PATH_KEY = /^(?:auth|authorization|credential|credentials|key|password|secret|session|sig|signature|token|api[-_]?key)$/i;
+const SECRET_PATH_KEY = /^(?:auth|authorization|credential|credentials|invite|invitation|key|magic[-_]?link|password|password[-_]?reset|reset[-_]?password|secret|session|sig|signature|token|api[-_]?key)$/i;
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
 const HYBRID_ACTIONS = new Set(['check', 'fill', 'select', 'type', 'uncheck']);

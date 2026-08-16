@@ -218,4 +218,18 @@ describe('browser interaction provenance', () => {
       'https://example.test/api/credentials/%5BREDACTED%5D/file?sig=%5BREDACTED%5D&signature=%5BREDACTED%5D&view=full',
     );
   });
+
+  it('redacts bearer tokens from authentication route paths', () => {
+    expect(
+      sanitizePageUrl(
+        'https://example.test/reset-password/private-reset-token',
+      ),
+    ).toBe('https://example.test/reset-password/%5BREDACTED%5D');
+    expect(
+      sanitizePageUrl('https://example.test/invite/private-invite-token'),
+    ).toBe('https://example.test/invite/%5BREDACTED%5D');
+    expect(
+      sanitizePageUrl('https://example.test/magic-link/private-magic-token'),
+    ).toBe('https://example.test/magic-link/%5BREDACTED%5D');
+  });
 });
