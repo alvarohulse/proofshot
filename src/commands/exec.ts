@@ -1,4 +1,3 @@
-import { execSync } from 'child_process';
 import {
   formatAgentBrowserOutputForDisplay,
   sanitizeAgentBrowserError,
@@ -18,9 +17,10 @@ import {
 import { loadConfig, normalizeViewport } from '../utils/config.js';
 import {
   ab,
-  buildAgentBrowserCommand,
-  getAgentBrowserEnvironment,
+  buildAgentBrowserInvocation,
+  executeAgentBrowser,
   setAgentBrowserDefaults,
+  type AgentBrowserInvocation,
 } from '../utils/exec.js';
 import {
   resolveSessionControlDir,
@@ -45,35 +45,15 @@ type ExecOptions = {
 };
 
 /**
- * Build the shell command string for agent-browser.
- *
- * For `eval` commands, we need to pass the JS code as a single quoted argument
- * to prevent the shell from interpreting parentheses, brackets, etc.
- * For other commands, simple joining is fine.
+ * Build an executable + argv invocation for agent-browser.
  */
-export function buildShellCommand(
+export function buildExecInvocation(
   args: string[],
   sessionName?: string,
   structuredOutput = false,
-): string {
+): AgentBrowserInvocation {
   assertControlledAgentBrowserCommand(args);
-  if (args[0] === 'eval' && args.length > 1) {
-    const jsCode = args.slice(1).join(' ');
-    const escaped = jsCode.replace(/'/g, "'\\''");
-    return buildAgentBrowserCommand(`eval '${escaped}'`, {
-      json: structuredOutput,
-      session: sessionName,
-    });
-  }
-
-  const quotedArgs = args.map((arg) => {
-    if (/[(){}[\]$`!#&|;<>*? "'\\]/.test(arg)) {
-      const escaped = arg.replace(/'/g, "'\\''");
-      return `'${escaped}'`;
-    }
-    return arg;
-  });
-  return buildAgentBrowserCommand(quotedArgs.join(' '), {
+  return buildAgentBrowserInvocation(normalizeExecArgs(args), {
     json: structuredOutput,
     session: sessionName,
   });
@@ -125,18 +105,21 @@ function captureElementData(
 
     // Strategy 1: Try id-based selector (works for inputs with id attributes)
     let elemId = '';
-    try { elemId = ab(`get attr ${ref} id`, { session: sessionName }); } catch { /* empty */ }
+    try { elemId = ab(['get', 'attr', ref, 'id'], { session: sessionName }); } catch { /* empty */ }
 
     if (elemId) {
       try {
-        const raw = ab(`get box '#${elemId}'`, { session: sessionName });
+        const raw = ab(['get', 'box', `#${elemId}`], { session: sessionName });
         bbox = JSON.parse(raw);
       } catch { /* empty */ }
 
       // For inputs, get label from associated <label> via eval (doesn't invalidate refs)
       try {
         const raw = ab(
-          `eval "document.getElementById('${elemId}')?.labels?.[0]?.textContent||document.getElementById('${elemId}')?.placeholder||document.getElementById('${elemId}')?.getAttribute('aria-label')||''"`,
+          [
+            'eval',
+            `document.getElementById(${JSON.stringify(elemId)})?.labels?.[0]?.textContent||document.getElementById(${JSON.stringify(elemId)})?.placeholder||document.getElementById(${JSON.stringify(elemId)})?.getAttribute('aria-label')||''`,
+          ],
           { session: sessionName },
         );
         label = JSON.parse(raw) || '';
@@ -145,21 +128,20 @@ function captureElementData(
 
     // Strategy 2: Try text-based selector (works for links, buttons)
     if (!bbox) {
-      try { label = ab(`get text ${ref}`, { session: sessionName }); } catch { /* empty */ }
+      try { label = ab(['get', 'text', ref], { session: sessionName }); } catch { /* empty */ }
       if (!label) {
-        try { label = ab(`get attr ${ref} placeholder`, { session: sessionName }); } catch { /* empty */ }
+        try { label = ab(['get', 'attr', ref, 'placeholder'], { session: sessionName }); } catch { /* empty */ }
       }
       if (!label) {
-        try { label = ab(`get attr ${ref} aria-label`, { session: sessionName }); } catch { /* empty */ }
+        try { label = ab(['get', 'attr', ref, 'aria-label'], { session: sessionName }); } catch { /* empty */ }
       }
       if (!label) {
-        try { label = ab(`get attr ${ref} name`, { session: sessionName }); } catch { /* empty */ }
+        try { label = ab(['get', 'attr', ref, 'name'], { session: sessionName }); } catch { /* empty */ }
       }
 
       if (label) {
         try {
-          const escaped = label.replace(/'/g, "\\'");
-          const raw = ab(`get box 'text=${escaped}'`, { session: sessionName });
+          const raw = ab(['get', 'box', `text=${label}`], { session: sessionName });
           bbox = JSON.parse(raw);
         } catch { /* empty */ }
       }
@@ -296,21 +278,15 @@ export async function execCommand(
     sessionLogPath = logPath;
   }
 
-  // Build shell command with proper quoting
-  const shellCmd = buildShellCommand(
-    resolvedArgs,
-    session?.sessionName,
-    Boolean(session),
-  );
+  const commandArgs = normalizeExecArgs(resolvedArgs);
   const executionStartedAt = Date.now();
 
   // Pass through to agent-browser
   try {
-    const result = execSync(shellCmd, {
-      encoding: 'utf-8',
-      timeout: 60000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: getAgentBrowserEnvironment(),
+    const result = executeAgentBrowser(commandArgs, {
+      json: Boolean(session),
+      session: session?.sessionName,
+      timeoutMs: 60000,
     });
     if (
       translated.expectedSelector &&
@@ -410,7 +386,7 @@ export async function execCommand(
   // If the action was `set viewport`, update cached viewport in session state
   if (session && args[0] === 'set' && args[1] === 'viewport') {
     try {
-      const vpJson = ab("eval 'JSON.stringify({width: window.innerWidth, height: window.innerHeight})'", {
+      const vpJson = ab(['eval', 'JSON.stringify({width: window.innerWidth, height: window.innerHeight})'], {
         session: session.sessionName,
       });
       const vp = normalizeViewport(JSON.parse(vpJson));
@@ -485,4 +461,10 @@ function assertionPassed(rawOutput: string): boolean {
   } catch {
     return false;
   }
+}
+
+function normalizeExecArgs(args: string[]): string[] {
+  return args[0] === 'eval' && args.length > 1
+    ? ['eval', args.slice(1).join(' ')]
+    : args;
 }

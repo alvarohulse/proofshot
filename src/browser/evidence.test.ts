@@ -143,18 +143,18 @@ describe('private browser evidence', () => {
       requestsPath: path.join(privateDirectory, 'requests.json'),
       summaryPath: path.join(sessionDir, 'network-summary.json'),
     };
-    mocks.ab.mockImplementation((command: string) => {
-      if (command.startsWith('network har stop ')) {
+    mocks.ab.mockImplementation((command: string[]) => {
+      if (command.slice(0, 3).join(' ') === 'network har stop') {
         fs.writeFileSync(
           `${paths.harPath}.pending`,
           JSON.stringify({ log: { entries: [] } }),
         );
         return JSON.stringify({ success: true });
       }
-      if (command === 'network requests --json') {
+      if (command.join(' ') === 'network requests --json') {
         throw new Error('request inventory failed');
       }
-      throw new Error(`unexpected command: ${command}`);
+      throw new Error(`unexpected command: ${command.join(' ')}`);
     });
 
     try {
@@ -162,8 +162,8 @@ describe('private browser evidence', () => {
 
       expect(summary.requestCount).toBe(0);
       expect(mocks.ab).toHaveBeenCalledTimes(2);
-      expect(mocks.ab.mock.calls[0][0]).toContain('network.har.pending');
-      expect(mocks.ab.mock.calls[1][0]).toBe('network requests --json');
+      expect(mocks.ab.mock.calls[0][0]).toContain(`${paths.harPath}.pending`);
+      expect(mocks.ab.mock.calls[1][0]).toEqual(['network', 'requests', '--json']);
       expect(fs.existsSync(`${paths.harPath}.pending`)).toBe(false);
       expect(fs.existsSync(paths.harPath)).toBe(true);
       expect(fs.readFileSync(paths.requestsPath, 'utf-8')).toContain(
@@ -185,18 +185,18 @@ describe('private browser evidence', () => {
       requestsPath: path.join(privateDirectory, 'requests.json'),
       summaryPath: path.join(sessionDir, 'network-summary.json'),
     };
-    mocks.ab.mockImplementation((command: string) => {
-      if (command.startsWith('network har stop ')) {
+    mocks.ab.mockImplementation((command: string[]) => {
+      if (command.slice(0, 3).join(' ') === 'network har stop') {
         fs.writeFileSync(
           `${paths.harPath}.pending`,
           JSON.stringify({ log: { entries: [] } }),
         );
         throw new Error('HAR stop response was lost');
       }
-      if (command === 'network requests --json') {
+      if (command.join(' ') === 'network requests --json') {
         return JSON.stringify({ success: true, data: [] });
       }
-      throw new Error(`unexpected command: ${command}`);
+      throw new Error(`unexpected command: ${command.join(' ')}`);
     });
 
     try {
@@ -236,11 +236,11 @@ describe('private browser evidence', () => {
         },
       }),
     );
-    mocks.ab.mockImplementation((command: string) => {
-      if (command === 'network requests --json') {
+    mocks.ab.mockImplementation((command: string[]) => {
+      if (command.join(' ') === 'network requests --json') {
         return JSON.stringify({ success: true, data: [] });
       }
-      throw new Error(`unexpected command: ${command}`);
+      throw new Error(`unexpected command: ${command.join(' ')}`);
     });
 
     try {
@@ -328,12 +328,12 @@ describe('private browser evidence', () => {
       requestsPath: path.join(privateDirectory, 'requests.json'),
       summaryPath: path.join(sessionDir, 'network-summary.json'),
     };
-    mocks.ab.mockImplementation((command: string) => {
-      if (command.startsWith('network har stop ')) {
+    mocks.ab.mockImplementation((command: string[]) => {
+      if (command.slice(0, 3).join(' ') === 'network har stop') {
         fs.writeFileSync(`${paths.harPath}.pending`, '{');
         return JSON.stringify({ success: true });
       }
-      throw new Error(`unexpected command: ${command}`);
+      throw new Error(`unexpected command: ${command.join(' ')}`);
     });
 
     try {

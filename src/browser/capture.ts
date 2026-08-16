@@ -4,7 +4,7 @@ import { ab } from '../utils/exec.js';
  * Start video recording to the given file path.
  */
 export function startRecording(outputPath: string, sessionName?: string): void {
-  ab(`record start ${outputPath}`, { timeoutMs: 10000, session: sessionName });
+  ab(['record', 'start', outputPath], { timeoutMs: 10000, session: sessionName });
 }
 
 /**
@@ -12,7 +12,7 @@ export function startRecording(outputPath: string, sessionName?: string): void {
  */
 export function stopRecording(sessionName?: string): void {
   try {
-    ab('record stop', { timeoutMs: 15000, session: sessionName });
+    ab(['record', 'stop'], { timeoutMs: 15000, session: sessionName });
   } catch {
     // Recording may not have started — that's fine
   }
@@ -22,15 +22,20 @@ export function stopRecording(sessionName?: string): void {
  * Take a screenshot and save to the given path.
  */
 export function takeScreenshot(outputPath: string, fullPage = true, sessionName?: string): void {
-  const fullFlag = fullPage ? ' --full' : '';
-  ab(`screenshot ${outputPath}${fullFlag}`, { timeoutMs: 15000, session: sessionName });
+  ab(['screenshot', outputPath, ...(fullPage ? ['--full'] : [])], {
+    timeoutMs: 15000,
+    session: sessionName,
+  });
 }
 
 /**
  * Take an annotated screenshot (labels interactive elements).
  */
 export function takeAnnotatedScreenshot(outputPath: string, sessionName?: string): void {
-  ab(`screenshot ${outputPath} --annotate`, { timeoutMs: 15000, session: sessionName });
+  ab(['screenshot', outputPath, '--annotate'], {
+    timeoutMs: 15000,
+    session: sessionName,
+  });
 }
 
 /**
@@ -44,7 +49,7 @@ export function diffScreenshots(
   sessionName?: string,
 ): number | null {
   try {
-    const result = ab(`diff screenshot ${baseline} ${current} ${outputPath}`, {
+    const result = ab(['diff', 'screenshot', baseline, current, outputPath], {
       timeoutMs: 15000,
       session: sessionName,
     });

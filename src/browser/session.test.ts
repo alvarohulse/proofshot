@@ -24,15 +24,18 @@ afterEach(() => {
 
 describe('buildOpenBrowserCommand', () => {
   it('builds a default open command without extra flags', () => {
-    expect(buildOpenBrowserCommand('http://localhost:3000')).toBe(
-      "open 'http://localhost:3000'",
-    );
+    expect(buildOpenBrowserCommand('http://localhost:3000')).toEqual([
+      'open',
+      'http://localhost:3000',
+    ]);
   });
 
   it('includes headed mode when headless is disabled', () => {
-    expect(buildOpenBrowserCommand('http://localhost:3000', false)).toBe(
-      "open 'http://localhost:3000' --headed",
-    );
+    expect(buildOpenBrowserCommand('http://localhost:3000', false)).toEqual([
+      'open',
+      'http://localhost:3000',
+      '--headed',
+    ]);
   });
 
   it('includes configurable browser flags from ProofShot config', () => {
@@ -41,15 +44,22 @@ describe('buildOpenBrowserCommand', () => {
         ignoreHttpsErrors: true,
         executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       }),
-    ).toBe(
-      'open \'https://localhost:3000\' --ignore-https-errors --executable-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"',
-    );
+    ).toEqual([
+      'open',
+      'https://localhost:3000',
+      '--ignore-https-errors',
+      '--executable-path',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    ]);
   });
 
-  it('quotes data URLs containing shell metacharacters', () => {
+  it('keeps data URLs containing shell metacharacters in one argument', () => {
     expect(
       buildOpenBrowserCommand("data:text/html,<h1 id='ready'>Ready</h1>"),
-    ).toBe("open 'data:text/html,<h1 id='\\''ready'\\''>Ready</h1>'");
+    ).toEqual([
+      'open',
+      "data:text/html,<h1 id='ready'>Ready</h1>",
+    ]);
   });
 });
 
@@ -70,10 +80,10 @@ describe('openBrowser', () => {
       'slow-page',
     );
 
-    expect(mocks.ab).toHaveBeenNthCalledWith(2, 'get url', {
+    expect(mocks.ab).toHaveBeenNthCalledWith(2, ['get', 'url'], {
       session: 'slow-page',
     });
-    expect(mocks.ab).toHaveBeenNthCalledWith(3, 'set viewport 1280 720', {
+    expect(mocks.ab).toHaveBeenNthCalledWith(3, ['set', 'viewport', '1280', '720'], {
       session: 'slow-page',
     });
     expect(warn).toHaveBeenCalledOnce();

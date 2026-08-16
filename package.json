@@ -15,7 +15,7 @@
     "test:ffmpeg": "node test/ffmpeg-trim.mjs",
     "test:watch": "vitest",
     "prepare": "node prepare.js",
-    "postinstall": "node -e \"try { require('child_process').execSync('agent-browser install', { stdio: 'inherit' }) } catch(e) { console.log('Note: Run agent-browser install to set up Chromium') }\""
+    "postinstall": "node -e \"try { require('child_process').execFileSync('agent-browser', ['install'], { stdio: 'inherit' }) } catch(e) { console.log('Note: Run agent-browser install to set up Chromium') }\""
   },
   "dependencies": {
     "agent-browser": "0.34.0",

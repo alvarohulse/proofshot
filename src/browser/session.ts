@@ -1,7 +1,6 @@
 import {
   ab,
   ProofShotError,
-  quoteShellArgument,
 } from '../utils/exec.js';
 import type { BrowserConfig, ViewportConfig } from '../utils/config.js';
 
@@ -9,15 +8,16 @@ export function buildOpenBrowserCommand(
   url: string,
   headless = true,
   browserConfig?: BrowserConfig,
-): string {
-  const flags: string[] = [];
+): string[] {
+  const args = ['open', url];
 
-  if (!headless) flags.push('--headed');
-  if (browserConfig?.ignoreHttpsErrors) flags.push('--ignore-https-errors');
-  if (browserConfig?.executablePath) flags.push(`--executable-path "${browserConfig.executablePath.replace(/"/g, '\\"')}"`);
+  if (!headless) args.push('--headed');
+  if (browserConfig?.ignoreHttpsErrors) args.push('--ignore-https-errors');
+  if (browserConfig?.executablePath) {
+    args.push('--executable-path', browserConfig.executablePath);
+  }
 
-  const suffix = flags.length > 0 ? ` ${flags.join(' ')}` : '';
-  return `open ${quoteShellArgument(url)}${suffix}`;
+  return args;
 }
 
 /**
@@ -45,7 +45,9 @@ export function openBrowser(
       'Browser reached the target URL before its load event timed out; continuing with the active page.',
     );
   }
-  ab(`set viewport ${viewport.width} ${viewport.height}`, { session: sessionName });
+  ab(['set', 'viewport', String(viewport.width), String(viewport.height)], {
+    session: sessionName,
+  });
 }
 
 function isNavigationTimeout(error: unknown): boolean {
@@ -67,7 +69,7 @@ function urlsMatch(actual: string, expected: string): boolean {
  * Close the browser session.
  */
 export function closeBrowser(sessionName?: string): void {
-  ab('close', { session: sessionName });
+  ab(['close'], { session: sessionName });
 }
 
 /**
@@ -75,7 +77,7 @@ export function closeBrowser(sessionName?: string): void {
  */
 export function checkAgentBrowser(): boolean {
   try {
-    ab('--version', 5000);
+    ab(['--version'], 5000);
     return true;
   } catch {
     return false;
@@ -86,14 +88,14 @@ export function checkAgentBrowser(): boolean {
  * Get any console errors from the current page.
  */
 export function getConsoleErrors(sessionName?: string): string {
-  return ab('errors', { session: sessionName });
+  return ab(['errors'], { session: sessionName });
 }
 
 /**
  * Get console output from the current page.
  */
 export function getConsoleOutput(sessionName?: string): string {
-  return ab('console', { session: sessionName });
+  return ab(['console'], { session: sessionName });
 }
 
 export interface ConsoleMessage {
@@ -106,7 +108,7 @@ export interface ConsoleMessage {
  * Get console output as structured JSON with per-message timestamps.
  */
 export function getConsoleOutputJson(sessionName?: string): ConsoleMessage[] {
-  const raw = ab('console --json', { session: sessionName });
+  const raw = ab(['console', '--json'], { session: sessionName });
   const parsed = JSON.parse(raw);
   // agent-browser wraps JSON output: {success, data: {messages: [...]}, error}
   const messages = parsed?.data?.messages ?? parsed;
@@ -121,7 +123,7 @@ export function getConsoleOutputJson(sessionName?: string): ConsoleMessage[] {
  */
 export function getPageTitle(sessionName?: string): string {
   try {
-    return ab('get title', { session: sessionName });
+    return ab(['get', 'title'], { session: sessionName });
   } catch {
     return '';
   }
@@ -132,7 +134,7 @@ export function getPageTitle(sessionName?: string): string {
  */
 export function getPageUrl(sessionName?: string): string {
   try {
-    return ab('get url', { session: sessionName });
+    return ab(['get', 'url'], { session: sessionName });
   } catch {
     return '';
   }

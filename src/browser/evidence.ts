@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { sanitizeDiagnosticMessage } from './provenance.js';
-import { ab, quoteShellArgument } from '../utils/exec.js';
+import { ab } from '../utils/exec.js';
 
 const SECRET_BEARING_FLAG =
   /^(?:--)?(?:authorization|body|cookie|credential|headers?|password|secret|token|api[-_]?key)(?:=|$)/i;
@@ -59,7 +59,9 @@ export function preparePrivateNetworkEvidence(
 }
 
 export function startPrivateNetworkCapture(sessionName: string): void {
-  ab('network har start --content text', { session: sessionName });
+  ab(['network', 'har', 'start', '--content', 'text'], {
+    session: sessionName,
+  });
 }
 
 export function finalizePrivateNetworkCapture(
@@ -79,7 +81,9 @@ export function finalizePrivateNetworkCapture(
   } else if (allowBrowserCommands) {
     let requests: string;
     try {
-      requests = ab('network requests --json', { session: sessionName });
+      requests = ab(['network', 'requests', '--json'], {
+        session: sessionName,
+      });
     } catch (error) {
       requests = JSON.stringify({
         success: false,
@@ -123,7 +127,7 @@ function finalizePrivateHarCapture(
 
   let stopError: unknown;
   try {
-    ab(`network har stop ${quoteShellArgument(pendingPath)} --json`, {
+    ab(['network', 'har', 'stop', pendingPath, '--json'], {
       session: sessionName,
     });
   } catch (error) {
