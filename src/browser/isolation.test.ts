@@ -27,7 +27,7 @@ import {
 } from './isolation.js';
 
 const createdDirectories: string[] = [];
-const RUNTIME_SOURCE = '#!/usr/bin/env node\n';
+const RUNTIME_SOURCE = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x01]);
 let runtimeExecutablePath: string;
 
 beforeEach(() => {
@@ -116,24 +116,27 @@ describe('agent-browser isolation', () => {
   });
 
   it('resolves one executable and requires exactly agent-browser 0.34.0', () => {
-    mocks.execFileSync.mockReturnValueOnce('agent-browser 0.33.1\n');
+    mockVersions('agent-browser 0.33.1\n');
     expect(() => resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toThrow(
       'requires exactly agent-browser 0.34.0',
     );
 
-    mocks.execFileSync.mockReturnValueOnce('agent-browser 0.35.0\n');
+    mockVersions('agent-browser 0.35.0\n');
     expect(() => resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toThrow(
       'requires exactly agent-browser 0.34.0',
     );
 
-    mocks.execFileSync.mockReturnValueOnce('agent-browser 0.34.0-beta.1\n');
+    mockVersions('agent-browser 0.34.0-beta.1\n');
     expect(() => resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toThrow(
       'requires exactly agent-browser 0.34.0',
     );
 
-    mocks.execFileSync.mockReturnValueOnce('agent-browser 0.34.0\n');
+    mockVersions('agent-browser 0.34.0\n');
     expect(resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toEqual({
+      contract: 'direct-native-v1',
       executablePath: runtimeExecutablePath,
+      nativePath: runtimeExecutablePath,
+      nativeSha256: createHash('sha256').update(RUNTIME_SOURCE).digest('hex'),
       sha256: createHash('sha256').update(RUNTIME_SOURCE).digest('hex'),
       version: '0.34.0',
     });
@@ -150,10 +153,13 @@ describe('agent-browser isolation', () => {
       runtimeExecutablePath,
     );
     mocks.findExecutablePath.mockReturnValue(relativeExecutablePath);
-    mocks.execFileSync.mockReturnValueOnce('0.34.0\n');
+    mockVersions('0.34.0\n');
 
     expect(resolveAgentBrowserRuntime({ PATH: './tools' })).toEqual({
+      contract: 'direct-native-v1',
       executablePath: runtimeExecutablePath,
+      nativePath: runtimeExecutablePath,
+      nativeSha256: createHash('sha256').update(RUNTIME_SOURCE).digest('hex'),
       sha256: createHash('sha256').update(RUNTIME_SOURCE).digest('hex'),
       version: '0.34.0',
     });
@@ -162,6 +168,50 @@ describe('agent-browser isolation', () => {
       ['--version'],
       expect.any(Object),
     );
+  });
+
+  it('pins the native artifact and managed launcher contract', () => {
+    const directory = createDirectory();
+    const entrypointPath = path.join(directory, 'agent-browser.js');
+    const nativePath = path.join(directory, 'agent-browser-linux-x64');
+    const entrypointSource = '#!/usr/bin/env node\n';
+    const nativeSource = Buffer.concat([
+      RUNTIME_SOURCE,
+      Buffer.from('managed-native'),
+    ]);
+    fs.writeFileSync(entrypointPath, entrypointSource);
+    fs.writeFileSync(nativePath, nativeSource, { mode: 0o755 });
+    const entrypointSha256 = createHash('sha256')
+      .update(entrypointSource)
+      .digest('hex');
+    const nativeSha256 = createHash('sha256')
+      .update(nativeSource)
+      .digest('hex');
+    mocks.execFileSync.mockImplementation(
+      (_executablePath: string, args: string[]) =>
+        args[0] === '--managed-preflight'
+          ? JSON.stringify({
+              agentBrowserVersion: '0.34.0',
+              entrypointPath,
+              entrypointSha256,
+              nativePath,
+              nativeSha256,
+              nodeVersion: 'v24.19.0',
+              result: 'ok',
+            })
+          : 'agent-browser 0.34.0\n',
+    );
+
+    expect(resolveAgentBrowserRuntime({ PATH: '/usr/bin' })).toEqual({
+      contract: 'managed-preflight-v1',
+      entrypointSha256,
+      executablePath: runtimeExecutablePath,
+      nativePath,
+      nativeSha256,
+      nodeVersion: 'v24.19.0',
+      sha256: createHash('sha256').update(RUNTIME_SOURCE).digest('hex'),
+      version: '0.34.0',
+    });
   });
 
   it('fails before version probing when agent-browser is unavailable', () => {
@@ -174,9 +224,12 @@ describe('agent-browser isolation', () => {
   });
 
   it('rejects same-path executable replacement after a session starts', () => {
-    mocks.execFileSync.mockReturnValue('agent-browser 0.34.0\n');
+    mockVersions('agent-browser 0.34.0\n', 'agent-browser 0.34.0\n');
     const runtime = resolveAgentBrowserRuntime({ PATH: '/usr/bin' });
-    fs.writeFileSync(runtimeExecutablePath, `${RUNTIME_SOURCE}// replaced\n`);
+    fs.writeFileSync(
+      runtimeExecutablePath,
+      Buffer.concat([RUNTIME_SOURCE, Buffer.from('replaced')]),
+    );
 
     expect(() =>
       assertAgentBrowserRuntime(runtime, { PATH: '/usr/bin' }),
@@ -189,12 +242,12 @@ describe('agent-browser isolation', () => {
     const secondTarget = path.join(directory, 'agent-browser-second');
     const symlinkPath = path.join(directory, 'agent-browser');
     fs.writeFileSync(firstTarget, RUNTIME_SOURCE, { mode: 0o755 });
-    fs.writeFileSync(secondTarget, `${RUNTIME_SOURCE}// second\n`, {
+    fs.writeFileSync(secondTarget, Buffer.concat([RUNTIME_SOURCE, Buffer.from('second')]), {
       mode: 0o755,
     });
     fs.symlinkSync(firstTarget, symlinkPath);
     mocks.findExecutablePath.mockReturnValue(symlinkPath);
-    mocks.execFileSync.mockReturnValue('agent-browser 0.34.0\n');
+    mockVersions('agent-browser 0.34.0\n', 'agent-browser 0.34.0\n');
     const runtime = resolveAgentBrowserRuntime({ PATH: '/usr/bin' });
 
     fs.unlinkSync(symlinkPath);
@@ -210,6 +263,21 @@ describe('agent-browser isolation', () => {
     );
   });
 });
+
+function mockVersions(...versions: string[]): void {
+  mocks.execFileSync.mockImplementation(
+    (_executablePath: string, args: string[]) => {
+      if (args[0] === '--managed-preflight') {
+        throw new Error('unsupported option');
+      }
+      const version = versions.shift();
+      if (!version) {
+        throw new Error('missing mocked version');
+      }
+      return version;
+    },
+  );
+}
 
 function createDirectory(): string {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-isolation-'));

@@ -9,6 +9,7 @@ import {
   type SessionLogEntry,
 } from '../session/action-log.js';
 import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
+import type { AgentBrowserRuntimeReceipt } from '../browser/isolation.js';
 import { loadEvidenceEvents } from '../environment/evidence.js';
 import type {
   EnvironmentState,
@@ -65,6 +66,7 @@ export type CanonicalEvidence = {
   incidents: EvidenceIncident[];
   screenshots: ScreenshotIntegrity[];
   network?: SanitizedNetworkSummary | null;
+  runtime?: AgentBrowserRuntimeReceipt;
 };
 
 export type Verdict = {
@@ -93,6 +95,7 @@ export type EvidenceBuildOptions = {
   environment?: EnvironmentState | null;
   networkSummary?: SanitizedNetworkSummary | null;
   networkEvidenceRequired?: boolean;
+  runtime?: AgentBrowserRuntimeReceipt;
 };
 
 export function writeCanonicalEvidence(
@@ -137,6 +140,7 @@ export function writeCanonicalEvidence(
     incidents,
     screenshots,
     network: options.networkSummary,
+    ...(options.runtime ? { runtime: options.runtime } : {}),
   };
   const verdict = buildVerdict(sanitizedOptions, evidence);
   writeJsonAtomically(

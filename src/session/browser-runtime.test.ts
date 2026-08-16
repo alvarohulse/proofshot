@@ -14,15 +14,19 @@ vi.mock('../browser/isolation.js', () => ({
 
 import { backfillSessionAgentBrowserRuntime } from './browser-runtime.js';
 
+const RUNTIME = {
+  contract: 'managed-preflight-v1' as const,
+  executablePath: '/opt/node24/bin/agent-browser',
+  nativePath: '/opt/node24/lib/agent-browser-linux-x64',
+  nativeSha256: 'c'.repeat(64),
+  sha256: 'a'.repeat(64),
+  version: '0.34.0',
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
-  const runtime = {
-    executablePath: '/opt/node24/bin/agent-browser',
-    sha256: 'a'.repeat(64),
-    version: '0.34.0',
-  };
-  mocks.resolveAgentBrowserRuntime.mockReturnValue(runtime);
-  mocks.resolveAgentBrowserRuntimeAtPath.mockReturnValue(runtime);
+  mocks.resolveAgentBrowserRuntime.mockReturnValue(RUNTIME);
+  mocks.resolveAgentBrowserRuntimeAtPath.mockReturnValue(RUNTIME);
 });
 
 describe('session agent-browser runtime', () => {
@@ -36,24 +40,22 @@ describe('session agent-browser runtime', () => {
     );
     expect(session.agentBrowserExecutableSha256).toBe('a'.repeat(64));
     expect(session.agentBrowserVersion).toBe('0.34.0');
+    expect(session.agentBrowserRuntime).toEqual(RUNTIME);
   });
 
   it('preserves the runtime already pinned to a session', () => {
     const session = {
-      agentBrowserExecutablePath: '/verified/bin/agent-browser',
-      agentBrowserExecutableSha256: 'b'.repeat(64),
+      agentBrowserExecutablePath: RUNTIME.executablePath,
+      agentBrowserExecutableSha256: RUNTIME.sha256,
       agentBrowserVersion: '0.34.0',
+      agentBrowserRuntime: RUNTIME,
     } as Parameters<typeof backfillSessionAgentBrowserRuntime>[0];
 
     expect(backfillSessionAgentBrowserRuntime(session)).toBe(false);
     expect(mocks.resolveAgentBrowserRuntime).not.toHaveBeenCalled();
-    expect(mocks.assertAgentBrowserRuntime).toHaveBeenCalledWith({
-      executablePath: '/verified/bin/agent-browser',
-      sha256: 'b'.repeat(64),
-      version: '0.34.0',
-    });
+    expect(mocks.assertAgentBrowserRuntime).toHaveBeenCalledWith(RUNTIME);
     expect(session.agentBrowserExecutablePath).toBe(
-      '/verified/bin/agent-browser',
+      RUNTIME.executablePath,
     );
   });
 
@@ -74,9 +76,10 @@ describe('session agent-browser runtime', () => {
 
   it('refuses a replaced executable before a later browser command', () => {
     const session = {
-      agentBrowserExecutablePath: '/verified/bin/agent-browser',
-      agentBrowserExecutableSha256: 'b'.repeat(64),
+      agentBrowserExecutablePath: RUNTIME.executablePath,
+      agentBrowserExecutableSha256: RUNTIME.sha256,
       agentBrowserVersion: '0.34.0',
+      agentBrowserRuntime: RUNTIME,
     } as Parameters<typeof backfillSessionAgentBrowserRuntime>[0];
     mocks.assertAgentBrowserRuntime.mockImplementation(() => {
       throw new Error('pinned runtime changed');

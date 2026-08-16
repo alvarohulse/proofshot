@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
+import type { AgentBrowserRuntime } from '../browser/isolation.js';
 import type { EnvironmentState } from '../environment/types.js';
 import type { ProcessIdentity } from '../utils/process.js';
 
@@ -48,6 +49,7 @@ export interface SessionState {
   agentBrowserConfigPath?: string;
   agentBrowserExecutablePath?: string;
   agentBrowserExecutableSha256?: string;
+  agentBrowserRuntime?: AgentBrowserRuntime;
   agentBrowserVersion?: string;
   privateEvidenceDir?: string;
   networkHarPath?: string;

@@ -341,6 +341,7 @@ function isSessionState(value: unknown): value is SessionState {
     isOptionalString(session.agentBrowserConfigPath) &&
     isOptionalString(session.agentBrowserExecutablePath) &&
     isOptionalString(session.agentBrowserExecutableSha256) &&
+    isOptionalAgentBrowserRuntime(session.agentBrowserRuntime) &&
     isOptionalString(session.agentBrowserVersion) &&
     isOptionalString(session.privateEvidenceDir) &&
     isOptionalString(session.networkHarPath) &&
@@ -371,6 +372,30 @@ function isOptionalStringArray(value: unknown): boolean {
 
 function isOptionalBoolean(value: unknown): boolean {
   return value === undefined || typeof value === 'boolean';
+}
+
+function isOptionalAgentBrowserRuntime(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const runtime = value as Record<string, unknown>;
+  return (
+    [
+      'direct-native-v1',
+      'managed-preflight-v1',
+      'npm-wrapper-v1',
+    ].includes(String(runtime.contract)) &&
+    typeof runtime.executablePath === 'string' &&
+    typeof runtime.nativePath === 'string' &&
+    typeof runtime.nativeSha256 === 'string' &&
+    typeof runtime.sha256 === 'string' &&
+    typeof runtime.version === 'string' &&
+    isOptionalString(runtime.entrypointSha256) &&
+    isOptionalString(runtime.nodeVersion)
+  );
 }
 
 function isOptionalOperationLease(value: unknown): boolean {

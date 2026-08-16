@@ -160,7 +160,11 @@ describe('startCommand', () => {
     mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
     mocks.resolveAgentBrowserRuntime.mockReturnValue({
+      contract: 'managed-preflight-v1',
       executablePath: '/opt/node24/bin/agent-browser',
+      nativePath: '/opt/node24/lib/agent-browser-linux-x64',
+      nativeSha256: 'b'.repeat(64),
+      nodeVersion: 'v24.19.0',
       sha256: 'a'.repeat(64),
       version: '0.34.0',
     });
@@ -344,6 +348,15 @@ describe('startCommand', () => {
       agentBrowserExecutablePath: '/opt/node24/bin/agent-browser',
       agentBrowserExecutableSha256: 'a'.repeat(64),
       agentBrowserVersion: '0.34.0',
+      agentBrowserRuntime: {
+        contract: 'managed-preflight-v1',
+        executablePath: '/opt/node24/bin/agent-browser',
+        nativePath: '/opt/node24/lib/agent-browser-linux-x64',
+        nativeSha256: 'b'.repeat(64),
+        nodeVersion: 'v24.19.0',
+        sha256: 'a'.repeat(64),
+        version: '0.34.0',
+      },
     });
     expect(finalState.controlDir).toBe('/project/proofshot-artifacts');
   });

@@ -105,8 +105,21 @@ function writeFixtureTools(base: string): {
     `#!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const { createHash } = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 let args = process.argv.slice(2);
+if (args[0] === '--managed-preflight') {
+  const executablePath = process.argv[1];
+  const sha256 = createHash('sha256').update(fs.readFileSync(executablePath)).digest('hex');
+  process.stdout.write(JSON.stringify({
+    agentBrowserVersion: '0.34.0',
+    nativePath: executablePath,
+    nativeSha256: sha256,
+    nodeVersion: process.version,
+    result: 'ok',
+  }) + '\\n');
+  process.exit(0);
+}
 if (args[0] === '--version') {
   process.stdout.write('agent-browser 0.34.0\\n');
   process.exit(0);
@@ -714,6 +727,7 @@ describe('isolated CLI lifecycle', () => {
     );
     delete session.agentBrowserExecutablePath;
     delete session.agentBrowserExecutableSha256;
+    delete session.agentBrowserRuntime;
     delete session.agentBrowserVersion;
     fs.writeFileSync(registryPath, JSON.stringify(session, null, 2) + '\n');
 
@@ -737,9 +751,15 @@ describe('isolated CLI lifecycle', () => {
         .digest('hex'),
     );
     expect(backfilledSession.agentBrowserVersion).toBe('0.34.0');
+    expect(backfilledSession.agentBrowserRuntime).toMatchObject({
+      contract: 'managed-preflight-v1',
+      nativePath: path.join(tools.binDir, 'agent-browser'),
+      nativeSha256: backfilledSession.agentBrowserExecutableSha256,
+    });
 
     delete backfilledSession.agentBrowserExecutablePath;
     delete backfilledSession.agentBrowserExecutableSha256;
+    delete backfilledSession.agentBrowserRuntime;
     delete backfilledSession.agentBrowserVersion;
     fs.writeFileSync(
       registryPath,
@@ -1121,6 +1141,19 @@ describe('isolated CLI lifecycle', () => {
           'utf-8',
         ),
       );
+      const finalizedEvidence = JSON.parse(
+        fs.readFileSync(
+          path.join(session.sessionDir, 'evidence.json'),
+          'utf-8',
+        ),
+      );
+      expect(manifest.runtime).toMatchObject({
+        contract: 'managed-preflight-v1',
+        launcherSha256: session.agentBrowserExecutableSha256,
+        nativeSha256: session.agentBrowserExecutableSha256,
+        version: '0.34.0',
+      });
+      expect(finalizedEvidence.runtime).toEqual(manifest.runtime);
       expect(manifest.artifacts).toContainEqual(
         expect.objectContaining({
           kind: 'network-summary',

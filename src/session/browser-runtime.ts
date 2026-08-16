@@ -13,27 +13,25 @@ import type { SessionState } from './state.js';
 export function backfillSessionAgentBrowserRuntime(
   session: SessionState,
 ): boolean {
+  if (session.agentBrowserRuntime) {
+    assertAgentBrowserRuntime(session.agentBrowserRuntime);
+    return false;
+  }
   const executablePath = session.agentBrowserExecutablePath;
   if (typeof executablePath !== 'string' || executablePath.length === 0) {
     return persistRuntime(session, resolveAgentBrowserRuntime());
   }
-
+  const runtime = resolveAgentBrowserRuntimeAtPath(executablePath, process.env);
   if (
-    typeof session.agentBrowserExecutableSha256 !== 'string' ||
-    typeof session.agentBrowserVersion !== 'string'
+    (session.agentBrowserExecutableSha256 &&
+      session.agentBrowserExecutableSha256 !== runtime.sha256) ||
+    (session.agentBrowserVersion && session.agentBrowserVersion !== runtime.version)
   ) {
-    return persistRuntime(
-      session,
-      resolveAgentBrowserRuntimeAtPath(executablePath, process.env),
+    throw new Error(
+      'The pinned agent-browser executable changed after this ProofShot session started.',
     );
   }
-
-  assertAgentBrowserRuntime({
-    executablePath,
-    sha256: session.agentBrowserExecutableSha256,
-    version: session.agentBrowserVersion,
-  });
-  return false;
+  return persistRuntime(session, runtime);
 }
 
 function persistRuntime(
@@ -43,5 +41,6 @@ function persistRuntime(
   session.agentBrowserExecutablePath = runtime.executablePath;
   session.agentBrowserExecutableSha256 = runtime.sha256;
   session.agentBrowserVersion = runtime.version;
+  session.agentBrowserRuntime = runtime;
   return true;
 }

@@ -3,6 +3,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import type { CanonicalEvidence, Verdict } from '../artifacts/evidence.js';
+import type { AgentBrowserRuntimeReceipt } from '../browser/isolation.js';
 import type { SessionMetadata } from './metadata.js';
 
 const MANIFEST_FILENAME = 'artifact-manifest.json';
@@ -48,25 +49,30 @@ export type ArtifactManifest = {
   completion: 'complete';
   verdict: Verdict['status'];
   artifacts: ManifestArtifact[];
+  runtime?: AgentBrowserRuntimeReceipt;
 };
 
 export function captureGitProvenance(
   cwd: string = process.cwd(),
   excludedPaths: string[] = [],
 ): GitProvenance {
-  const git = (args: string[]): string =>
+  const runGit = (gitCwd: string, args: string[]): string =>
     execFileSync('git', args, {
-      cwd,
+      cwd: gitCwd,
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
   try {
+    const repositoryRoot = resolveGitRepositoryRoot(cwd);
+    const git = (args: string[]): string => runGit(repositoryRoot, args);
     const repository = normalizeRepository(git(['remote', 'get-url', 'origin']));
     const branch = git(['branch', '--show-current']);
     const commitSha = git(['rev-parse', 'HEAD']);
     const treeHash = git(['rev-parse', 'HEAD^{tree}']);
     const exclusions = excludedPaths
-      .map((excludedPath) => path.relative(cwd, path.resolve(excludedPath)))
+      .map((excludedPath) =>
+        path.relative(repositoryRoot, path.resolve(excludedPath)),
+      )
       .filter((relativePath) => relativePath && !relativePath.startsWith('..'))
       .map(
         (relativePath) =>
@@ -81,7 +87,13 @@ export function captureGitProvenance(
         '.',
         ...exclusions,
       ]) !== '';
-    return { repository, branch, commitSha, treeHash, sourceDirty };
+    return {
+      repository,
+      branch,
+      commitSha,
+      treeHash,
+      sourceDirty,
+    };
   } catch {
     return {
       repository: '',
@@ -91,6 +103,14 @@ export function captureGitProvenance(
       sourceDirty: true,
     };
   }
+}
+
+export function resolveGitRepositoryRoot(cwd: string = process.cwd()): string {
+  return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
 
 export function normalizeRepository(remote: string): string {
@@ -120,6 +140,7 @@ export function writeArtifactManifest(options: {
   evidence: CanonicalEvidence;
   verdict: Verdict;
   finalizedProvenance?: GitProvenance;
+  runtime?: AgentBrowserRuntimeReceipt;
 }): ArtifactManifest {
   const finalized =
     options.finalizedProvenance ||
@@ -151,6 +172,7 @@ export function writeArtifactManifest(options: {
     completion: 'complete',
     verdict: options.verdict.status,
     artifacts,
+    ...(options.runtime ? { runtime: options.runtime } : {}),
   };
   writeJsonAtomically(
     path.join(options.sessionDir, MANIFEST_FILENAME),
@@ -255,6 +277,7 @@ function isArtifactManifest(value: unknown): value is ArtifactManifest {
       manifest.verdict === 'INCOMPLETE' ||
       manifest.verdict === 'BLOCKED') &&
     Array.isArray(manifest.artifacts) &&
+    isOptionalRuntimeReceipt(manifest.runtime) &&
     manifest.artifacts.every(
       (artifact, index) =>
         typeof artifact === 'object' &&
@@ -276,6 +299,29 @@ function isArtifactManifest(value: unknown): value is ArtifactManifest {
           'log',
         ].includes(artifact.kind),
     )
+  );
+}
+
+function isOptionalRuntimeReceipt(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const runtime = value as Record<string, unknown>;
+  return (
+    [
+      'direct-native-v1',
+      'managed-preflight-v1',
+      'npm-wrapper-v1',
+    ].includes(String(runtime.contract)) &&
+    typeof runtime.launcherSha256 === 'string' &&
+    typeof runtime.nativeSha256 === 'string' &&
+    typeof runtime.version === 'string' &&
+    (runtime.entrypointSha256 === undefined ||
+      typeof runtime.entrypointSha256 === 'string') &&
+    (runtime.nodeVersion === undefined || typeof runtime.nodeVersion === 'string')
   );
 }
 

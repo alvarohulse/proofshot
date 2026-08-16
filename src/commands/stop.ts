@@ -18,6 +18,7 @@ import {
   type SessionState,
 } from '../session/state.js';
 import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
+import { toAgentBrowserRuntimeReceipt } from '../browser/isolation.js';
 import {
   canAddressOwnedBrowserSession,
   stopOwnedBrowser,
@@ -182,6 +183,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   );
   const durationMs = new Date(session.stoppedAt).getTime() - startTime;
   const durationSec = Math.round(durationMs / 1000);
+  const runtimeReceipt = session.agentBrowserRuntime
+    ? toAgentBrowserRuntimeReceipt(session.agentBrowserRuntime)
+    : undefined;
   const browserSessionAvailable = canAddressOwnedBrowserSession(session);
   const privateDirectory = path.join(session.sessionDir, 'private');
   fs.mkdirSync(privateDirectory, { recursive: true, mode: 0o700 });
@@ -566,6 +570,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     environment: finalizedEnvironment,
     networkSummary,
     networkEvidenceRequired: session.networkCaptureStarted === true,
+    runtime: runtimeReceipt,
   });
 
   const viewerPath = writeViewer(sessionDir, {
@@ -603,6 +608,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     metadata,
     evidence,
     verdict,
+    runtime: runtimeReceipt,
   });
 
   // Step 8: Retain exact browser ownership only when explicitly requested.

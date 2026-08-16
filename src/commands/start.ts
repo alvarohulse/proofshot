@@ -48,7 +48,10 @@ import {
   sessionHasVerifiedLiveOwnership,
 } from '../session/selection.js';
 import { writeMetadata } from '../session/metadata.js';
-import { captureGitProvenance } from '../session/manifest.js';
+import {
+  captureGitProvenance,
+  resolveGitRepositoryRoot,
+} from '../session/manifest.js';
 import { startOwnedEnvironment } from '../environment/runtime.js';
 
 interface StartOptions {
@@ -173,13 +176,14 @@ export async function startCommand(options: StartOptions): Promise<void> {
   let agentBrowserExecutablePath: string;
   let agentBrowserExecutableSha256: string;
   let agentBrowserVersion: string;
+  let agentBrowserRuntime: ReturnType<typeof resolveAgentBrowserRuntime>;
   let isolatedAgentBrowserConfig: Record<string, unknown>;
 
   try {
     isolatedAgentBrowserConfig = loadIsolatedAgentBrowserConfig(
       config.browser.configPath,
     );
-    const agentBrowserRuntime = resolveAgentBrowserRuntime();
+    agentBrowserRuntime = resolveAgentBrowserRuntime();
     agentBrowserExecutablePath = agentBrowserRuntime.executablePath;
     agentBrowserExecutableSha256 = agentBrowserRuntime.sha256;
     agentBrowserVersion = agentBrowserRuntime.version;
@@ -238,10 +242,13 @@ export async function startCommand(options: StartOptions): Promise<void> {
   });
 
   const provenance = captureGitProvenance(process.cwd(), [outputDir]);
+  const repositoryRoot = provenance.repository
+    ? resolveGitRepositoryRoot(process.cwd())
+    : process.cwd();
 
   writeMetadata(sessionDir, {
     ...provenance,
-    repositoryRoot: process.cwd(),
+    repositoryRoot,
     startedAt: new Date().toISOString(),
     description:
       sanitizeDiagnosticMessage(options.description) || null,
@@ -280,6 +287,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     agentBrowserConfigPath,
     agentBrowserExecutablePath,
     agentBrowserExecutableSha256,
+    agentBrowserRuntime,
     agentBrowserVersion,
     privateEvidenceDir: networkEvidence.privateDirectory,
     networkHarPath: networkEvidence.harPath,
