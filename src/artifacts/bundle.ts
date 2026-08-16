@@ -26,7 +26,8 @@ export interface VerificationResult {
  * Ensure the output directory exists.
  */
 export function ensureOutputDir(outputDir: string): void {
-  fs.mkdirSync(outputDir, { recursive: true });
+  fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(outputDir, 0o700);
 }
 
 /**
