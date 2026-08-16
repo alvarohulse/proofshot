@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { isIP } from 'net';
 import {
   execFileSync,
   execSync,
@@ -30,6 +31,28 @@ export interface TerminateProcessTreeOptions {
   graceMs?: number;
   pollIntervalMs?: number;
 }
+
+export interface WindowsProcessRecord {
+  parentPid: number;
+  startTime: string;
+}
+
+const WINDOWS_PROCESS_ANCESTRY_LIMIT = 256;
+const WINDOWS_TCP_STATES = new Set([
+  'BOUND',
+  'CLOSED',
+  'CLOSE_WAIT',
+  'CLOSING',
+  'DELETE_TCB',
+  'ESTABLISHED',
+  'FIN_WAIT_1',
+  'FIN_WAIT_2',
+  'LAST_ACK',
+  'LISTENING',
+  'SYN_RECEIVED',
+  'SYN_SENT',
+  'TIME_WAIT',
+]);
 
 export function getShellExecutable(
   platform = process.platform,
@@ -190,6 +213,139 @@ export function processIdentitiesMatch(
     left.startTime === right.startTime &&
     left.bootId === right.bootId
   );
+}
+
+/** Parse the PID, parent PID, and creation time emitted by the Windows probe. */
+export function parseWindowsProcessRecords(
+  output: string,
+): ReadonlyMap<number, WindowsProcessRecord> | null {
+  const processes = new Map<number, WindowsProcessRecord>();
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+
+    const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)$/);
+    if (!match) return null;
+
+    const pid = Number(match[1]);
+    const parentPid = Number(match[2]);
+    const startTime = match[3];
+    if (
+      !Number.isInteger(pid) ||
+      !Number.isInteger(parentPid) ||
+      startTime.length === 0
+    ) {
+      return null;
+    }
+    if (pid === 0) {
+      if (parentPid !== 0) return null;
+      continue;
+    }
+
+    const existingProcess = processes.get(pid);
+    if (
+      existingProcess !== undefined &&
+      (existingProcess.parentPid !== parentPid || existingProcess.startTime !== startTime)
+    ) {
+      return null;
+    }
+    processes.set(pid, { parentPid, startTime });
+  }
+
+  return processes;
+}
+
+/**
+ * Return whether a process is the supervisor or reaches it through a bounded,
+ * cycle-safe parent chain whose creation times rule out parent PID reuse.
+ */
+export function windowsProcessHasAncestor(
+  candidateIdentity: ProcessIdentity,
+  supervisorIdentity: ProcessIdentity,
+  processes: ReadonlyMap<number, WindowsProcessRecord>,
+  maxDepth = WINDOWS_PROCESS_ANCESTRY_LIMIT,
+): boolean {
+  if (
+    !Number.isInteger(candidateIdentity.pid) ||
+    candidateIdentity.pid <= 0 ||
+    !Number.isInteger(supervisorIdentity.pid) ||
+    supervisorIdentity.pid <= 0 ||
+    !/^\d+$/.test(candidateIdentity.startTime) ||
+    !/^\d+$/.test(supervisorIdentity.startTime) ||
+    !Number.isInteger(maxDepth) ||
+    maxDepth < 0
+  ) {
+    return false;
+  }
+
+  const visited = new Set<number>();
+  let currentPid = candidateIdentity.pid;
+  for (let depth = 0; depth <= maxDepth; depth++) {
+    const currentProcess = processes.get(currentPid);
+    if (currentProcess === undefined) return false;
+    if (!/^\d+$/.test(currentProcess.startTime)) return false;
+    if (
+      currentPid === candidateIdentity.pid &&
+      currentProcess.startTime !== candidateIdentity.startTime
+    ) {
+      return false;
+    }
+    if (currentPid === supervisorIdentity.pid) {
+      return currentProcess.startTime === supervisorIdentity.startTime;
+    }
+    if (visited.has(currentPid)) return false;
+    visited.add(currentPid);
+
+    if (currentProcess.parentPid <= 0) return false;
+    const parentProcess = processes.get(currentProcess.parentPid);
+    if (parentProcess === undefined) return false;
+    if (!/^\d+$/.test(parentProcess.startTime)) return false;
+    if (BigInt(parentProcess.startTime) > BigInt(currentProcess.startTime)) {
+      return false;
+    }
+    currentPid = currentProcess.parentPid;
+  }
+
+  return false;
+}
+
+/** Pure platform-specific membership check for an exact owned process tree. */
+export function processBelongsToOwnedTree(
+  ownedIdentity: ProcessIdentity,
+  candidateIdentity: ProcessIdentity,
+  platform: NodeJS.Platform,
+  windowsProcesses: ReadonlyMap<number, WindowsProcessRecord> = new Map(),
+): boolean {
+  if (!isDetachedProcessIdentity(ownedIdentity, platform)) return false;
+
+  if (platform === 'linux') {
+    return (
+      typeof ownedIdentity.bootId === 'string' &&
+      ownedIdentity.bootId.length > 0 &&
+      candidateIdentity.bootId === ownedIdentity.bootId &&
+      candidateIdentity.sessionId === ownedIdentity.sessionId
+    );
+  }
+
+  if (platform === 'darwin') {
+    return (
+      typeof ownedIdentity.bootId === 'string' &&
+      ownedIdentity.bootId.length > 0 &&
+      candidateIdentity.bootId === ownedIdentity.bootId &&
+      candidateIdentity.processGroupId === ownedIdentity.processGroupId
+    );
+  }
+
+  if (platform === 'win32') {
+    return windowsProcessHasAncestor(
+      candidateIdentity,
+      ownedIdentity,
+      windowsProcesses,
+    );
+  }
+
+  return false;
 }
 
 function listProcessGroupsInSession(sessionId: number): number[] {
@@ -371,6 +527,17 @@ export async function terminateOwnedProcess(
   return true;
 }
 
+function parseWindowsLocalEndpointPort(endpoint: string): number | null {
+  const match = endpoint.match(/^(?:\[([^\]]+)\]|([^:]+)):(\d+)$/);
+  if (!match) return null;
+
+  const address = match[1] ?? match[2];
+  if (isIP(address) === 0) return null;
+
+  const port = Number(match[3]);
+  return Number.isInteger(port) && port >= 0 && port <= 65535 ? port : null;
+}
+
 export function parseWindowsNetstatOutput(output: string, port: number): number[] {
   const pids = new Set<number>();
 
@@ -379,44 +546,169 @@ export function parseWindowsNetstatOutput(output: string, port: number): number[
     if (!line.startsWith('TCP')) continue;
 
     const columns = line.split(/\s+/);
-    if (columns.length < 5) continue;
+    if (columns.length !== 5) return [];
 
     const localAddress = columns[1];
     const state = columns[3];
     const pid = Number(columns[4]);
-    const match = localAddress.match(/:(\d+)$/);
+    const localPort = parseWindowsLocalEndpointPort(localAddress);
 
-    if (state !== 'LISTENING' || !match || !Number.isInteger(pid)) continue;
-    if (Number(match[1]) === port) {
+    if (
+      localPort === null ||
+      !WINDOWS_TCP_STATES.has(state) ||
+      !Number.isInteger(pid) ||
+      pid < 0
+    ) {
+      return [];
+    }
+    if (state === 'LISTENING' && localPort === port) {
       pids.add(pid);
     }
   }
 
-  return [...pids];
+  return [...pids].sort((left, right) => left - right);
 }
 
 export function findPidsListeningOnPort(port: number): number[] {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return [];
+
   try {
     if (process.platform === 'win32') {
-      const output = execSync('netstat -ano -p tcp', {
+      const output = execFileSync('netstat', ['-ano'], {
         encoding: 'utf-8',
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       return parseWindowsNetstatOutput(output, port);
     }
 
-    const output = execSync(`lsof -ti:${port}`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
+    const output = execFileSync(
+      'lsof',
+      ['-nP', '-a', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'],
+      {
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    ).trim();
 
-    return output
-      .split(/\r?\n/)
-      .map((pid) => Number(pid))
-      .filter((pid) => Number.isInteger(pid));
+    if (output.length === 0) return [];
+    const pids = new Set<number>();
+    for (const line of output.split(/\r?\n/)) {
+      if (!/^\d+$/.test(line)) return [];
+      const pid = Number(line);
+      if (!Number.isInteger(pid) || pid <= 0) return [];
+      pids.add(pid);
+    }
+    return [...pids].sort((left, right) => left - right);
   } catch {
     return [];
   }
+}
+
+function captureWindowsProcessRecords(): ReadonlyMap<number, WindowsProcessRecord> | null {
+  try {
+    const script =
+      '$ErrorActionPreference = "Stop"; Get-CimInstance Win32_Process | ' +
+      'Where-Object { $_.ProcessId -gt 0 } | ' +
+      'ForEach-Object { try { $live = Get-Process -Id $_.ProcessId -ErrorAction Stop; ' +
+      '"{0}`t{1}`t{2}" -f $_.ProcessId, $_.ParentProcessId, ' +
+      '$live.StartTime.ToUniversalTime().Ticks } catch {} }';
+    const output = execFileSync(
+      'powershell.exe',
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    return parseWindowsProcessRecords(output);
+  } catch {
+    return null;
+  }
+}
+
+function captureListenerIdentities(pids: number[]): ProcessIdentity[] | null {
+  const identities: ProcessIdentity[] = [];
+  for (const pid of pids) {
+    const identity = captureProcessIdentity(pid);
+    if (!identity) return null;
+    identities.push(identity);
+  }
+  return identities;
+}
+
+function ownedSupervisorHasNotBeenReplaced(
+  identity: ProcessIdentity,
+  platform: NodeJS.Platform,
+): boolean {
+  const current = captureProcessIdentity(identity.pid);
+  if (platform === 'win32') {
+    return current !== null && processIdentitiesMatch(current, identity);
+  }
+  return current === null || processIdentitiesMatch(current, identity);
+}
+
+function processIdentitySnapshotsMatch(
+  left: ProcessIdentity[],
+  right: ProcessIdentity[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((identity, index) => processIdentitiesMatch(identity, right[index]))
+  );
+}
+
+/**
+ * Verify that every stable TCP listener on `port` belongs to the exact tree
+ * represented by `ownedIdentity`. Inspection failures are ownership failures.
+ */
+export function ownedProcessTreeOwnsListeningPort(
+  ownedIdentity: ProcessIdentity,
+  port: number,
+): boolean {
+  const platform = process.platform;
+  if (!['darwin', 'linux', 'win32'].includes(platform)) return false;
+
+  const firstPids = findPidsListeningOnPort(port);
+  if (firstPids.length === 0) return false;
+  const firstIdentities = captureListenerIdentities(firstPids);
+  if (
+    firstIdentities === null ||
+    !ownedSupervisorHasNotBeenReplaced(ownedIdentity, platform)
+  ) {
+    return false;
+  }
+
+  let windowsProcesses: ReadonlyMap<number, WindowsProcessRecord> = new Map();
+  if (platform === 'win32') {
+    const capturedProcesses = captureWindowsProcessRecords();
+    if (capturedProcesses === null) return false;
+    windowsProcesses = capturedProcesses;
+  }
+
+  if (
+    !firstIdentities.every((identity) =>
+      processBelongsToOwnedTree(ownedIdentity, identity, platform, windowsProcesses),
+    )
+  ) {
+    return false;
+  }
+
+  const secondPids = findPidsListeningOnPort(port);
+  if (
+    secondPids.length !== firstPids.length ||
+    secondPids.some((pid, index) => pid !== firstPids[index])
+  ) {
+    return false;
+  }
+  const secondIdentities = captureListenerIdentities(secondPids);
+  if (
+    secondIdentities === null ||
+    !processIdentitySnapshotsMatch(firstIdentities, secondIdentities) ||
+    !ownedSupervisorHasNotBeenReplaced(ownedIdentity, platform)
+  ) {
+    return false;
+  }
+
+  return secondIdentities.every((identity) =>
+    processBelongsToOwnedTree(ownedIdentity, identity, platform, windowsProcesses),
+  );
 }
 
 export function killPids(pids: number[]): boolean {

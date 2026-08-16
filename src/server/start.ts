@@ -5,7 +5,7 @@ import {
   captureProcessIdentity,
   getShellExecutable,
   isDetachedProcessIdentity,
-  ownedProcessTreeIsAlive,
+  ownedProcessTreeOwnsListeningPort,
   terminateOwnedProcessTree,
   terminateProcessTree,
   type ProcessIdentity,
@@ -132,10 +132,10 @@ export async function ensureDevServer(
   // Small delay for stability
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  if (!ownedProcessTreeIsAlive(processIdentity)) {
+  if (!ownedProcessTreeOwnsListeningPort(processIdentity, port)) {
     await terminateOwnedProcessTree(processIdentity);
     throw new Error(
-      `The configured dev server process exited after port ${port} became available.\n` +
+      `The configured dev server process does not exclusively own the TCP listener on port ${port}.\n` +
         'Another listener may have won a concurrent startup race; choose a different port and retry.',
     );
   }

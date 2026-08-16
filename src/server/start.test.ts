@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isPortOpen } from '../utils/port.js';
 import {
   isDetachedProcessIdentity,
+  ownedProcessTreeIsAlive,
   terminateOwnedProcessTree,
   type ProcessIdentity,
 } from '../utils/process.js';
@@ -24,6 +25,36 @@ function createRoot(): string {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+async function waitForOwnedTreeExit(
+  identity: ProcessIdentity,
+  timeoutMs = 3000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (ownedProcessTreeIsAlive(identity)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`owned process tree ${identity.sessionId} did not exit`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+function readServer(port: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const request = http.get(
+      { host: '127.0.0.1', port, path: '/' },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf-8');
+        response.on('data', (chunk) => {
+          body += chunk;
+        });
+        response.on('end', () => resolve(body));
+      },
+    );
+    request.on('error', reject);
+  });
 }
 
 afterEach(async () => {
@@ -114,8 +145,9 @@ describe('ensureDevServer', () => {
         'while (!fs.existsSync(peerMarker)) {',
         '  await new Promise((resolve) => setTimeout(resolve, 10));',
         '}',
+        'setInterval(() => {}, 1000);',
         "const server = http.createServer((_req, res) => res.end('ok'));",
-        "server.on('error', () => process.exit(98));",
+        "server.on('error', () => {});",
         "server.listen(Number(port), '127.0.0.1');",
       ].join('\n'),
     );
@@ -128,6 +160,7 @@ describe('ensureDevServer', () => {
     await new Promise<void>((resolve) => probe.close(() => resolve()));
 
     const markers = [path.join(root, 'first.ready'), path.join(root, 'second.ready')];
+    const startedProcesses: Array<ProcessIdentity | undefined> = [];
     const starts = markers.map((marker, index) =>
       ensureDevServer(
         [
@@ -140,7 +173,10 @@ describe('ensureDevServer', () => {
         port,
         3000,
         path.join(root, `server-${index}.log`),
-        ({ process }) => ownedProcesses.push(process),
+        ({ process }) => {
+          startedProcesses[index] = process;
+          ownedProcesses.push(process);
+        },
       ),
     );
 
@@ -154,5 +190,16 @@ describe('ensureDevServer', () => {
         message: expect.stringMatching(/another listener/i),
       }),
     });
+
+    const winnerIndex = results.findIndex((result) => result.status === 'fulfilled');
+    const loserIndex = results.findIndex((result) => result.status === 'rejected');
+    const winnerIdentity = startedProcesses[winnerIndex];
+    const loserIdentity = startedProcesses[loserIndex];
+    if (!winnerIdentity || !loserIdentity) throw new Error('missing raced process identity');
+
+    await waitForOwnedTreeExit(loserIdentity);
+    expect(ownedProcessTreeIsAlive(loserIdentity)).toBe(false);
+    expect(ownedProcessTreeIsAlive(winnerIdentity)).toBe(true);
+    await expect(readServer(port)).resolves.toBe('ok');
   });
 });

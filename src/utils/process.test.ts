@@ -9,9 +9,12 @@ import {
   parseLinuxProcStat,
   parseUnixProcessIdentity,
   parseWindowsNetstatOutput,
+  parseWindowsProcessRecords,
+  processBelongsToOwnedTree,
   readCommandVersion,
   terminateOwnedProcess,
   terminateOwnedProcessTree,
+  windowsProcessHasAncestor,
 } from './process.js';
 
 function waitForExit(pid: number, timeoutMs = 3000): Promise<void> {
@@ -55,9 +58,141 @@ TCP    [::]:3000              [::]:0                 LISTENING       5678
 TCP    127.0.0.1:3000         127.0.0.1:51722        ESTABLISHED     9999
 TCP    0.0.0.0:4000           0.0.0.0:0              LISTENING       4321
 TCP    [::]:3000              [::]:0                 LISTENING       5678
+UDP    0.0.0.0:3000           *:*                                    7777
 `;
 
     expect(parseWindowsNetstatOutput(output, 3000)).toEqual([1234, 5678]);
+  });
+
+  it('invalidates the snapshot when any TCP row is malformed', () => {
+    const output = `
+TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       1234
+TCP    malformed:3000         0.0.0.0:0              LISTENING       5678
+`;
+
+    expect(parseWindowsNetstatOutput(output, 3000)).toEqual([]);
+  });
+});
+
+describe('owned process tree membership', () => {
+  it('requires the Linux boot and session to match', () => {
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 100,
+      startTime: '1',
+      bootId: 'boot-a',
+    };
+    const listener = {
+      pid: 200,
+      processGroupId: 200,
+      sessionId: 100,
+      startTime: '2',
+      bootId: 'boot-a',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'linux')).toBe(true);
+    expect(
+      processBelongsToOwnedTree(owned, { ...listener, sessionId: 201 }, 'linux'),
+    ).toBe(false);
+    expect(
+      processBelongsToOwnedTree(owned, { ...listener, bootId: 'boot-b' }, 'linux'),
+    ).toBe(false);
+  });
+
+  it('requires the macOS boot and process group to match', () => {
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 0,
+      startTime: '1',
+      bootId: 'boot-a',
+    };
+    const listener = {
+      pid: 200,
+      processGroupId: 100,
+      sessionId: 0,
+      startTime: '2',
+      bootId: 'boot-a',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'darwin')).toBe(true);
+    expect(
+      processBelongsToOwnedTree(
+        owned,
+        { ...listener, processGroupId: 201 },
+        'darwin',
+      ),
+    ).toBe(false);
+    expect(
+      processBelongsToOwnedTree(owned, { ...listener, bootId: 'boot-b' }, 'darwin'),
+    ).toBe(false);
+  });
+
+  it('requires bounded, cycle-safe Windows ancestry to the supervisor', () => {
+    const processes = new Map([
+      [400, { parentPid: 300, startTime: '4' }],
+      [300, { parentPid: 200, startTime: '3' }],
+      [200, { parentPid: 100, startTime: '2' }],
+      [100, { parentPid: 0, startTime: '1' }],
+      [500, { parentPid: 600, startTime: '5' }],
+      [600, { parentPid: 500, startTime: '5' }],
+    ]);
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 100,
+      startTime: '1',
+    };
+    const listener = {
+      pid: 400,
+      processGroupId: 400,
+      sessionId: 400,
+      startTime: '4',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'win32', processes)).toBe(true);
+    expect(windowsProcessHasAncestor(listener, owned, processes, 2)).toBe(false);
+    expect(windowsProcessHasAncestor(listener, owned, processes, 3)).toBe(true);
+    expect(
+      windowsProcessHasAncestor(
+        { ...listener, pid: 500, startTime: '5' },
+        owned,
+        processes,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects reused Windows parent pids', () => {
+    const processes = new Map([
+      [400, { parentPid: 100, startTime: '4' }],
+      [100, { parentPid: 0, startTime: '5' }],
+    ]);
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 100,
+      startTime: '5',
+    };
+    const listener = {
+      pid: 400,
+      processGroupId: 400,
+      sessionId: 400,
+      startTime: '4',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'win32', processes)).toBe(false);
+  });
+
+  it('fails closed on malformed or contradictory Windows process snapshots', () => {
+    expect(parseWindowsProcessRecords('0 0 1\n100 0 1\n200 100 2\n')).toEqual(
+      new Map([
+        [100, { parentPid: 0, startTime: '1' }],
+        [200, { parentPid: 100, startTime: '2' }],
+      ]),
+    );
+    expect(parseWindowsProcessRecords('not-a-process-row')).toBeNull();
+    expect(parseWindowsProcessRecords('200 100 1\n200 101 1')).toBeNull();
   });
 });
 
