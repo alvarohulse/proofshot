@@ -26,8 +26,32 @@ export interface VerificationResult {
  * Ensure the output directory exists.
  */
 export function ensureOutputDir(outputDir: string): void {
-  fs.mkdirSync(outputDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(outputDir, 0o700);
+  const createdDirectory = fs.mkdirSync(outputDir, {
+    recursive: true,
+    mode: 0o700,
+  });
+  if (createdDirectory) {
+    fs.chmodSync(outputDir, 0o700);
+    return;
+  }
+
+  const directoryStat = fs.lstatSync(outputDir);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new Error(`ProofShot output must be a real directory: ${outputDir}`);
+  }
+  const uid = process.getuid?.();
+  if (uid !== undefined && directoryStat.uid !== uid) {
+    throw new Error(`ProofShot output must be owned by the current user: ${outputDir}`);
+  }
+  if (uid !== undefined && (directoryStat.mode & 0o077) !== 0) {
+    throw new Error(
+      `ProofShot output must already be private; refusing to change permissions: ${outputDir}`,
+    );
+  }
+  fs.accessSync(
+    outputDir,
+    fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK,
+  );
 }
 
 /**

@@ -13,18 +13,30 @@ afterEach(() => {
 });
 
 describe('ensureOutputDir', () => {
-  it('keeps ProofShot output and session directories private', () => {
+  it('creates private directories without changing an existing unsafe directory', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-output-'));
     temporaryDirectories.push(root);
     const outputDirectory = path.join(root, 'proofshot-artifacts');
-    const sessionDirectory = path.join(outputDirectory, 'session');
 
     ensureOutputDir(outputDirectory);
-    fs.chmodSync(outputDirectory, 0o755);
-    ensureOutputDir(outputDirectory);
-    ensureOutputDir(sessionDirectory);
-
     expect(fs.statSync(outputDirectory).mode & 0o777).toBe(0o700);
-    expect(fs.statSync(sessionDirectory).mode & 0o777).toBe(0o700);
+    expect(() => ensureOutputDir(outputDirectory)).not.toThrow();
+
+    fs.chmodSync(outputDirectory, 0o755);
+
+    expect(() => ensureOutputDir(outputDirectory)).toThrow(/private/);
+    expect(fs.statSync(outputDirectory).mode & 0o777).toBe(0o755);
+  });
+
+  it('rejects a symlink without changing its target permissions', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-output-'));
+    temporaryDirectories.push(root);
+    const targetDirectory = path.join(root, 'target');
+    const outputDirectory = path.join(root, 'proofshot-artifacts');
+    fs.mkdirSync(targetDirectory, { mode: 0o700 });
+    fs.symlinkSync(targetDirectory, outputDirectory);
+
+    expect(() => ensureOutputDir(outputDirectory)).toThrow(/real directory/);
+    expect(fs.statSync(targetDirectory).mode & 0o777).toBe(0o700);
   });
 });
