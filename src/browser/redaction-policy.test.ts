@@ -5,6 +5,10 @@ import {
   isSecretBearingCommandArgument,
   isSensitiveUrlField,
 } from './redaction-policy.js';
+import {
+  CONVENTIONAL_FUSED_SECRET_FIELDS,
+  PUBLIC_FUSED_FIELDS,
+} from './redaction-policy.test-data.js';
 
 describe('browser redaction policy', () => {
   it.each([
@@ -34,22 +38,8 @@ describe('browser redaction policy', () => {
     'api-key',
     'apiKey',
     'apiKeys',
-    'sessionid',
-    'SESSIONID',
-    'authcode',
-    'authtoken',
-    'csrftoken',
-    'awsaccesskeyid',
     'AwsAccessKeyId',
-    'accesstoken',
-    'refreshtoken',
-    'idtoken',
-    'clientsecret',
-    'passwordhash',
-    'authorizationcode',
-    'sessiontoken',
-    'bearertoken',
-    'secretaccesskey',
+    ...CONVENTIONAL_FUSED_SECRET_FIELDS,
   ])('recognizes normalized high-confidence field %s', (field) => {
     expect(isHighConfidenceSecretField(field)).toBe(true);
   });
@@ -60,10 +50,7 @@ describe('browser redaction policy', () => {
     'key',
     'keys',
     'status',
-    'monkey',
-    'decode',
-    'bodyguard',
-    'tokenizer',
+    ...PUBLIC_FUSED_FIELDS,
   ])(
     'does not treat ambiguous or unrelated field %s as high-confidence',
     (field) => {

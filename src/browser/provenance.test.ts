@@ -5,6 +5,10 @@ import {
   sanitizeDiagnosticMessage,
   sanitizePageUrl,
 } from './provenance.js';
+import {
+  CONVENTIONAL_FUSED_SECRET_FIELDS,
+  PUBLIC_FUSED_FIELDS,
+} from './redaction-policy.test-data.js';
 
 describe('browser interaction provenance', () => {
   it('classifies user-equivalent, hybrid, diagnostic, and observation commands honestly', () => {
@@ -265,36 +269,25 @@ describe('browser interaction provenance', () => {
     expect(message).toBe(`${field}=[REDACTED]`);
   });
 
-  it.each([
-    ['sessionid', 'private-session-id'],
-    ['authcode', 'private-auth-code'],
-    ['authtoken', 'private-auth-token'],
-    ['csrftoken', 'private-csrf-token'],
-    ['awsaccesskeyid', 'private-access-key-id'],
-    ['AwsAccessKeyId', 'private-mixed-case-access-key-id'],
-    ['accesstoken', 'private-access-token'],
-    ['refreshtoken', 'private-refresh-token'],
-    ['idtoken', 'private-id-token'],
-    ['clientsecret', 'private-client-secret'],
-    ['passwordhash', 'private-password-hash'],
-    ['authorizationcode', 'private-authorization-code'],
-    ['sessiontoken', 'private-session-token'],
-    ['bearertoken', 'private-bearer-token'],
-    ['secretaccesskey', 'private-secret-access-key'],
-  ])('redacts fused secret field %s in diagnostics and URLs', (field, secret) => {
-    expect(sanitizeDiagnosticMessage(`${field}=${secret}`)).toBe(
-      `${field}=[REDACTED]`,
-    );
-    expect(
-      sanitizePageUrl(
-        `https://example.test/callback?${field}=${secret}&safe=yes`,
-      ),
-    ).toBe(
-      `https://example.test/callback?${field}=%5BREDACTED%5D&safe=yes`,
-    );
-  });
+  it.each([...CONVENTIONAL_FUSED_SECRET_FIELDS, 'AwsAccessKeyId'])(
+    'redacts fused secret field %s in diagnostics and URLs',
+    (field) => {
+      const secret = `private-${field.toLowerCase()}`;
 
-  it.each(['monkey', 'decode', 'bodyguard', 'tokenizer'])(
+      expect(sanitizeDiagnosticMessage(`${field}=${secret}`)).toBe(
+        `${field}=[REDACTED]`,
+      );
+      expect(
+        sanitizePageUrl(
+          `https://example.test/callback?${field}=${secret}&safe=yes`,
+        ),
+      ).toBe(
+        `https://example.test/callback?${field}=%5BREDACTED%5D&safe=yes`,
+      );
+    },
+  );
+
+  it.each(PUBLIC_FUSED_FIELDS)(
     'keeps unrelated fused field %s visible in diagnostics and URLs',
     (field) => {
       expect(sanitizeDiagnosticMessage(`${field}=visible`)).toBe(
@@ -306,19 +299,23 @@ describe('browser interaction provenance', () => {
     },
   );
 
-  it('keeps ambiguous diagnostic keys visible but redacts them in URLs', () => {
-    expect(
-      sanitizeDiagnosticMessage(
-        'code=visible codes=visible key=visible keys=visible',
-      ),
-    ).toBe('code=visible codes=visible key=visible keys=visible');
-    expect(
-      sanitizePageUrl(
-        'https://example.test/callback?code=private-code&codes=private-codes&key=private-key&keys=private-keys',
-      ),
-    ).toBe(
-      'https://example.test/callback?code=%5BREDACTED%5D&codes=%5BREDACTED%5D&key=%5BREDACTED%5D&keys=%5BREDACTED%5D',
-    );
+  it.each(['code', 'codes', 'key', 'keys'])(
+    'treats ambiguous field %s as URL-only',
+    (field) => {
+      expect(sanitizeDiagnosticMessage(`${field}=visible`)).toBe(
+        `${field}=visible`,
+      );
+      expect(
+        sanitizePageUrl(
+          `https://example.test/callback?${field}=private&safe=yes`,
+        ),
+      ).toBe(
+        `https://example.test/callback?${field}=%5BREDACTED%5D&safe=yes`,
+      );
+    },
+  );
+
+  it('redacts URL-valued diagnostic secrets as one value', () => {
     expect(
       sanitizeDiagnosticMessage(
         'token=https://example.test/callback?safe=visible',

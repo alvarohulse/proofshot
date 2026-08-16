@@ -13,27 +13,65 @@ const HIGH_CONFIDENCE_SECRET_TERMS = new Set([
   'token',
 ]);
 const URL_ONLY_SECRET_TERMS = new Set(['code', 'key']);
-const CONVENTIONAL_FUSED_SECRET_SUFFIXES = [
-  'accesskeyid',
-  'accesskey',
-  'apikey',
-  'authorization',
-  'cookie',
-  'credential',
-  'password',
-  'secret',
-  'signature',
-  'token',
+
+type FusedSecretFieldRule = {
+  prefixes: readonly string[];
+  suffixes: readonly string[];
+};
+
+// Separator-free names cannot be tokenized safely. Match only conventional
+// credential compounds, including the singular and plural terminal nouns.
+// This keeps unrelated words such as bodyguard and tokenizer public without
+// relying on an open-ended credential-prefix or credential-suffix heuristic.
+const CONVENTIONAL_FUSED_SECRET_FIELD_GRAMMAR: readonly FusedSecretFieldRule[] = [
+  {
+    prefixes: ['access', 'auth', 'bearer', 'csrf', 'id', 'refresh', 'session'],
+    suffixes: ['token', 'tokens'],
+  },
+  {
+    prefixes: ['auth', 'authorization'],
+    suffixes: ['code', 'codes', 'key', 'keys'],
+  },
+  {
+    prefixes: ['session'],
+    suffixes: ['id', 'ids'],
+  },
+  {
+    prefixes: ['client'],
+    suffixes: ['secret', 'secrets'],
+  },
+  {
+    prefixes: ['password'],
+    suffixes: ['hash', 'hashes'],
+  },
+  {
+    prefixes: ['secretaccess'],
+    suffixes: ['key', 'keys'],
+  },
+  {
+    prefixes: ['request', 'response'],
+    suffixes: ['body', 'bodies', 'header', 'headers'],
+  },
+  {
+    prefixes: ['authorization', 'cookie'],
+    suffixes: ['header', 'headers'],
+  },
+  {
+    prefixes: ['token', 'secret'],
+    suffixes: ['value', 'values'],
+  },
+  {
+    prefixes: ['aws'],
+    suffixes: ['accesskeyid', 'accesskeyids'],
+  },
 ];
-const CONVENTIONAL_FUSED_SECRET_QUALIFIERS = new Set([
-  'accesskey',
-  'accesskeyid',
-  'code',
-  'hash',
-  'id',
-  'key',
-  'token',
-]);
+const CONVENTIONAL_FUSED_SECRET_FIELDS = new Set(
+  CONVENTIONAL_FUSED_SECRET_FIELD_GRAMMAR.flatMap(({ prefixes, suffixes }) =>
+    prefixes.flatMap((prefix) =>
+      suffixes.map((suffix) => `${prefix}${suffix}`),
+    ),
+  ),
+);
 const PLURAL_FIELD_TERMS = new Map([
   ['apikeys', 'apikey'],
   ['auths', 'auth'],
@@ -110,29 +148,8 @@ function containsHighConfidenceSecretTerm(terms: string[]): boolean {
   );
 }
 
-// Separator-free field names are sensitive only when they end in a
-// credential noun, or begin with one followed by a bounded credential
-// qualifier. Avoid broad substring matching: bodyguard and tokenizer are not
-// secret fields, while passwordhash and authorizationcode are.
 function hasConventionalFusedSecretShape(term: string): boolean {
-  for (const suffix of CONVENTIONAL_FUSED_SECRET_SUFFIXES) {
-    if (
-      term.length > suffix.length &&
-      (term.endsWith(suffix) || term.endsWith(`${suffix}s`))
-    ) {
-      return true;
-    }
-  }
-  for (const prefix of HIGH_CONFIDENCE_SECRET_TERMS) {
-    if (!term.startsWith(prefix)) {
-      continue;
-    }
-    const qualifier = term.slice(prefix.length);
-    if (CONVENTIONAL_FUSED_SECRET_QUALIFIERS.has(qualifier)) {
-      return true;
-    }
-  }
-  return false;
+  return CONVENTIONAL_FUSED_SECRET_FIELDS.has(term);
 }
 
 function isApiKey(terms: string[]): boolean {
