@@ -9,6 +9,25 @@ import {
 
 type ExecSyncLike = typeof execSync;
 
+export type TextCommandRunner = (
+  command: string,
+  args: readonly string[],
+) => string;
+
+export interface TcpListenerInspectorStatus {
+  available: boolean;
+  command: string;
+  label: string;
+  error: string | null;
+}
+
+export class TcpListenerInspectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TcpListenerInspectionError';
+  }
+}
+
 /**
  * Immutable identity for a process which started an isolated process session.
  *
@@ -30,6 +49,15 @@ export interface TerminateProcessTreeOptions {
   graceMs?: number;
   pollIntervalMs?: number;
 }
+
+export interface WindowsProcessRecord {
+  parentPid: number;
+  startTime: string;
+}
+
+const WINDOWS_PROCESS_ANCESTRY_LIMIT = 256;
+const WINDOWS_LISTENER_INSPECTOR = 'PowerShell Get-NetTCPConnection';
+const UNIX_LISTENER_INSPECTOR = 'lsof';
 
 export function getShellExecutable(
   platform = process.platform,
@@ -190,6 +218,139 @@ export function processIdentitiesMatch(
     left.startTime === right.startTime &&
     left.bootId === right.bootId
   );
+}
+
+/** Parse the PID, parent PID, and creation time emitted by the Windows probe. */
+export function parseWindowsProcessRecords(
+  output: string,
+): ReadonlyMap<number, WindowsProcessRecord> | null {
+  const processes = new Map<number, WindowsProcessRecord>();
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0) continue;
+
+    const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)$/);
+    if (!match) return null;
+
+    const pid = Number(match[1]);
+    const parentPid = Number(match[2]);
+    const startTime = match[3];
+    if (
+      !Number.isInteger(pid) ||
+      !Number.isInteger(parentPid) ||
+      startTime.length === 0
+    ) {
+      return null;
+    }
+    if (pid === 0) {
+      if (parentPid !== 0) return null;
+      continue;
+    }
+
+    const existingProcess = processes.get(pid);
+    if (
+      existingProcess !== undefined &&
+      (existingProcess.parentPid !== parentPid || existingProcess.startTime !== startTime)
+    ) {
+      return null;
+    }
+    processes.set(pid, { parentPid, startTime });
+  }
+
+  return processes;
+}
+
+/**
+ * Return whether a process is the supervisor or reaches it through a bounded,
+ * cycle-safe parent chain whose creation times rule out parent PID reuse.
+ */
+export function windowsProcessHasAncestor(
+  candidateIdentity: ProcessIdentity,
+  supervisorIdentity: ProcessIdentity,
+  processes: ReadonlyMap<number, WindowsProcessRecord>,
+  maxDepth = WINDOWS_PROCESS_ANCESTRY_LIMIT,
+): boolean {
+  if (
+    !Number.isInteger(candidateIdentity.pid) ||
+    candidateIdentity.pid <= 0 ||
+    !Number.isInteger(supervisorIdentity.pid) ||
+    supervisorIdentity.pid <= 0 ||
+    !/^\d+$/.test(candidateIdentity.startTime) ||
+    !/^\d+$/.test(supervisorIdentity.startTime) ||
+    !Number.isInteger(maxDepth) ||
+    maxDepth < 0
+  ) {
+    return false;
+  }
+
+  const visited = new Set<number>();
+  let currentPid = candidateIdentity.pid;
+  for (let depth = 0; depth <= maxDepth; depth++) {
+    const currentProcess = processes.get(currentPid);
+    if (currentProcess === undefined) return false;
+    if (!/^\d+$/.test(currentProcess.startTime)) return false;
+    if (
+      currentPid === candidateIdentity.pid &&
+      currentProcess.startTime !== candidateIdentity.startTime
+    ) {
+      return false;
+    }
+    if (currentPid === supervisorIdentity.pid) {
+      return currentProcess.startTime === supervisorIdentity.startTime;
+    }
+    if (visited.has(currentPid)) return false;
+    visited.add(currentPid);
+
+    if (currentProcess.parentPid <= 0) return false;
+    const parentProcess = processes.get(currentProcess.parentPid);
+    if (parentProcess === undefined) return false;
+    if (!/^\d+$/.test(parentProcess.startTime)) return false;
+    if (BigInt(parentProcess.startTime) > BigInt(currentProcess.startTime)) {
+      return false;
+    }
+    currentPid = currentProcess.parentPid;
+  }
+
+  return false;
+}
+
+/** Pure platform-specific membership check for an exact owned process tree. */
+export function processBelongsToOwnedTree(
+  ownedIdentity: ProcessIdentity,
+  candidateIdentity: ProcessIdentity,
+  platform: NodeJS.Platform,
+  windowsProcesses: ReadonlyMap<number, WindowsProcessRecord> = new Map(),
+): boolean {
+  if (!isDetachedProcessIdentity(ownedIdentity, platform)) return false;
+
+  if (platform === 'linux') {
+    return (
+      typeof ownedIdentity.bootId === 'string' &&
+      ownedIdentity.bootId.length > 0 &&
+      candidateIdentity.bootId === ownedIdentity.bootId &&
+      candidateIdentity.sessionId === ownedIdentity.sessionId
+    );
+  }
+
+  if (platform === 'darwin') {
+    return (
+      typeof ownedIdentity.bootId === 'string' &&
+      ownedIdentity.bootId.length > 0 &&
+      candidateIdentity.bootId === ownedIdentity.bootId &&
+      candidateIdentity.processGroupId === ownedIdentity.processGroupId
+    );
+  }
+
+  if (platform === 'win32') {
+    return windowsProcessHasAncestor(
+      candidateIdentity,
+      ownedIdentity,
+      windowsProcesses,
+    );
+  }
+
+  return false;
 }
 
 function listProcessGroupsInSession(sessionId: number): number[] {
@@ -371,52 +532,342 @@ export async function terminateOwnedProcess(
   return true;
 }
 
-export function parseWindowsNetstatOutput(output: string, port: number): number[] {
+/** Parse the intentionally numeric output emitted by TCP listener probes. */
+export function parseTcpListenerPidOutput(output: string): number[] {
   const pids = new Set<number>();
 
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line.startsWith('TCP')) continue;
-
-    const columns = line.split(/\s+/);
-    if (columns.length < 5) continue;
-
-    const localAddress = columns[1];
-    const state = columns[3];
-    const pid = Number(columns[4]);
-    const match = localAddress.match(/:(\d+)$/);
-
-    if (state !== 'LISTENING' || !match || !Number.isInteger(pid)) continue;
-    if (Number(match[1]) === port) {
-      pids.add(pid);
+    if (line.length === 0) continue;
+    if (!/^\d+$/.test(line)) {
+      throw new TcpListenerInspectionError(
+        `TCP listener inspection returned a non-numeric PID: ${JSON.stringify(line)}`,
+      );
     }
+
+    const pid = Number(line);
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new TcpListenerInspectionError(
+        `TCP listener inspection returned an invalid PID: ${JSON.stringify(line)}`,
+      );
+    }
+    pids.add(pid);
   }
 
-  return [...pids];
+  return [...pids].sort((left, right) => left - right);
 }
 
-export function findPidsListeningOnPort(port: number): number[] {
+function runTextCommand(command: string, args: readonly string[]): string {
+  return execFileSync(command, [...args], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function commandErrorOutput(error: unknown): string {
+  if (typeof error !== 'object' || error === null) return String(error);
+
+  const stderr = (error as { stderr?: unknown }).stderr;
+  if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
+  if (Buffer.isBuffer(stderr) && stderr.length > 0) {
+    return stderr.toString('utf-8').trim();
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function executableIsMissing(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+function listenerInspectorForPlatform(platform: NodeJS.Platform): {
+  command: string;
+  label: string;
+  probeArgs: readonly string[];
+} | null {
+  if (platform === 'win32') {
+    return {
+      command: 'powershell.exe',
+      label: WINDOWS_LISTENER_INSPECTOR,
+      probeArgs: [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '$ErrorActionPreference = "Stop"; Get-Command Get-NetTCPConnection -ErrorAction Stop | Out-Null',
+      ],
+    };
+  }
+  if (platform === 'darwin' || platform === 'linux') {
+    return {
+      command: 'lsof',
+      label: UNIX_LISTENER_INSPECTOR,
+      probeArgs: ['-v'],
+    };
+  }
+  return null;
+}
+
+export function getTcpListenerInspectorStatus(
+  platform: NodeJS.Platform = process.platform,
+  runner: TextCommandRunner = runTextCommand,
+): TcpListenerInspectorStatus {
+  const inspector = listenerInspectorForPlatform(platform);
+  if (inspector === null) {
+    return {
+      available: false,
+      command: '',
+      label: 'TCP listener inspection',
+      error: `ProofShot does not support TCP listener inspection on ${platform}.`,
+    };
+  }
+
   try {
-    if (process.platform === 'win32') {
-      const output = execSync('netstat -ano -p tcp', {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      return parseWindowsNetstatOutput(output, port);
+    runner(inspector.command, inspector.probeArgs);
+    return {
+      available: true,
+      command: inspector.command,
+      label: inspector.label,
+      error: null,
+    };
+  } catch (error) {
+    if (platform !== 'win32' && executableIsMissing(error)) {
+      return {
+        available: false,
+        command: inspector.command,
+        label: inspector.label,
+        error:
+          'lsof is required to verify dev-server TCP listener ownership. Install lsof and retry.',
+      };
     }
 
-    const output = execSync(`lsof -ti:${port}`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-
-    return output
-      .split(/\r?\n/)
-      .map((pid) => Number(pid))
-      .filter((pid) => Number.isInteger(pid));
-  } catch {
-    return [];
+    const requirement =
+      platform === 'win32'
+        ? 'PowerShell Get-NetTCPConnection is required to verify dev-server TCP listener ownership.'
+        : 'ProofShot could not run lsof to verify dev-server TCP listener ownership.';
+    return {
+      available: false,
+      command: inspector.command,
+      label: inspector.label,
+      error: `${requirement} ${commandErrorOutput(error)}`,
+    };
   }
+}
+
+export function assertTcpListenerInspectionAvailable(
+  platform: NodeJS.Platform = process.platform,
+  runner: TextCommandRunner = runTextCommand,
+): void {
+  const status = getTcpListenerInspectorStatus(platform, runner);
+  if (!status.available) {
+    throw new TcpListenerInspectionError(
+      status.error || 'TCP listener inspection is unavailable.',
+    );
+  }
+}
+
+function isEmptyLsofResult(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const status = (error as { status?: unknown }).status;
+  const stdout = (error as { stdout?: unknown }).stdout;
+  const stderr = (error as { stderr?: unknown }).stderr;
+  const stdoutText = Buffer.isBuffer(stdout)
+    ? stdout.toString('utf-8')
+    : String(stdout || '');
+  const stderrText = Buffer.isBuffer(stderr)
+    ? stderr.toString('utf-8')
+    : String(stderr || '');
+  return (
+    status === 1 &&
+    stdoutText.trim().length === 0 &&
+    stderrText.trim().length === 0
+  );
+}
+
+function inspectWindowsListenerPids(
+  port: number,
+  runner: TextCommandRunner,
+): number[] {
+  const script =
+    '$ErrorActionPreference = "Stop"; ' +
+    'Get-NetTCPConnection -State Listen -ErrorAction Stop | ' +
+    `Where-Object { [int]$_.LocalPort -eq ${port} } | ` +
+    'ForEach-Object { [Console]::Out.WriteLine([int]$_.OwningProcess) }';
+  try {
+    return parseTcpListenerPidOutput(
+      runner('powershell.exe', [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        script,
+      ]),
+    );
+  } catch (error) {
+    if (error instanceof TcpListenerInspectionError) throw error;
+    throw new TcpListenerInspectionError(
+      `PowerShell Get-NetTCPConnection failed while inspecting port ${port}: ${commandErrorOutput(error)}`,
+    );
+  }
+}
+
+function inspectUnixListenerPids(
+  port: number,
+  runner: TextCommandRunner,
+): number[] {
+  try {
+    return parseTcpListenerPidOutput(
+      runner('lsof', [
+        '-w',
+        '-nP',
+        '-a',
+        `-iTCP:${port}`,
+        '-sTCP:LISTEN',
+        '-t',
+      ]),
+    );
+  } catch (error) {
+    if (error instanceof TcpListenerInspectionError) throw error;
+    if (isEmptyLsofResult(error)) return [];
+    throw new TcpListenerInspectionError(
+      `lsof failed while inspecting TCP listeners on port ${port}: ${commandErrorOutput(error)}`,
+    );
+  }
+}
+
+export function findPidsListeningOnPort(
+  port: number,
+  platform: NodeJS.Platform = process.platform,
+  runner: TextCommandRunner = runTextCommand,
+): number[] {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new TcpListenerInspectionError(`Invalid TCP listener port: ${port}`);
+  }
+
+  if (platform === 'win32') return inspectWindowsListenerPids(port, runner);
+  if (platform === 'darwin' || platform === 'linux') {
+    return inspectUnixListenerPids(port, runner);
+  }
+  throw new TcpListenerInspectionError(
+    `ProofShot does not support TCP listener inspection on ${platform}.`,
+  );
+}
+
+function captureWindowsProcessRecords(): ReadonlyMap<number, WindowsProcessRecord> {
+  try {
+    const script =
+      '$ErrorActionPreference = "Stop"; Get-CimInstance Win32_Process | ' +
+      'Where-Object { $_.ProcessId -gt 0 } | ' +
+      'ForEach-Object { try { $live = Get-Process -Id $_.ProcessId -ErrorAction Stop; ' +
+      '"{0}`t{1}`t{2}" -f $_.ProcessId, $_.ParentProcessId, ' +
+      '$live.StartTime.ToUniversalTime().Ticks } catch {} }';
+    const output = execFileSync(
+      'powershell.exe',
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    const processes = parseWindowsProcessRecords(output);
+    if (processes === null) {
+      throw new TcpListenerInspectionError(
+        'PowerShell returned malformed process ancestry while inspecting TCP listener ownership.',
+      );
+    }
+    return processes;
+  } catch (error) {
+    if (error instanceof TcpListenerInspectionError) throw error;
+    throw new TcpListenerInspectionError(
+      `PowerShell failed while inspecting TCP listener ancestry: ${commandErrorOutput(error)}`,
+    );
+  }
+}
+
+function captureListenerIdentities(pids: number[]): ProcessIdentity[] | null {
+  const identities: ProcessIdentity[] = [];
+  for (const pid of pids) {
+    const identity = captureProcessIdentity(pid);
+    if (!identity) return null;
+    identities.push(identity);
+  }
+  return identities;
+}
+
+function ownedSupervisorHasNotBeenReplaced(
+  identity: ProcessIdentity,
+  platform: NodeJS.Platform,
+): boolean {
+  const current = captureProcessIdentity(identity.pid);
+  if (platform === 'win32') {
+    return current !== null && processIdentitiesMatch(current, identity);
+  }
+  return current === null || processIdentitiesMatch(current, identity);
+}
+
+function processIdentitySnapshotsMatch(
+  left: ProcessIdentity[],
+  right: ProcessIdentity[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((identity, index) => processIdentitiesMatch(identity, right[index]))
+  );
+}
+
+/**
+ * Verify that every stable TCP listener on `port` belongs to the exact tree
+ * represented by `ownedIdentity`. Inspection failures are ownership failures.
+ */
+export function ownedProcessTreeOwnsListeningPort(
+  ownedIdentity: ProcessIdentity,
+  port: number,
+): boolean {
+  const platform = process.platform;
+  if (!['darwin', 'linux', 'win32'].includes(platform)) return false;
+
+  const firstPids = findPidsListeningOnPort(port);
+  if (firstPids.length === 0) return false;
+  const firstIdentities = captureListenerIdentities(firstPids);
+  if (
+    firstIdentities === null ||
+    !ownedSupervisorHasNotBeenReplaced(ownedIdentity, platform)
+  ) {
+    return false;
+  }
+
+  let windowsProcesses: ReadonlyMap<number, WindowsProcessRecord> = new Map();
+  if (platform === 'win32') {
+    windowsProcesses = captureWindowsProcessRecords();
+  }
+
+  if (
+    !firstIdentities.every((identity) =>
+      processBelongsToOwnedTree(ownedIdentity, identity, platform, windowsProcesses),
+    )
+  ) {
+    return false;
+  }
+
+  const secondPids = findPidsListeningOnPort(port);
+  if (
+    secondPids.length !== firstPids.length ||
+    secondPids.some((pid, index) => pid !== firstPids[index])
+  ) {
+    return false;
+  }
+  const secondIdentities = captureListenerIdentities(secondPids);
+  if (
+    secondIdentities === null ||
+    !processIdentitySnapshotsMatch(firstIdentities, secondIdentities) ||
+    !ownedSupervisorHasNotBeenReplaced(ownedIdentity, platform)
+  ) {
+    return false;
+  }
+
+  return secondIdentities.every((identity) =>
+    processBelongsToOwnedTree(ownedIdentity, identity, platform, windowsProcesses),
+  );
 }
 
 export function killPids(pids: number[]): boolean {

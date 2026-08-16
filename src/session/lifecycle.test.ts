@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   processIdentitiesMatch: vi.fn(),
   processIdentityMatches: vi.fn(),
   terminateOwnedProcessTree: vi.fn(),
+  finalizePrivateNetworkCapture: vi.fn(),
 }));
 
 vi.mock('../browser/runtime.js', () => ({
@@ -20,6 +21,9 @@ vi.mock('../browser/runtime.js', () => ({
 }));
 vi.mock('../browser/session.js', () => ({ closeBrowser: mocks.closeBrowser }));
 vi.mock('../browser/capture.js', () => ({ stopRecording: mocks.stopRecording }));
+vi.mock('../browser/evidence.js', () => ({
+  finalizePrivateNetworkCapture: mocks.finalizePrivateNetworkCapture,
+}));
 vi.mock('../utils/process.js', () => ({
   captureProcessIdentity: mocks.captureProcessIdentity,
   ownedProcessTreeIsAlive: mocks.ownedProcessTreeIsAlive,
@@ -59,6 +63,11 @@ beforeEach(() => {
   mocks.ownedProcessTreeIsAlive.mockReturnValue(false);
   mocks.terminateOwnedProcessTree.mockResolvedValue(true);
   mocks.waitForAgentBrowserProcessIdentity.mockResolvedValue(null);
+  mocks.finalizePrivateNetworkCapture.mockReturnValue({
+    version: 1,
+    requestCount: 0,
+    requests: [],
+  });
 });
 
 describe('owned browser lifecycle', () => {
@@ -114,6 +123,84 @@ describe('owned browser lifecycle', () => {
     expect(state.browserProcess).toEqual(persistedIdentity);
     expect(mocks.closeBrowser).toHaveBeenCalledWith('ps-owned-session');
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(persistedIdentity);
+  });
+
+  it('retains failed network finalization for an exact cleanup retry', async () => {
+    const state = {
+      ...session(),
+      networkCaptureStarted: false,
+      networkCaptureActive: true,
+      privateEvidenceDir: '/evidence/private/agent-browser',
+      networkHarPath: '/evidence/private/agent-browser/network.har',
+      networkRequestsPath: '/evidence/private/agent-browser/requests.json',
+      networkSummaryPath: '/evidence/network-summary.json',
+    };
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('HAR finalization failed');
+    });
+
+    await expect(cleanupFailedStart(state)).rejects.toThrow(
+      'HAR finalization failed',
+    );
+
+    expect(state.networkCaptureActive).toBe(true);
+    expect(state.networkEvidenceAvailable).toBe(false);
+    expect(state.networkCaptureError).toContain('HAR finalization failed');
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(
+      persistedIdentity,
+    );
+  });
+
+  it('retains offline network finalization for delayed local recovery', async () => {
+    mocks.captureAgentBrowserProcessIdentity.mockReturnValue(null);
+    const state = {
+      ...session(null),
+      browserLaunchAttempted: false,
+      networkCaptureStarted: true,
+      networkCaptureActive: true,
+      privateEvidenceDir: '/evidence/private/agent-browser',
+      networkHarPath: '/evidence/private/agent-browser/network.har',
+      networkRequestsPath: '/evidence/private/agent-browser/requests.json',
+      networkSummaryPath: '/evidence/network-summary.json',
+    };
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('pending HAR is not complete yet');
+    });
+
+    await expect(cleanupFailedStart(state)).rejects.toThrow(
+      'pending HAR is not complete yet',
+    );
+
+    expect(state.networkCaptureActive).toBe(true);
+    expect(state.networkEvidenceAvailable).toBe(false);
+    expect(state.networkCaptureError).toContain('pending HAR is not complete yet');
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
+  });
+
+  it('marks absent network evidence unavailable after the recorded browser tree is gone', async () => {
+    mocks.processIdentityMatches.mockReturnValue(false);
+    const state = {
+      ...session(),
+      networkCaptureStarted: true,
+      networkCaptureActive: true,
+      privateEvidenceDir: '/evidence/private/agent-browser',
+      networkHarPath: '/evidence/private/agent-browser/network.har',
+      networkRequestsPath: '/evidence/private/agent-browser/requests.json',
+      networkSummaryPath: '/evidence/network-summary.json',
+    };
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('no local HAR remains');
+    });
+
+    await cleanupFailedStart(state);
+
+    expect(state.networkCaptureActive).toBe(false);
+    expect(state.networkEvidenceAvailable).toBe(false);
+    expect(state.networkCaptureError).toContain('no local HAR remains');
+    expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(
+      persistedIdentity,
+    );
   });
 
   it('falls back to exact termination when graceful browser close fails', async () => {

@@ -1,11 +1,14 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { CanonicalEvidence, Verdict } from '../artifacts/evidence.js';
 import {
+  captureGitProvenance,
   loadArtifactManifest,
   normalizeRepository,
+  resolveGitRepositoryRoot,
   validateManifestArtifacts,
   writeArtifactManifest,
   type GitProvenance,
@@ -20,6 +23,43 @@ afterEach(() => {
 });
 
 describe('finalized artifact manifests', () => {
+  it('captures the full repository when started from a subdirectory', () => {
+    const repositoryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-git-root-'),
+    );
+    temporaryDirectories.push(repositoryRoot);
+    runGit(repositoryRoot, ['init']);
+    runGit(repositoryRoot, ['config', 'user.email', 'proofshot@example.test']);
+    runGit(repositoryRoot, ['config', 'user.name', 'ProofShot Test']);
+    runGit(repositoryRoot, [
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/alvarohulse/proofshot.git',
+    ]);
+    fs.writeFileSync(path.join(repositoryRoot, 'tracked.txt'), 'tracked\n');
+    runGit(repositoryRoot, ['add', 'tracked.txt']);
+    runGit(repositoryRoot, ['commit', '-m', 'test: initialize fixture']);
+    const subdirectory = path.join(repositoryRoot, 'packages', 'fixture');
+    fs.mkdirSync(subdirectory, { recursive: true });
+
+    const clean = captureGitProvenance(subdirectory);
+    expect(resolveGitRepositoryRoot(subdirectory)).toBe(repositoryRoot);
+    expect(clean.repository).toBe('github.com/alvarohulse/proofshot');
+    expect(clean.sourceDirty).toBe(false);
+
+    fs.writeFileSync(path.join(repositoryRoot, 'outside-subdirectory.txt'), 'dirty\n');
+    expect(captureGitProvenance(subdirectory).sourceDirty).toBe(true);
+
+    fs.unlinkSync(path.join(repositoryRoot, 'outside-subdirectory.txt'));
+    const outputDirectory = path.join(repositoryRoot, 'proofshot-artifacts');
+    fs.mkdirSync(outputDirectory);
+    fs.writeFileSync(path.join(outputDirectory, 'session.json'), '{}\n');
+    expect(
+      captureGitProvenance(subdirectory, [outputDirectory]).sourceDirty,
+    ).toBe(false);
+  });
+
   it('strips credentials from repository remotes', () => {
     expect(
       normalizeRepository(
@@ -42,6 +82,13 @@ describe('finalized artifact manifests', () => {
     );
     temporaryDirectories.push(sessionDir);
     fs.mkdirSync(path.join(sessionDir, 'logs'));
+    fs.mkdirSync(path.join(sessionDir, 'private', 'browser'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(sessionDir, 'private', 'browser', 'console-output.log'),
+      'Authorization: Basic private-manifest-secret',
+    );
     for (const [file, contents] of [
       ['second.png', 'second'],
       ['first.png', 'first'],
@@ -101,9 +148,21 @@ describe('finalized artifact manifests', () => {
       evidence,
       verdict,
       finalizedProvenance: provenance,
+      runtime: {
+        contract: 'managed-preflight-v1',
+        launcherSha256: 'a'.repeat(64),
+        nativeSha256: 'b'.repeat(64),
+        nodeVersion: 'v24.19.0',
+        version: '0.34.0',
+      },
     });
 
     expect(manifest.sourceDrift).toBe(false);
+    expect(JSON.stringify(manifest)).not.toContain(sessionDir);
+    expect(manifest.runtime).toMatchObject({
+      contract: 'managed-preflight-v1',
+      nativeSha256: 'b'.repeat(64),
+    });
     expect(
       manifest.artifacts
         .filter((artifact) => artifact.kind === 'screenshot')
@@ -113,8 +172,12 @@ describe('finalized artifact manifests', () => {
       manifest.artifacts.find(
         (artifact) => artifact.path === 'logs/frontend.log',
       ),
-    ).toBeDefined();
+    ).toBeUndefined();
     expect(loadArtifactManifest(sessionDir)).toEqual(manifest);
+    expect(JSON.stringify(manifest)).not.toContain('private-manifest-secret');
+    expect(
+      manifest.artifacts.some((artifact) => artifact.path.startsWith('private/')),
+    ).toBe(false);
     expect(() =>
       validateManifestArtifacts(sessionDir, manifest),
     ).not.toThrow();
@@ -130,3 +193,11 @@ describe('finalized artifact manifests', () => {
     ).toThrow(/Duplicate artifact path/);
   });
 });
+
+function runGit(cwd: string, args: string[]): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}

@@ -4,26 +4,54 @@ import { loadConfig } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { ensureDevServer } from '../server/start.js';
 import { getPageUrl, openBrowser } from '../browser/session.js';
+import {
+  preparePrivateNetworkEvidence,
+  startPrivateNetworkCapture,
+} from '../browser/evidence.js';
+import {
+  sanitizeDiagnosticMessage,
+  sanitizePageUrl,
+} from '../browser/provenance.js';
+import {
+  loadIsolatedAgentBrowserConfig,
+  resolveAgentBrowserRuntime,
+  writeIsolatedAgentBrowserConfig,
+} from '../browser/isolation.js';
 import { startRecording } from '../browser/capture.js';
 import { discoverBrowserExecutable, browserSetupError } from '../browser/discovery.js';
 import {
   captureAgentBrowserProcessIdentity,
   prepareAgentBrowserSocketDir,
+  resolveAgentBrowserRuntimeDir,
 } from '../browser/runtime.js';
 import { ensureOutputDir, generateTimestamp, generateSessionDirName } from '../artifacts/bundle.js';
 import {
-  saveSession,
-  loadSession,
-  hasActiveSession,
-  clearSession,
+  generateAgentBrowserNamespace,
   generateAgentBrowserSessionName,
   resolveSessionControlDir,
   type SessionState,
 } from '../session/state.js';
-import { cleanupFailedStart } from '../session/lifecycle.js';
-import { registerSession, unregisterSession } from '../session/registry.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
+import {
+  canAddressOwnedBrowserSession,
+  cleanupFailedStart,
+} from '../session/lifecycle.js';
+import {
+  claimSessionOperation,
+  registerSession,
+  releaseSessionOperation,
+  sessionHasLiveOperation,
+  unregisterSession,
+} from '../session/registry.js';
+import {
+  listSessionsForControlDir,
+  sessionHasVerifiedLiveOwnership,
+} from '../session/selection.js';
 import { writeMetadata } from '../session/metadata.js';
-import { captureGitProvenance } from '../session/manifest.js';
+import {
+  captureGitProvenance,
+  resolveGitRepositoryRoot,
+} from '../session/manifest.js';
 import { startOwnedEnvironment } from '../environment/runtime.js';
 
 interface StartOptions {
@@ -41,25 +69,88 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
 
-  if (hasActiveSession(controlDir)) {
-    if (options.force) {
-      const existingSession = loadSession(controlDir);
-      if (existingSession) {
+  if (options.force) {
+    const existingSessions = listSessionsForControlDir(controlDir);
+    const operationSessions = existingSessions.filter((session) =>
+      sessionHasLiveOperation(session),
+    );
+    if (operationSessions.length > 0) {
+      console.error(
+        chalk.red('✗') +
+          ' --force cannot take over a live ProofShot operation.\n' +
+          chalk.dim(
+            `  ${operationSessions[0].sessionName} is still ${operationSessions[0].operationLease?.kind || 'running'}.`,
+          ),
+      );
+      process.exit(1);
+      return;
+    }
+    const liveSessions = existingSessions.filter(
+      (session) =>
+        sessionHasVerifiedLiveOwnership(session) ||
+        canAddressOwnedBrowserSession(session),
+    );
+    if (liveSessions.length > 0) {
+      console.error(
+        chalk.red('✗') +
+          ' --force cannot clean a verified live ProofShot session.\n' +
+          chalk.dim(
+            `  Stop it explicitly with --session ${liveSessions[0].sessionName}.`,
+          ),
+      );
+      process.exit(1);
+      return;
+    }
+    for (const existingSession of existingSessions) {
+      let recoveryLease;
+      try {
+        recoveryLease = claimSessionOperation(existingSession, 'recovery');
+      } catch (error) {
+        console.error(
+          chalk.red('✗') +
+            ` Could not claim recovery for ${existingSession.sessionName}: ${sanitizeErrorMessage(error)}`,
+        );
+        process.exit(1);
+        return;
+      }
+      try {
+        if (backfillSessionAgentBrowserRuntime(existingSession)) {
+          registerSession(existingSession);
+        }
         setAgentBrowserDefaults({
-          configPath: existingSession.agentBrowserConfigPath || config.browser.configPath,
-          socketDir: existingSession.agentBrowserSocketDir,
+          allowedDomains: existingSession.agentBrowserAllowedDomains,
+          configPath:
+            existingSession.agentBrowserConfigPath || config.browser.configPath,
+          executablePath: existingSession.agentBrowserExecutablePath,
+          namespace: existingSession.agentBrowserNamespace,
+          socketDir:
+            existingSession.agentBrowserSocketRoot ||
+            existingSession.agentBrowserSocketDir,
         });
         await cleanupFailedStart(existingSession);
+        releaseSessionOperation(existingSession, recoveryLease);
         unregisterSession(existingSession.sessionName);
+      } catch (error) {
+        existingSession.lifecycleStatus = 'recovery';
+        existingSession.cleanupError =
+          error instanceof Error ? error.message : String(error);
+        registerSession(existingSession);
+        console.error(
+          chalk.red('✗') +
+            ` Could not recover ${existingSession.sessionName}: ${sanitizeDiagnosticMessage(existingSession.cleanupError) || 'cleanup failed'}`,
+        );
+        process.exit(1);
+        return;
+      } finally {
+        if (existingSession.operationLease?.id === recoveryLease.id) {
+          releaseSessionOperation(existingSession, recoveryLease);
+        }
       }
-      clearSession(controlDir);
-      console.log(chalk.yellow('⚠') + chalk.dim(' Cleaned up the previous session'));
-    } else {
+    }
+    if (existingSessions.length > 0) {
       console.log(
-        chalk.yellow('⚠ A session is already active.') +
-          chalk.dim(' Run "proofshot stop" first, or use --force to override.'),
+        chalk.yellow('⚠') + chalk.dim(' Cleaned up stale session state'),
       );
-      return;
     }
   }
 
@@ -67,52 +158,100 @@ export async function startCommand(options: StartOptions): Promise<void> {
   if (options.output) config.output = options.output;
   if (options.headed !== undefined) config.headless = !options.headed;
 
-  const outputDir = path.resolve(config.output);
+  const baseUrl = `http://localhost:${config.devServer.port}`;
+  const openUrl = options.url || baseUrl;
+  const agentBrowserAllowedDomains = resolveAgentBrowserAllowedDomains(
+    openUrl,
+    config.browser.allowedDomains,
+  );
+  const requestedOutputDir = path.resolve(config.output);
   const timestamp = generateTimestamp();
-  const sessionDirName = generateSessionDirName(timestamp, options.description || null);
-  const sessionDir = path.join(outputDir, sessionDirName);
   const sessionName = generateAgentBrowserSessionName(timestamp);
+  const sessionDirName = generateSessionDirName(timestamp, options.description || null);
+  const agentBrowserNamespace = generateAgentBrowserNamespace(sessionName);
+  let socketRoot: string;
   let socketDir: string;
   let browserExecutable: string | null;
+  let agentBrowserExecutablePath: string;
+  let agentBrowserExecutableSha256: string;
+  let agentBrowserVersion: string;
+  let agentBrowserRuntime: ReturnType<typeof resolveAgentBrowserRuntime>;
+  let isolatedAgentBrowserConfig: Record<string, unknown>;
 
   try {
-    socketDir = prepareAgentBrowserSocketDir(sessionName);
+    isolatedAgentBrowserConfig = loadIsolatedAgentBrowserConfig(
+      config.browser.configPath,
+    );
+    agentBrowserRuntime = resolveAgentBrowserRuntime();
+    agentBrowserExecutablePath = agentBrowserRuntime.executablePath;
+    agentBrowserExecutableSha256 = agentBrowserRuntime.sha256;
+    agentBrowserVersion = agentBrowserRuntime.version;
+    socketRoot = prepareAgentBrowserSocketDir(
+      sessionName,
+      process.env,
+      undefined,
+      agentBrowserNamespace,
+    );
+    socketDir = resolveAgentBrowserRuntimeDir(
+      socketRoot,
+      agentBrowserNamespace,
+    );
     browserExecutable = discoverBrowserExecutable({
       configuredPath: options.browserExecutable || config.browser.executablePath,
     });
-    if (
-      !browserExecutable &&
-      !process.env.AGENT_BROWSER_PROVIDER &&
-      !process.env.AGENT_BROWSER_CDP
-    ) {
+    if (!browserExecutable) {
       throw browserSetupError();
     }
-  } catch (error: any) {
-    console.error(chalk.red('✗') + ` Browser preflight failed: ${error.message}`);
+  } catch (error: unknown) {
+    console.error(
+      chalk.red('✗') +
+        ` Browser preflight failed: ${sanitizeErrorMessage(error)}`,
+    );
     process.exit(1);
     return;
   }
 
   if (browserExecutable) config.browser.executablePath = browserExecutable;
-  setAgentBrowserDefaults({ configPath: config.browser.configPath, socketDir });
 
-  ensureOutputDir(outputDir);
-  ensureOutputDir(sessionDir);
+  const outputDir = ensureOutputDir(requestedOutputDir);
+  const sessionDir = ensureOutputDir(
+    path.join(outputDir, `${sessionDirName}_${sessionName}`),
+  );
 
   const videoPath = path.join(sessionDir, 'session.webm');
-  const serverErrorLog = path.join(sessionDir, 'server.log');
+  const networkEvidence = preparePrivateNetworkEvidence(sessionDir);
+  const serverErrorLog = path.join(
+    path.dirname(networkEvidence.privateDirectory),
+    'server.log',
+  );
+  const agentBrowserConfigPath = writeIsolatedAgentBrowserConfig(
+    networkEvidence.privateDirectory,
+    isolatedAgentBrowserConfig,
+  );
+  const privateEnvironmentDirectory = ensureOutputDir(
+    path.join(sessionDir, 'private', 'environment'),
+  );
+  setAgentBrowserDefaults({
+    allowedDomains: agentBrowserAllowedDomains,
+    configPath: agentBrowserConfigPath,
+    executablePath: agentBrowserExecutablePath,
+    namespace: agentBrowserNamespace,
+    socketDir: socketRoot,
+  });
 
   const provenance = captureGitProvenance(process.cwd(), [outputDir]);
+  const repositoryRoot = provenance.repository
+    ? resolveGitRepositoryRoot(process.cwd())
+    : process.cwd();
 
   writeMetadata(sessionDir, {
     ...provenance,
-    repositoryRoot: process.cwd(),
+    repositoryRoot,
     startedAt: new Date().toISOString(),
-    description: options.description || null,
+    description:
+      sanitizeDiagnosticMessage(options.description) || null,
   });
 
-  const baseUrl = `http://localhost:${config.devServer.port}`;
-  const openUrl = options.url || baseUrl;
   const session: SessionState = {
     startedAt: new Date().toISOString(),
     startDirectory: process.cwd(),
@@ -137,17 +276,32 @@ export async function startCommand(options: StartOptions): Promise<void> {
     sessionLogAdjusted: false,
     consoleEvidenceAvailable: false,
     consoleErrorCount: 0,
-    targetUrl: openUrl,
+    targetUrl: sanitizePageUrl(openUrl) || openUrl,
     headless: config.headless,
     agentBrowserSocketDir: socketDir,
-    agentBrowserConfigPath: config.browser.configPath,
+    agentBrowserSocketRoot: socketRoot,
+    agentBrowserNamespace,
+    agentBrowserAllowedDomains,
+    agentBrowserConfigPath,
+    agentBrowserExecutablePath,
+    agentBrowserExecutableSha256,
+    agentBrowserRuntime,
+    agentBrowserVersion,
+    privateEvidenceDir: networkEvidence.privateDirectory,
+    networkHarPath: networkEvidence.harPath,
+    networkRequestsPath: networkEvidence.requestsPath,
+    networkSummaryPath: networkEvidence.summaryPath,
+    networkCaptureStarted: false,
+    networkCaptureActive: false,
+    networkEvidenceAvailable: false,
+    networkCaptureError: null,
     serverProcess: null,
     browserProcess: null,
     environment: null,
     viewport: { width: config.viewport.width, height: config.viewport.height },
   };
-  persistOwnedSession(session, controlDir);
-  const signalHandlers = installStartSignalHandlers(session, controlDir);
+  const startLease = claimSessionOperation(session, 'start');
+  const signalHandlers = installStartSignalHandlers(session, startLease);
 
   let failureContext = 'start the session';
   try {
@@ -159,19 +313,19 @@ export async function startCommand(options: StartOptions): Promise<void> {
       session.environment = await startOwnedEnvironment(
         config.environment,
         config.logs || {},
-        sessionDir,
+        privateEnvironmentDirectory,
         sessionName,
         new Date(session.startedAt).getTime(),
         (environmentState) => {
           session.environment = environmentState;
-          persistOwnedSession(session, controlDir);
+          persistOwnedSession(session);
         },
       );
       console.log(chalk.green('✓') + ' Environment and log capture started');
     }
     if (options.run) {
       failureContext = 'start dev server';
-      console.log(chalk.dim(`Starting: ${options.run}`));
+      console.log(chalk.dim('Starting dev server command...'));
       const server = await ensureDevServer(
         options.run,
         config.devServer.port,
@@ -180,12 +334,12 @@ export async function startCommand(options: StartOptions): Promise<void> {
         (startedServer) => {
           session.serverAlreadyRunning = false;
           session.serverProcess = startedServer.process;
-          persistOwnedSession(session, controlDir);
+          persistOwnedSession(session);
         },
       );
       session.serverAlreadyRunning = false;
       session.serverProcess = server.process;
-      persistOwnedSession(session, controlDir);
+      persistOwnedSession(session);
       console.log(chalk.green('✓') + ` Dev server started on :${config.devServer.port}`);
       console.log(chalk.dim(`  Server logs → ${serverErrorLog}`));
     } else if (!config.environment) {
@@ -195,7 +349,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     failureContext = 'open browser';
     console.log(chalk.dim('Opening browser...'));
     session.browserLaunchAttempted = true;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
     openBrowser(openUrl, config.viewport, config.headless, sessionName, config.browser);
     session.browserProcess = captureAgentBrowserProcessIdentity(socketDir, sessionName);
     if (!session.browserProcess) {
@@ -203,9 +357,18 @@ export async function startCommand(options: StartOptions): Promise<void> {
         `Could not record the exact agent-browser daemon identity for session ${sessionName}.`,
       );
     }
-    session.targetUrl = getPageUrl(sessionName) || openUrl;
-    persistOwnedSession(session, controlDir);
+    session.targetUrl =
+      sanitizePageUrl(getPageUrl(sessionName) || openUrl) || openUrl;
+    persistOwnedSession(session);
     console.log(chalk.green('✓') + ' Browser ready');
+
+    failureContext = 'start private network capture';
+    session.networkCaptureActive = true;
+    persistOwnedSession(session);
+    startPrivateNetworkCapture(sessionName);
+    session.networkCaptureStarted = true;
+    persistOwnedSession(session);
+    console.log(chalk.green('✓') + ' Private network capture started');
 
     failureContext = 'initialize recording';
     const RECORDING_RETRIES = 3;
@@ -237,7 +400,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         `Recording did not start after ${RECORDING_RETRIES} attempts: ${lastError?.message}`,
       );
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (signalHandlers.isHandling()) {
       return;
     }
@@ -245,21 +408,27 @@ export async function startCommand(options: StartOptions): Promise<void> {
     const interruptionSignal = getTerminationSignal(error);
     try {
       await cleanupFailedStart(session);
-      clearOwnedSession(session, controlDir);
+      releaseSessionOperation(session, startLease);
+      clearOwnedSession(session);
       console.error(
         chalk.red('✗') +
-          ` Failed to ${failureContext}: ${error.message}\n` +
+          ` Failed to ${failureContext}: ${sanitizeErrorMessage(error)}\n` +
           chalk.dim('All processes started by this ProofShot attempt were cleaned up.'),
       );
     } catch (cleanupError) {
       session.lifecycleStatus = 'recovery';
       session.cleanupError =
         cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-      persistOwnedSession(session, controlDir);
+      persistOwnedSession(session);
+      if (session.operationLease?.id === startLease.id) {
+        releaseSessionOperation(session, startLease);
+      }
       console.error(
         chalk.red('✗') +
-          ` Failed to ${failureContext}: ${error.message}\n` +
-          chalk.yellow(`Cleanup is incomplete: ${session.cleanupError}\n`) +
+          ` Failed to ${failureContext}: ${sanitizeErrorMessage(error)}\n` +
+          chalk.yellow(
+            `Cleanup is incomplete: ${sanitizeDiagnosticMessage(session.cleanupError) || 'cleanup failed'}\n`,
+          ) +
           chalk.dim(`Run "proofshot session clean --session ${session.sessionName}" to retry.`),
       );
     }
@@ -275,21 +444,24 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   session.recordingActive = true;
   session.lifecycleStatus = 'active';
-  persistOwnedSession(session, controlDir);
+  persistOwnedSession(session);
+  releaseSessionOperation(session, startLease);
   signalHandlers.remove();
 
   console.log('');
   console.log(chalk.green.bold('✅ ProofShot session started'));
   console.log('');
-  console.log(`Server:     ${options.run ? chalk.cyan(options.run) : chalk.dim('external')} on :${config.devServer.port}`);
+  console.log(`Server:     ${options.run ? chalk.cyan('ProofShot-owned') : chalk.dim('external')} on :${config.devServer.port}`);
   console.log(`Browser:    Chromium (${config.headless ? 'headless' : 'headed'})`);
   console.log(`Session:    ${chalk.dim(sessionName)}`);
-  console.log(`Target:     ${chalk.dim(openUrl)}`);
+  console.log(`Target:     ${chalk.dim(sanitizePageUrl(openUrl) || '[REDACTED_URL]')}`);
   console.log(`Recording:  ${chalk.dim(videoPath)}`);
   console.log(`Errors log: ${chalk.dim(serverErrorLog)}`);
 
   if (options.description) {
-    console.log(`Verifying:  ${chalk.white(options.description)}`);
+    console.log(
+      `Verifying:  ${chalk.white(sanitizeDiagnosticMessage(options.description) || '[REDACTED]')}`,
+    );
   }
 
   console.log('');
@@ -302,19 +474,33 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log(`When done, run: ${chalk.white('proofshot stop')}`);
 }
 
-function persistOwnedSession(session: SessionState, controlDir: string): void {
-  saveSession(session, controlDir);
+export function resolveAgentBrowserAllowedDomains(
+  targetUrl: string,
+  configuredDomains: string[] = [],
+): string[] {
+  const normalizedTarget = targetUrl.includes('://')
+    ? targetUrl
+    : `http://${targetUrl}`;
+  const targetDomain = new URL(normalizedTarget).hostname;
+  return [...new Set([targetDomain, ...configuredDomains])].sort();
+}
+
+function persistOwnedSession(session: SessionState): void {
   registerSession(session);
 }
 
-function clearOwnedSession(session: SessionState, controlDir: string): void {
-  clearSession(controlDir);
+function clearOwnedSession(session: SessionState): void {
   unregisterSession(session.sessionName);
+}
+
+function sanitizeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnosticMessage(message) || 'operation failed';
 }
 
 function installStartSignalHandlers(
   session: SessionState,
-  controlDir: string,
+  lease: NonNullable<SessionState['operationLease']>,
 ): { isHandling: () => boolean; remove: () => void } {
   let handlingSignal = false;
   const handlers = new Map<NodeJS.Signals, () => void>();
@@ -327,13 +513,17 @@ function installStartSignalHandlers(
       handlingSignal = true;
       void cleanupFailedStart(session)
         .then(() => {
-          clearOwnedSession(session, controlDir);
+          releaseSessionOperation(session, lease);
+          clearOwnedSession(session);
           process.exit(signal === 'SIGINT' ? 130 : 143);
         })
         .catch((error) => {
           session.lifecycleStatus = 'recovery';
           session.cleanupError = error instanceof Error ? error.message : String(error);
-          persistOwnedSession(session, controlDir);
+          persistOwnedSession(session);
+          if (session.operationLease?.id === lease.id) {
+            releaseSessionOperation(session, lease);
+          }
           process.exit(1);
         });
     };

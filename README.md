@@ -67,7 +67,9 @@ npm install -g proofshot
 proofshot install
 ```
 
-The first command installs the CLI and [agent-browser](https://github.com/vercel-labs/agent-browser) (with headless Chromium). The second detects your AI coding tools and installs the ProofShot skill at user level — works across all your projects automatically.
+The first command installs the CLI and the exact agent-browser 0.34.0 package. agent-browser requires Node 24; managed environments should expose it through a dedicated Node 24 launcher so project servers can continue using their repository runtime (for example, Node 22 from `.nvmrc`). The second command installs the ProofShot skill at user level.
+
+Starting a dev server with `--run` also requires `lsof` on Linux/macOS; Windows uses PowerShell's `Get-NetTCPConnection`. Run `proofshot doctor` to verify the listener-inspection prerequisite.
 
 ## How It Works
 
@@ -102,11 +104,12 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 | `SUMMARY.md` | Markdown report with errors, screenshots, and video |
 | `step-*.png` | Screenshots captured at key moments |
 | `session-log.json` | Action timeline with timestamps and element data |
-| `server.log` | Dev server stdout/stderr (when using `--run`) |
-| `console-output.log` | Browser console output |
 | `evidence.json` | Canonical browser/environment events, incidents, source integrity, and media timing |
 | `verdict.json` | Structured `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED` verdict |
-| `artifact-manifest.json` | Finalized repository/commit provenance and ordered artifact hashes |
+| `artifact-manifest.json` | Finalized repository/commit/runtime provenance and ordered artifact hashes |
+| `network-summary.json` | Sanitized request method/status/timing/error metadata |
+
+Raw agent-browser JSON, HAR, browser-console, and ProofShot-owned server evidence stays under the session's `private/` directory with user-only permissions. It is excluded from manifests and publication; only curated media and sanitized summaries are reviewable artifacts.
 
 <p align="center">
   <img src="brand-assets/screenshots/artifacts-folder.png" alt="ProofShot artifacts folder" width="480" />
@@ -161,11 +164,13 @@ You can also configure browser launch behavior in `proofshot.config.json`:
 }
 ```
 
-Set `browser.configPath` when you need ProofShot to run `agent-browser` against a project-specific config instead of inheriting `~/.agent-browser/config.json`. Relative paths are resolved from the directory that contains `proofshot.config.json`.
+Set `browser.configPath` for a project-specific agent-browser config. ProofShot validates it, rejects provider/CDP/profile/state/proxy and default JSON-output modes, and copies it into private per-session state. Without this option, ProofShot uses an empty per-session config instead of inheriting user or project agent-browser defaults.
 
-ProofShot discovers system and account-level Chrome/Chromium installs even when the command runs with an isolated `HOME`. If no runnable browser is found, `start` prints the exact `agent-browser install` action. An explicit `--browser-executable` takes precedence for one run.
+ProofShot rejects inherited `AGENT_BROWSER_JSON` at session preflight and strips it from every agent-browser subprocess. ProofShot enables JSON only for individual internal calls whose structured output it parses; a global JSON mode would change normal command output and break evidence capture.
 
-`--output` changes only where evidence is written. Active control state stays in the configured/default output directory, so later `proofshot exec` and `proofshot stop` processes can find the same session.
+ProofShot requires agent-browser 0.34.0, a local Chrome/Chromium executable, an explicit target-domain allowlist, and a fresh isolated session. Cloud providers, shared CDP browsers, persistent profiles/state, and auto-connect are refused. If no runnable browser is found, `start` prints the exact `agent-browser install` action. An explicit `--browser-executable` takes precedence for one run.
+
+`--output` changes only where evidence is written. Registry-backed control state remains discoverable across processes. Concurrent sessions in one worktree are supported; commands resolve a single live session automatically and require `--session <id>` when several live sessions match. `--force` recovers proven stale state only and refuses live processes or lifecycle operations.
 
 ### `proofshot stop`
 
@@ -173,6 +178,7 @@ Stop recording, collect errors, generate proof artifacts.
 
 ```bash
 proofshot stop              # Stop session and close browser
+proofshot stop --session ID # Stop one exact session
 proofshot stop --no-close   # Stop but keep browser open
 ```
 
@@ -186,11 +192,13 @@ When a ProofShot session is active, `proofshot exec` reuses the same isolated `a
 
 ```bash
 proofshot exec click @e3
+proofshot exec --session ID click @e3
 proofshot exec assert-visible "#checkout-complete"
 proofshot exec screenshot step-checkout.png
 ```
 
 Failed `assert-visible` checks are recorded in `session-log.json` and contribute to the structured verdict.
+Action receipts include sanitized intent, interaction category, timing, outcome, and page context. Synthetic DOM actions make final proof incomplete; they remain useful only for diagnosis.
 
 ### `proofshot diff`
 
@@ -227,6 +235,7 @@ Inspect and clean durable recovery records after an interrupted or incomplete cl
 ```bash
 proofshot session list
 proofshot session clean --session <session-id>
+proofshot session clean --all
 ```
 
 Cleanup validates persisted process identities and never widens to a name-, port-, or default-socket kill.
@@ -239,11 +248,11 @@ Remove the `./proofshot-artifacts/` directory.
 proofshot clean
 ```
 
-`clean` refuses while active or retained session control state exists. Run `proofshot stop` first so ProofShot does not discard exact process ownership metadata.
+`clean` refuses while any matching registry state exists, including stale, starting, stopping, or recovery records. Run `proofshot stop` or `proofshot session clean` first so ProofShot does not discard evidence or exact process ownership metadata.
 
 ### `proofshot doctor`
 
-Print the current ProofShot environment, including config path, browser mode, viewport, installed binaries, and any active session.
+Print the current ProofShot environment, including config path, browser mode, viewport, installed binaries, TCP listener-inspection support, and any active session.
 
 ```bash
 proofshot doctor

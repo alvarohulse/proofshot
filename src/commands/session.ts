@@ -1,20 +1,20 @@
 import chalk from 'chalk';
-import { cleanupFailedStart } from '../session/lifecycle.js';
+import {
+  canAddressOwnedBrowserSession,
+  cleanupFailedStart,
+} from '../session/lifecycle.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import {
+  claimSessionOperation,
   getRegisteredSession,
   listRegisteredSessions,
   registerSession,
+  releaseSessionOperation,
   unregisterSession,
 } from '../session/registry.js';
-import {
-  clearSession,
-  hasActiveSession,
-  loadSession,
-  saveSession,
-  type SessionState,
-} from '../session/state.js';
-import { ownedProcessTreeIsAlive } from '../utils/process.js';
+import { sessionHasVerifiedLiveOwnership } from '../session/selection.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
+import type { SessionState } from '../session/state.js';
 
 type SessionStatus = 'active' | 'starting' | 'recovery' | 'stale';
 
@@ -69,59 +69,56 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
 
   let failures = 0;
   for (const session of sessions) {
-    setAgentBrowserDefaults({
-      configPath: session.agentBrowserConfigPath,
-      socketDir: session.agentBrowserSocketDir,
-    });
+    if (canAddressOwnedBrowserSession(session)) {
+      failures += 1;
+      console.error(
+        `${chalk.red('✗')} Kept ${session.sessionName}: browser session is still live; ` +
+          `use "proofshot stop --session ${session.sessionName}".`,
+      );
+      continue;
+    }
+    let recoveryLease;
     try {
+      recoveryLease = claimSessionOperation(session, 'recovery');
+    } catch (error) {
+      failures += 1;
+      console.error(
+        `${chalk.red('✗')} Kept ${session.sessionName}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      continue;
+    }
+    try {
+      if (backfillSessionAgentBrowserRuntime(session)) {
+        registerSession(session);
+      }
+      setAgentBrowserDefaults({
+        allowedDomains: session.agentBrowserAllowedDomains,
+        configPath: session.agentBrowserConfigPath,
+        executablePath: session.agentBrowserExecutablePath,
+        namespace: session.agentBrowserNamespace,
+        socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
+      });
       await cleanupFailedStart(session);
-      clearMatchingControlState(session);
+      releaseSessionOperation(session, recoveryLease);
       unregisterSession(session.sessionName);
       console.log(`${chalk.green('✓')} Cleaned ${session.sessionName}`);
     } catch (error) {
       failures += 1;
       session.lifecycleStatus = 'recovery';
       session.cleanupError = error instanceof Error ? error.message : String(error);
-      persistMatchingControlState(session);
       registerSession(session);
       console.error(`${chalk.red('✗')} Kept ${session.sessionName}: ${session.cleanupError}`);
+    } finally {
+      if (session.operationLease?.id === recoveryLease.id) {
+        releaseSessionOperation(session, recoveryLease);
+      }
     }
   }
 
   if (failures > 0) {
     process.exitCode = 1;
-  }
-}
-
-function clearMatchingControlState(session: SessionState): void {
-  const controlDir = session.controlDir ?? session.outputDir;
-  if (!hasActiveSession(controlDir)) return;
-  const activeSession = loadControlSessionSafely(controlDir);
-  if (activeSession?.sessionName === session.sessionName) {
-    clearSession(controlDir);
-    return;
-  }
-  throw new Error(
-    `Control state at ${controlDir} is corrupt or belongs to another session; it was not removed.`,
-  );
-}
-
-function persistMatchingControlState(session: SessionState): void {
-  const controlDir = session.controlDir ?? session.outputDir;
-  const activeSession = loadControlSessionSafely(controlDir);
-  if (
-    !hasActiveSession(controlDir) ||
-    activeSession?.sessionName === session.sessionName
-  ) {
-    saveSession(session, controlDir);
-  }
-}
-
-function loadControlSessionSafely(controlDir: string): SessionState | null {
-  try {
-    return loadSession(controlDir);
-  } catch {
-    return null;
   }
 }
 
@@ -162,10 +159,7 @@ function getSessionStatus(session: SessionState): SessionStatus {
   if (session.lifecycleStatus === 'starting') {
     return 'starting';
   }
-  if (
-    (session.browserProcess && ownedProcessTreeIsAlive(session.browserProcess)) ||
-    (session.serverProcess && ownedProcessTreeIsAlive(session.serverProcess))
-  ) {
+  if (sessionHasVerifiedLiveOwnership(session)) {
     return 'active';
   }
   return 'stale';

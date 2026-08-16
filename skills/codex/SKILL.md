@@ -1,78 +1,61 @@
 ---
 name: proofshot
-description: Visual verification of UI features. Use after building or modifying any
-  UI component, page, or visual feature. Starts a verification session with video
-  recording and error capture, then you drive the browser to test, then stop to
-  bundle proof artifacts for the human.
+description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then record one fresh isolated ProofShot session per reviewable use case and retain local evidence.
 ---
 
-# ProofShot — Visual Verification Workflow
+# ProofShot visual verification
 
-ProofShot is an open-source, agent-agnostic CLI that lets you verify your own work in a real browser — video proof, screenshots, and error reports, no vendor lock-in.
+Use this workflow after a UI or visual behavior changes.
 
-## When to use
+## 1. Explore
 
-Use ProofShot after:
-- Building a new UI feature or page
-- Modifying existing UI components
-- Fixing a visual bug
-- Any change that affects what the user sees
+Use the approved local `agent-browser` launcher to understand the feature before recording proof. Keep the project on its repository runtime; browser tooling uses its separate Node 24 launcher and agent-browser 0.34.0.
 
-## The workflow (always follow these 3 steps)
+Maintain one Markdown brief in the task's persistent `~/data` directory:
 
-### Step 1: Start the session
+- **User Story**: actor, goal, and benefit.
+- **Use Case**: one reviewable behavior with a stable ID, preconditions, starting state, test-data references, and success criteria.
+- **User Flow**: ordered user-level actions and observable outcomes. Exclude shell commands and ephemeral element refs.
+- **Iteration Feedback**: what was wrong, brittle, redundant, or slow and what the next revision changes.
+- **User Testing instructions**: the concise final flow copied to the PR after it was exercised.
 
-```bash
-proofshot start --run "your-dev-command" --port PORT --description "what you are about to verify"
-```
+## 2. Refine every flow
 
-This opens a browser and begins recording. If the port is already in use, ProofShot leaves that unowned listener alone and asks you to choose another port or stop it explicitly.
+Exercise each User Flow with `agent-browser`. Append feedback and revise until the flow is correct, stable, and concise. Exploration can use repeated passes.
 
-**Always use `--run`** to let proofshot start and capture your dev server output (server logs appear in the proof report).
-Only omit `--run` if the server was explicitly started by the user or another process — without it, no server logs are captured.
+- Prefer pointer/keyboard-backed interactions.
+- Disclose hybrid operations such as fill, select, and checkbox actions.
+- Treat `eval`, direct DOM `.click()`, setters, and dispatched events as diagnostics only. A synthetic DOM action cannot be final behavioral proof.
 
-If a previous session was not stopped cleanly, add `--force` to override it.
-For configured multi-service projects, let `environment` start the declared tmux panes or direct processes; do not launch duplicate services separately. Use `proofshot doctor` when browser, FFmpeg, or recovery state is unclear.
+## 3. Record fresh proof
 
-### Step 2: Drive the browser and test
-
-Use proofshot exec to navigate, interact, and verify:
+For each finalized Use Case, start a fresh ProofShot session and rerun only its optimized flow:
 
 ```bash
-proofshot exec snapshot -i                                    # See interactive elements
-proofshot exec open http://localhost:PORT/page                # Navigate to a page
-proofshot exec click @e3                                      # Click a button
-proofshot exec fill @e2 "test@example.com"                    # Fill a form field
-proofshot exec assert-visible "#expected-result"              # Record an explicit assertion
-proofshot exec screenshot step-NAME.png                       # Capture key moments
-```
-
-Take screenshots at important moments — these become the visual proof.
-Verify expected outcomes with assertion commands before taking screenshots. A screenshot alone is not a passing assertion.
-
-### Step 3: Stop and bundle the proof
-
-```bash
+proofshot start --run "your-dev-command" --port PORT --description "UC-ID: behavior"
+proofshot exec snapshot -i
+proofshot exec click @e3
+proofshot exec assert-visible "#expected-result"
+proofshot exec screenshot step-result.png
 proofshot stop
 ```
 
-This stops recording, collects console + server errors, and generates
-a SUMMARY.md with video, screenshots, and error report.
-Treat `FAIL`, `INCOMPLETE`, and `BLOCKED` verdicts as unsuccessful verification. If cleanup was interrupted, inspect `proofshot session list` and retry only the exact session with `proofshot session clean --session ID`.
+Omit `--run` only when the server is explicitly owned elsewhere. Record one short session per Use Case. When several sessions match the worktree, pass the printed ID with `proofshot exec --session ID ...` and `proofshot stop --session ID`.
 
-### Step 4 (optional): Post proof to the PR
+Completion requires an explicit assertion, a fresh-session replay, and a retained session ID/evidence pointer in the brief.
+
+## 4. Inspect and retain
+
+Treat `FAIL`, `INCOMPLETE`, and `BLOCKED` as unsuccessful verification. Raw agent-browser JSON, HAR, response bodies, credentials, and customer data remain private under the task's `~/data` evidence root. Report the local path; do not copy raw evidence into prompts, scratch, PRs, or uploads.
+
+If cleanup is interrupted, use `proofshot session list` and `proofshot session clean --session ID`. Never clean by process name or port. `--force` recovers proven stale state only and refuses a verified live session or operation.
+
+## 5. Publish curated proof
+
+Copy only exercised final flows into PR User Testing instructions. Publish explicit ordered sessions and curated screenshots:
 
 ```bash
-proofshot pr              # Auto-detect PR from current branch
-proofshot pr 42           # Target a specific PR number
-proofshot pr 42 --session SESSION_ID --screenshot ARTIFACT_ID
+proofshot pr 42 --session SESSION_ID --screenshot step-result.png --dry-run
 ```
 
-This uploads screenshots and video to GitHub and posts a formatted comment on the PR. By default it uses the official GitHub contents API on a `proofshot-artifacts` branch. Use `--upload-provider github-web-attachments` if you specifically want GitHub attachment URLs.
-
-## Tips
-
-- Always include a meaningful --description so the human knows what was tested
-- Take screenshots before AND after key actions (e.g., before form submit, after redirect)
-- If you find errors during verification, fix them and re-run the workflow
-- Use `proofshot pr` after stopping to attach proof directly to the pull request
+Repeat `--session` in review order. Publish only curated media, sanitized summaries, and interaction disclosure; keep raw private evidence local.

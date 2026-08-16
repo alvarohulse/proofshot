@@ -1,24 +1,15 @@
 ---
-description: Visual verification of UI changes using ProofShot
+description: Explore UI behavior, refine user flows, then record fresh isolated ProofShot evidence
 globs: ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.html"]
 ---
 
-ProofShot is an open-source, agent-agnostic CLI for visual verification — works with any agent, no vendor lock-in.
+After a UI change:
 
-After modifying UI files, visually verify changes with this workflow:
+1. Explore with the approved local agent-browser launcher. Keep project commands on the repository runtime and browser tooling on its separate Node 24/agent-browser 0.34.0 launcher.
+2. Maintain a brief under the task's persistent `~/data` directory: User Stories; stable Use Cases with preconditions, starting state, test data, and success criteria; user-level User Flows; Iteration Feedback; and final User Testing instructions.
+3. Exercise and simplify every flow. Prefer pointer/keyboard actions, disclose hybrid fill/select/checkbox behavior, and use synthetic DOM mutation only for diagnosis.
+4. Rerun each finalized Use Case in one fresh ProofShot session. Include an assertion and screenshot. With multiple sessions, pass the printed ID to `proofshot exec --session ID ...` and `proofshot stop --session ID`.
+5. Treat `FAIL`, `INCOMPLETE`, and `BLOCKED` as unsuccessful. Record the session ID and local evidence pointer. Keep raw JSON/HAR/bodies/credentials/customer data local under `~/data` and out of prompts, scratch, PRs, and uploads.
+6. Copy only exercised flows into PR User Testing instructions. Dry-run explicit ordered publication with repeated `--session` flags and curated screenshots.
 
-1. Start session: `proofshot start --run "your-dev-command" --port PORT --description "what you are verifying"`
-   Always use --run so proofshot captures server logs. Only omit --run if the server was started by the user.
-   If the port is in use, ProofShot leaves that unowned listener alone; choose another port or stop it explicitly. Add --force only if a stale ProofShot session blocks startup.
-   For configured multi-service projects, let `environment` launch its tmux panes or processes instead of starting duplicate services. Run `proofshot doctor` for dependency or recovery diagnostics.
-2. Drive browser: Use `proofshot exec` commands to navigate, click, fill forms, and take screenshots
-   Record an explicit assertion such as `proofshot exec assert-visible "#expected-result"` before screenshots.
-3. Stop session: `proofshot stop` to bundle canonical evidence, video, screenshots, and a structured verdict. `FAIL`, `INCOMPLETE`, and `BLOCKED` are unsuccessful.
-   After an interrupted cleanup, use `proofshot session list` and `proofshot session clean --session ID`; never kill by port or process name.
-4. Publish only finalized matching evidence: `proofshot pr 42 --session SESSION_ID --screenshot ARTIFACT_ID`. Repeat either flag for multiple explicit selections.
-
-Key proofshot exec commands:
-- `proofshot exec snapshot -i` — see interactive elements
-- `proofshot exec click @e3` — click an element
-- `proofshot exec fill @e2 "text"` — fill a form field
-- `proofshot exec screenshot step.png` — capture a moment
+Recover only with `proofshot session list` and `proofshot session clean --session ID`; never kill by process name or port. `--force` refuses live sessions and operations.

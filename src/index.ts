@@ -10,7 +10,13 @@ export {
 } from './utils/config.js';
 export { ab, ProofShotError } from './utils/exec.js';
 export { isPortOpen, waitForPort } from './utils/port.js';
-export { saveSession, loadSession, type SessionState } from './session/state.js';
+export type { SessionState } from './session/state.js';
+export {
+  getRegisteredSession,
+  listRegisteredSessions,
+  registerSession,
+  unregisterSession,
+} from './session/registry.js';
 export { writeViewer, generateViewer } from './artifacts/viewer.js';
 export { writeCanonicalEvidence } from './artifacts/evidence.js';
 export type {
@@ -31,7 +37,7 @@ export type {
   GitProvenance,
   ManifestArtifact,
 } from './session/manifest.js';
-export type { SessionLogEntry } from './commands/exec.js';
+export type { SessionLogEntry } from './session/action-log.js';
 export { convertVideoToMp4, trimVideo } from './commands/stop.js';
 export { writeMetadata, loadMetadata, findSessionsForBranch, type SessionMetadata } from './session/metadata.js';
 export { formatPRComment, type PRCommentData } from './artifacts/pr-format.js';

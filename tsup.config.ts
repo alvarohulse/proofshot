@@ -9,7 +9,7 @@ export default defineConfig([
   {
     entry: { 'bin/proofshot': 'bin/proofshot.ts' },
     format: ['esm'],
-    target: 'node18',
+    target: 'node24',
     platform: 'node',
     sourcemap: true,
     clean: true,
@@ -24,7 +24,7 @@ export default defineConfig([
   {
     entry: { 'src/index': 'src/index.ts' },
     format: ['esm'],
-    target: 'node18',
+    target: 'node24',
     platform: 'node',
     splitting: true,
     sourcemap: true,

@@ -2,9 +2,11 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { isPortOpen, waitForPort } from '../utils/port.js';
 import {
+  assertTcpListenerInspectionAvailable,
   captureProcessIdentity,
   getShellExecutable,
   isDetachedProcessIdentity,
+  ownedProcessTreeOwnsListeningPort,
   terminateOwnedProcessTree,
   terminateProcessTree,
   type ProcessIdentity,
@@ -23,7 +25,8 @@ const SERVER_RUNNER_SOURCE = String.raw`
 const fs = require('fs');
 const { spawn } = require('child_process');
 const [command, cwd, logPath, shell] = process.argv.slice(1);
-const fd = fs.openSync(logPath, 'a');
+const fd = fs.openSync(logPath, 'a', 0o600);
+fs.chmodSync(logPath, 0o600);
 let closed = false;
 const write = (text) => {
   if (!closed) fs.writeSync(fd, Date.now() + '\t' + text + '\n');
@@ -68,6 +71,8 @@ export async function ensureDevServer(
   logPath: string,
   onStarted?: (result: ServerStartResult) => void,
 ): Promise<ServerStartResult> {
+  assertTcpListenerInspectionAvailable();
+
   // Port ownership is not session ownership. Never kill an unrelated listener.
   if (await isPortOpen(port)) {
     throw new Error(
@@ -77,8 +82,9 @@ export async function ensureDevServer(
   }
 
   // Ensure log creation errors surface before launching the detached runner.
-  const logFd = fs.openSync(logPath, 'a');
+  const logFd = fs.openSync(logPath, 'a', 0o600);
   fs.closeSync(logFd);
+  fs.chmodSync(logPath, 0o600);
   const proc = spawn(process.execPath, [
     '-e',
     SERVER_RUNNER_SOURCE,
@@ -120,7 +126,7 @@ export async function ensureDevServer(
     // Clean up the spawned process if it failed to start on the expected port
     await terminateOwnedProcessTree(processIdentity);
     throw new Error(
-      `Failed to start dev server with "${command}" on port ${port}.\n` +
+      `Failed to start the configured dev server on port ${port}.\n` +
         `Make sure the command is correct and the port is available.\n` +
         `Original error: ${error instanceof Error ? error.message : error}`,
     );
@@ -128,6 +134,22 @@ export async function ensureDevServer(
 
   // Small delay for stability
   await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  let ownsListener: boolean;
+  try {
+    ownsListener = ownedProcessTreeOwnsListeningPort(processIdentity, port);
+  } catch (error) {
+    await terminateOwnedProcessTree(processIdentity);
+    throw error;
+  }
+
+  if (!ownsListener) {
+    await terminateOwnedProcessTree(processIdentity);
+    throw new Error(
+      `The configured dev server process does not exclusively own the TCP listener on port ${port}.\n` +
+        'Another listener may have won a concurrent startup race; choose a different port and retry.',
+    );
+  }
 
   return result;
 }

@@ -3,7 +3,13 @@ import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 import { PNG } from 'pngjs';
-import type { SessionLogEntry } from '../commands/exec.js';
+import type { SanitizedNetworkSummary } from '../browser/evidence.js';
+import {
+  sanitizeSessionLogEntry,
+  type SessionLogEntry,
+} from '../session/action-log.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
+import type { AgentBrowserRuntimeReceipt } from '../browser/isolation.js';
 import { loadEvidenceEvents } from '../environment/evidence.js';
 import type {
   EnvironmentState,
@@ -59,6 +65,8 @@ export type CanonicalEvidence = {
   sources: EvidenceSourceSummary[];
   incidents: EvidenceIncident[];
   screenshots: ScreenshotIntegrity[];
+  network?: SanitizedNetworkSummary | null;
+  runtime?: AgentBrowserRuntimeReceipt;
 };
 
 export type Verdict = {
@@ -85,17 +93,28 @@ export type EvidenceBuildOptions = {
   consoleEntries: TimestampedLogEntry[];
   serverEntries: TimestampedLogEntry[];
   environment?: EnvironmentState | null;
+  networkSummary?: SanitizedNetworkSummary | null;
+  networkEvidenceRequired?: boolean;
+  runtime?: AgentBrowserRuntimeReceipt;
 };
 
 export function writeCanonicalEvidence(
   options: EvidenceBuildOptions,
 ): { evidence: CanonicalEvidence; verdict: Verdict } {
-  const events = collectEvents(options);
+  const sanitizedOptions = {
+    ...options,
+    actions: options.actions.map(sanitizeSessionLogEntry),
+  };
+  const events = collectEvents(sanitizedOptions);
   applyPresentationFilters(events, options.environment?.sources || []);
-  const incidents = buildIncidents(events);
-  const screenshots = inspectScreenshots(options.sessionDir, options.actions);
+  const sanitizedEvents = events.map(sanitizeEvidenceEvent);
+  const incidents = buildIncidents(sanitizedEvents);
+  const screenshots = inspectScreenshots(
+    sanitizedOptions.sessionDir,
+    sanitizedOptions.actions,
+  );
   const mediaDurationSec = probeMediaDuration(options.videoPath);
-  const actionDuration = options.actions
+  const actionDuration = sanitizedOptions.actions
     .map((entry) => entry.relativeTimeSec)
     .filter(Number.isFinite)
     .reduce((maximum, current) => Math.max(maximum, current), 0);
@@ -106,10 +125,7 @@ export function writeCanonicalEvidence(
       : Math.max(0, actionDuration - mediaDurationSec);
   const mediaTruncated =
     mediaDivergenceSec !== null && mediaDivergenceSec > 1;
-  const sources = buildSourceSummaries(
-    events,
-    incidents,
-  );
+  const sources = buildSourceSummaries(sanitizedEvents, incidents);
   const evidence: CanonicalEvidence = {
     version: 1,
     sessionId: options.sessionId,
@@ -118,13 +134,15 @@ export function writeCanonicalEvidence(
     mediaDurationSec,
     mediaDivergenceSec,
     mediaTruncated,
-    actions: options.actions,
-    events,
+    actions: sanitizedOptions.actions,
+    events: sanitizedEvents,
     sources,
     incidents,
     screenshots,
+    network: options.networkSummary,
+    ...(options.runtime ? { runtime: options.runtime } : {}),
   };
-  const verdict = buildVerdict(options, evidence);
+  const verdict = buildVerdict(sanitizedOptions, evidence);
   writeJsonAtomically(
     path.join(options.sessionDir, 'evidence.json'),
     evidence,
@@ -134,6 +152,18 @@ export function writeCanonicalEvidence(
     verdict,
   );
   return { evidence, verdict };
+}
+
+function sanitizeEvidenceEvent(event: EvidenceEvent): EvidenceEvent {
+  return {
+    ...event,
+    group: sanitizeDiagnosticMessage(event.group) || 'environment',
+    sourceId: sanitizeDiagnosticMessage(event.sourceId) || 'source',
+    sourceTitle: sanitizeDiagnosticMessage(event.sourceTitle) || 'Source',
+    text: sanitizeDiagnosticMessage(event.text) || '[REDACTED]',
+    navigationId: sanitizeDiagnosticMessage(event.navigationId),
+    pageUrl: sanitizeDiagnosticMessage(event.pageUrl),
+  };
 }
 
 function writeJsonAtomically(filePath: string, value: unknown): void {
@@ -528,6 +558,9 @@ function buildVerdict(
   evidence: CanonicalEvidence,
 ): Verdict {
   const missingArtifacts: string[] = [];
+  if (options.networkEvidenceRequired && !options.networkSummary) {
+    missingArtifacts.push('network-summary.json');
+  }
   if (options.recordingWasActive && !fs.existsSync(options.videoPath)) {
     missingArtifacts.push(path.basename(options.videoPath));
   } else if (
@@ -579,8 +612,12 @@ function buildVerdict(
         action.expectedSelector && action.outcome === 'failed',
     )
     .map((action) => action.expectedSelector!);
-  const pendingExpectedSelectors = options.actions.filter(
-    (action) => action.expectedSelector && action.outcome === undefined,
+  const pendingActions = options.actions.filter(
+    (action) => action.outcome === undefined,
+  );
+  const hasSyntheticDomMutation = options.actions.some(
+    (action) =>
+      action.category === 'synthetic-dom' || /^eval\b/i.test(action.action),
   );
   const fatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === 'fatal',
@@ -609,13 +646,18 @@ function buildVerdict(
     ...(evidence.sources.some((source) => source.truncationCount > 0)
       ? ['One or more evidence sources were truncated.']
       : []),
-    ...(pendingExpectedSelectors.length > 0
+    ...(pendingActions.length > 0
       ? [
-          `${pendingExpectedSelectors.length} expected selector assertion(s) had no recorded outcome.`,
+          `${pendingActions.length} browser action(s) had no recorded outcome.`,
         ]
       : []),
     ...(reusedScreenshotPaths > 0
       ? ['One or more screenshot paths were reused by multiple actions.']
+      : []),
+    ...(hasSyntheticDomMutation
+      ? [
+          'Synthetic DOM mutation is diagnostic-only and cannot serve as final behavioral proof.',
+        ]
       : []),
   ];
   const status: VerdictStatus =

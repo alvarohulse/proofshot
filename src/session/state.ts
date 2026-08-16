@@ -1,10 +1,17 @@
-import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
+import type { AgentBrowserRuntime } from '../browser/isolation.js';
 import type { EnvironmentState } from '../environment/types.js';
 import type { ProcessIdentity } from '../utils/process.js';
 
-const SESSION_FILENAME = '.session.json';
+export type SessionOperationKind = 'exec' | 'recovery' | 'start' | 'stop';
+
+export type SessionOperationLease = {
+  id: string;
+  kind: SessionOperationKind;
+  owner: ProcessIdentity;
+  startedAt: string;
+};
 
 export interface SessionState {
   startedAt: string;
@@ -14,6 +21,7 @@ export interface SessionState {
   controlDir?: string;
   lifecycleStatus?: 'starting' | 'active' | 'stopping' | 'recovery';
   cleanupError?: string | null;
+  operationLease?: SessionOperationLease;
   description: string | null;
   outputDir: string;
   sessionDir: string;
@@ -35,7 +43,22 @@ export interface SessionState {
   targetUrl?: string;
   headless?: boolean;
   agentBrowserSocketDir?: string;
+  agentBrowserSocketRoot?: string;
+  agentBrowserNamespace?: string;
+  agentBrowserAllowedDomains?: string[];
   agentBrowserConfigPath?: string;
+  agentBrowserExecutablePath?: string;
+  agentBrowserExecutableSha256?: string;
+  agentBrowserRuntime?: AgentBrowserRuntime;
+  agentBrowserVersion?: string;
+  privateEvidenceDir?: string;
+  networkHarPath?: string;
+  networkRequestsPath?: string;
+  networkSummaryPath?: string;
+  networkCaptureStarted?: boolean;
+  networkCaptureActive?: boolean;
+  networkEvidenceAvailable?: boolean;
+  networkCaptureError?: string | null;
   serverProcess?: ProcessIdentity | null;
   browserProcess?: ProcessIdentity | null;
   environment?: EnvironmentState | null;
@@ -58,54 +81,6 @@ export function resolveSessionControlDir(
 }
 
 /**
- * Write session state to disk.
- */
-export function saveSession(state: SessionState, controlDir = state.outputDir): void {
-  fs.mkdirSync(controlDir, { recursive: true });
-  const sessionPath = path.join(controlDir, SESSION_FILENAME);
-  const temporaryPath = `${sessionPath}.${process.pid}.${randomUUID()}.tmp`;
-  fs.writeFileSync(temporaryPath, JSON.stringify(state, null, 2) + '\n', {
-    mode: 0o600,
-  });
-  fs.renameSync(temporaryPath, sessionPath);
-}
-
-/**
- * Read session state from disk.
- * Returns null if no active session.
- */
-export function loadSession(controlDir: string): SessionState | null {
-  const sessionPath = path.join(controlDir, SESSION_FILENAME);
-  if (!fs.existsSync(sessionPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `ProofShot session state is corrupt: ${sessionPath}\n${message}\n` +
-        'Use "proofshot session list" to inspect durable recovery records.',
-    );
-  }
-}
-
-/**
- * Check if a session is currently active.
- */
-export function hasActiveSession(controlDir: string): boolean {
-  return fs.existsSync(path.join(controlDir, SESSION_FILENAME));
-}
-
-/**
- * Delete the session state file (called after stop).
- */
-export function clearSession(controlDir: string): void {
-  const sessionPath = path.join(controlDir, SESSION_FILENAME);
-  if (fs.existsSync(sessionPath)) {
-    fs.unlinkSync(sessionPath);
-  }
-}
-
-/**
  * Generate a deterministic agent-browser session name for a ProofShot run.
  */
 export function generateAgentBrowserSessionName(
@@ -124,4 +99,9 @@ export function generateAgentBrowserSessionName(
     .slice(0, 12);
 
   return normalized ? `ps-${normalized}-${digest}` : `ps-${digest}`;
+}
+
+export function generateAgentBrowserNamespace(sessionName: string): string {
+  const digest = createHash('sha256').update(sessionName).digest('hex').slice(0, 12);
+  return `psn-${digest}`;
 }

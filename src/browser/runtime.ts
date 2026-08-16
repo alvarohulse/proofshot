@@ -34,6 +34,7 @@ export function prepareAgentBrowserSocketDir(
   sessionName: string,
   env: NodeJS.ProcessEnv = process.env,
   accountHome = os.userInfo().homedir,
+  namespace?: string,
 ): string {
   const uid = process.getuid?.() ?? process.pid;
   const explicit = env.AGENT_BROWSER_SOCKET_DIR;
@@ -58,7 +59,10 @@ export function prepareAgentBrowserSocketDir(
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   assertOwnedDirectory(directory);
 
-  const socketPath = path.join(directory, `${sessionName}.sock`);
+  const runtimeDirectory = resolveAgentBrowserRuntimeDir(directory, namespace);
+  fs.mkdirSync(runtimeDirectory, { recursive: true, mode: 0o700 });
+  assertOwnedDirectory(runtimeDirectory);
+  const socketPath = path.join(runtimeDirectory, `${sessionName}.sock`);
   const byteLength = Buffer.byteLength(socketPath);
   if (byteLength > UNIX_SOCKET_PATH_MAX_BYTES) {
     throw new Error(
@@ -68,6 +72,23 @@ export function prepareAgentBrowserSocketDir(
   }
 
   return directory;
+}
+
+export function resolveAgentBrowserRuntimeDir(
+  socketRoot: string,
+  namespace?: string,
+): string {
+  if (!namespace) {
+    return socketRoot;
+  }
+  const normalizedNamespace = namespace
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (!normalizedNamespace) {
+    throw new Error(`Unsafe agent-browser namespace: ${namespace}`);
+  }
+  return path.join(socketRoot, 'namespaces', normalizedNamespace, 'run');
 }
 
 /** Read the exact daemon PID written for this isolated agent-browser session. */

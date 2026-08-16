@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => ({
   stopOwnedBrowser: vi.fn(),
   stopOwnedServer: vi.fn(),
   canAddressOwnedBrowserSession: vi.fn(),
+  claimSessionOperation: vi.fn(),
   registerSession: vi.fn(),
+  releaseSessionOperation: vi.fn(),
   unregisterSession: vi.fn(),
   stopOwnedEnvironment: vi.fn(),
   writeViewer: vi.fn(),
@@ -24,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   loadSessionLog: vi.fn(),
   estimateTokenUsage: vi.fn(),
   execFileSync: vi.fn(),
+  finalizePrivateNetworkCapture: vi.fn(),
+  loadSanitizedNetworkSummary: vi.fn(),
+  backfillSessionAgentBrowserRuntime: vi.fn(),
 }));
 
 vi.mock('../utils/config.js', async (importOriginal) => ({
@@ -37,6 +42,10 @@ vi.mock('../session/state.js', () => ({
   saveSession: mocks.saveSession,
 }));
 vi.mock('../browser/capture.js', () => ({ stopRecording: mocks.stopRecording }));
+vi.mock('../browser/evidence.js', () => ({
+  finalizePrivateNetworkCapture: mocks.finalizePrivateNetworkCapture,
+  loadSanitizedNetworkSummary: mocks.loadSanitizedNetworkSummary,
+}));
 vi.mock('../browser/session.js', () => ({
   getConsoleErrors: mocks.getConsoleErrors,
   getConsoleOutput: mocks.getConsoleOutput,
@@ -48,15 +57,27 @@ vi.mock('../session/lifecycle.js', () => ({
   stopOwnedServer: mocks.stopOwnedServer,
 }));
 vi.mock('../session/registry.js', () => ({
+  claimSessionOperation: mocks.claimSessionOperation,
   registerSession: mocks.registerSession,
+  releaseSessionOperation: mocks.releaseSessionOperation,
   unregisterSession: mocks.unregisterSession,
+}));
+vi.mock('../session/selection.js', () => ({
+  resolveLiveSession: mocks.loadSession,
+}));
+vi.mock('../session/browser-runtime.js', () => ({
+  backfillSessionAgentBrowserRuntime:
+    mocks.backfillSessionAgentBrowserRuntime,
 }));
 vi.mock('../environment/runtime.js', () => ({
   stopOwnedEnvironment: mocks.stopOwnedEnvironment,
 }));
 vi.mock('../artifacts/viewer.js', () => ({ writeViewer: mocks.writeViewer }));
 vi.mock('../utils/error-patterns.js', () => ({ extractServerErrors: mocks.extractServerErrors }));
-vi.mock('./exec.js', () => ({ loadSessionLog: mocks.loadSessionLog }));
+vi.mock('../session/action-log.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../session/action-log.js')>()),
+  loadSessionLog: mocks.loadSessionLog,
+}));
 vi.mock('../utils/token-usage.js', () => ({ estimateTokenUsage: mocks.estimateTokenUsage }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -79,7 +100,8 @@ beforeEach(() => {
   fs.mkdirSync(cache, { recursive: true });
   root = fs.mkdtempSync(path.join(cache, 'proofshot-stop-test-'));
   const sessionDir = path.join(root, 'custom-evidence', 'session');
-  fs.mkdirSync(sessionDir, { recursive: true });
+  const privateDirectory = path.join(sessionDir, 'private');
+  fs.mkdirSync(privateDirectory, { recursive: true });
   session = {
     startedAt: new Date(Date.now() - 1000).toISOString(),
     startDirectory: path.join(root, 'project'),
@@ -88,7 +110,7 @@ beforeEach(() => {
     sessionDir,
     sessionName: 'ps-retry-deadbeef1234',
     videoPath: path.join(sessionDir, 'session.webm'),
-    serverErrorLog: path.join(sessionDir, 'server.log'),
+    serverErrorLog: path.join(privateDirectory, 'server.log'),
     port: 3000,
     serverCommand: 'npm run dev',
     serverAlreadyRunning: false,
@@ -121,11 +143,36 @@ beforeEach(() => {
   mocks.extractServerErrors.mockReturnValue([]);
   mocks.loadSessionLog.mockReturnValue([]);
   mocks.estimateTokenUsage.mockReturnValue(null);
+  mocks.loadSanitizedNetworkSummary.mockReturnValue(null);
+  mocks.finalizePrivateNetworkCapture.mockReturnValue({
+    version: 1,
+    requestCount: 0,
+    requests: [],
+  });
   mocks.execFileSync.mockReturnValue('');
   mocks.stopOwnedBrowser.mockResolvedValue(undefined);
   mocks.stopOwnedServer.mockResolvedValue(undefined);
   mocks.stopOwnedEnvironment.mockResolvedValue(undefined);
   mocks.canAddressOwnedBrowserSession.mockReturnValue(true);
+  mocks.backfillSessionAgentBrowserRuntime.mockReturnValue(false);
+  mocks.claimSessionOperation.mockImplementation((claimedSession) => {
+    const lease = {
+      id: 'stop-lease',
+      kind: 'stop',
+      owner: {
+        pid: process.pid,
+        processGroupId: process.pid,
+        sessionId: process.pid,
+        startTime: 'test',
+      },
+      startedAt: new Date().toISOString(),
+    };
+    claimedSession.operationLease = lease;
+    return lease;
+  });
+  mocks.releaseSessionOperation.mockImplementation((claimedSession) => {
+    delete claimedSession.operationLease;
+  });
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
@@ -136,6 +183,160 @@ afterEach(() => {
 });
 
 describe('stopCommand retryability', () => {
+  it('retains active network capture and browser ownership when live finalization fails', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    mocks.finalizePrivateNetworkCapture.mockImplementation(() => {
+      throw new Error('HAR finalization failed');
+    });
+
+    await expect(stopCommand({})).rejects.toThrow('HAR finalization failed');
+
+    expect(session.networkCaptureActive).toBe(true);
+    expect(session.stoppedAt).toBeUndefined();
+    expect(session.networkEvidenceAvailable).toBe(false);
+    expect(session.networkCaptureError).toContain('HAR finalization failed');
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedServer).not.toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenCalledWith(session);
+
+    mocks.finalizePrivateNetworkCapture.mockReturnValue({
+      version: 1,
+      requestCount: 0,
+      requests: [],
+    });
+    await expect(stopCommand({})).resolves.toBeUndefined();
+
+    expect(mocks.finalizePrivateNetworkCapture).toHaveBeenCalledTimes(2);
+    expect(session.networkCaptureActive).toBe(false);
+    expect(session.networkEvidenceAvailable).toBe(true);
+    expect(session.networkCaptureError).toBeNull();
+    expect(mocks.stopRecording).toHaveBeenCalledTimes(1);
+    expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
+  });
+
+  it('adopts local network evidence after browser ownership is lost', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+
+    await stopCommand({});
+
+    expect(mocks.finalizePrivateNetworkCapture).toHaveBeenCalledWith(
+      session.sessionName,
+      {
+        privateDirectory: session.privateEvidenceDir,
+        harPath: session.networkHarPath,
+        requestsPath: session.networkRequestsPath,
+        summaryPath: session.networkSummaryPath,
+      },
+      { allowBrowserCommands: false },
+    );
+    expect(session.networkCaptureActive).toBe(false);
+    expect(session.networkEvidenceAvailable).toBe(true);
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+  });
+
+  it('finishes an incomplete bundle when browser ownership is lost during HAR finalization', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    mocks.canAddressOwnedBrowserSession
+      .mockReturnValueOnce(true)
+      .mockReturnValue(false);
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('browser disappeared before HAR flush');
+    });
+
+    await expect(stopCommand({})).resolves.toBeUndefined();
+
+    expect(session.lifecycleStatus).toBe('stopping');
+    expect(session.networkCaptureActive).toBe(false);
+    expect(session.networkEvidenceAvailable).toBe(false);
+    expect(session.stoppedAt).toEqual(expect.any(String));
+    expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(session.sessionDir, 'verdict.json'),
+          'utf-8',
+        ),
+      ),
+    ).toMatchObject({
+      status: 'INCOMPLETE',
+      missingArtifacts: expect.arrayContaining(['network-summary.json']),
+    });
+  });
+
+  it('finishes an incomplete bundle when no offline HAR can be recovered', async () => {
+    session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
+    session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
+    session.networkRequestsPath = path.join(session.privateEvidenceDir, 'requests.json');
+    session.networkSummaryPath = path.join(session.sessionDir, 'network-summary.json');
+    session.networkCaptureStarted = true;
+    session.networkCaptureActive = true;
+    seedPriorConsoleEvidence();
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+    mocks.finalizePrivateNetworkCapture.mockImplementationOnce(() => {
+      throw new Error('no valid local HAR evidence was available');
+    });
+
+    await expect(stopCommand({})).resolves.toBeUndefined();
+
+    expect(mocks.finalizePrivateNetworkCapture).toHaveBeenCalledWith(
+      session.sessionName,
+      expect.any(Object),
+      { allowBrowserCommands: false },
+    );
+    expect(session.networkEvidenceAvailable).toBe(false);
+    expect(session.networkCaptureActive).toBe(false);
+    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(session.sessionDir, 'verdict.json'),
+          'utf-8',
+        ),
+      ),
+    ).toMatchObject({
+      status: 'INCOMPLETE',
+      missingArtifacts: expect.arrayContaining(['network-summary.json']),
+    });
+  });
+
+  function seedPriorConsoleEvidence(): void {
+    const consoleDirectory = path.join(
+      session.sessionDir,
+      'private',
+      'browser',
+    );
+    fs.mkdirSync(consoleDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(consoleDirectory, 'console-errors.log'),
+      'No errors',
+    );
+    fs.writeFileSync(
+      path.join(consoleDirectory, 'console-output.log'),
+      'prior console evidence',
+    );
+    session.consoleEvidenceAvailable = true;
+  }
+
   it('keeps state after a bundle failure and retries without replacing a valid summary', async () => {
     fs.writeFileSync(session.videoPath, 'nonempty-original-video');
     const sessionLogPath = path.join(session.sessionDir, 'session-log.json');
@@ -174,8 +375,8 @@ describe('stopCommand retryability', () => {
     await expect(stopCommand({})).rejects.toThrow('simulated viewer write failure');
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
     expect(mocks.stopOwnedServer).toHaveBeenCalledWith(session);
-    expect(mocks.clearSession).not.toHaveBeenCalled();
-    expect(mocks.saveSession).toHaveBeenCalledWith(
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenCalledWith(
       expect.objectContaining({
         recordingActive: false,
         bundleComplete: false,
@@ -184,7 +385,6 @@ describe('stopCommand retryability', () => {
         sessionLogAdjusted: true,
         videoPath: path.join(session.sessionDir, 'session.mp4'),
       }),
-      path.join(root, 'proofshot-artifacts'),
     );
     expect(trimCalls).toBe(1);
     expect(conversionCalls).toBe(1);
@@ -212,7 +412,7 @@ describe('stopCommand retryability', () => {
       consoleOutput: 'console evidence',
       viewport: session.viewport,
     });
-    expect(mocks.clearSession).toHaveBeenCalledWith(path.join(root, 'proofshot-artifacts'));
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
     expect(fs.readFileSync(summaryPath, 'utf-8')).toBe(summaryBefore);
     expect(fs.statSync(summaryPath).mtimeMs).toBe(summaryMtimeBefore);
   });
@@ -232,10 +432,10 @@ describe('stopCommand retryability', () => {
       consoleEvidenceAvailable: true,
       consoleErrorCount: 1,
     });
-    expect(fs.readFileSync(path.join(session.sessionDir, 'console-errors.log'), 'utf-8')).toBe(
+    expect(fs.readFileSync(path.join(session.sessionDir, 'private', 'browser', 'console-errors.log'), 'utf-8')).toBe(
       'synthetic console failure',
     );
-    expect(fs.readFileSync(path.join(session.sessionDir, 'console-output.log'), 'utf-8')).toBe(
+    expect(fs.readFileSync(path.join(session.sessionDir, 'private', 'browser', 'console-output.log'), 'utf-8')).toBe(
       'captured before cleanup',
     );
 
@@ -258,6 +458,74 @@ describe('stopCommand retryability', () => {
     const summary = fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8');
     expect(summary).toContain('1 error(s) detected');
     expect(summary).toContain('synthetic console failure');
+  });
+
+  it('keeps raw console and server secrets private while sanitizing derivatives', async () => {
+    const basicCredential = 'cHJpdmF0ZTpzZWNyZXQ=';
+    const bearerCredential = 'private-bearer-token';
+    const signedUrl =
+      'https://example.test/download/token/private-path?X-Amz-Signature=private-signature';
+    mocks.getConsoleErrors.mockReturnValue(
+      `Authorization: Basic ${basicCredential}`,
+    );
+    mocks.getConsoleOutput.mockReturnValue(signedUrl);
+    mocks.getConsoleOutputJson.mockReturnValue([
+      {
+        type: 'error',
+        text: `Authorization: Bearer ${bearerCredential}`,
+        timestamp: Date.now(),
+      },
+    ]);
+    fs.writeFileSync(
+      session.serverErrorLog,
+      `${Date.now()}\trequest failed at ${signedUrl}\n`,
+    );
+    mocks.extractServerErrors.mockImplementation((value: string) => [value]);
+    mocks.writeViewer.mockReturnValue(path.join(session.sessionDir, 'viewer.html'));
+
+    await stopCommand({});
+
+    const rawConsole = fs.readFileSync(
+      path.join(
+        session.sessionDir,
+        'private',
+        'browser',
+        'console-output.log',
+      ),
+      'utf-8',
+    );
+    const rawServer = fs.readFileSync(session.serverErrorLog, 'utf-8');
+    expect(rawConsole).toContain('private-signature');
+    expect(rawServer).toContain('private-path');
+
+    const viewerInput = JSON.stringify(mocks.writeViewer.mock.calls.at(-1)?.[1]);
+    const summary = fs.readFileSync(
+      path.join(session.sessionDir, 'SUMMARY.md'),
+      'utf-8',
+    );
+    const terminalOutput = JSON.stringify(
+      (console.log as ReturnType<typeof vi.fn>).mock.calls,
+    );
+    const canonicalEvidence = fs.readFileSync(
+      path.join(session.sessionDir, 'evidence.json'),
+      'utf-8',
+    );
+    const artifactManifest = fs.readFileSync(
+      path.join(session.sessionDir, 'artifact-manifest.json'),
+      'utf-8',
+    );
+    for (const derivative of [
+      viewerInput,
+      summary,
+      terminalOutput,
+      canonicalEvidence,
+      artifactManifest,
+    ]) {
+      expect(derivative).not.toContain(basicCredential);
+      expect(derivative).not.toContain(bearerCredential);
+      expect(derivative).not.toContain('private-signature');
+      expect(derivative).not.toContain('private-path');
+    }
   });
 
   it('withholds viewer dimensions when the session recorded no usable viewport', async () => {
@@ -285,7 +553,7 @@ describe('stopCommand retryability', () => {
     expect(mocks.stopRecording).not.toHaveBeenCalled();
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
     expect(mocks.stopOwnedServer).toHaveBeenCalledWith(session);
-    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
     expect(mocks.writeViewer).toHaveBeenCalledWith(
       session.sessionDir,
       expect.objectContaining({ consoleEvidenceAvailable: false }),
@@ -307,7 +575,7 @@ describe('stopCommand retryability', () => {
     await stopCommand({});
 
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
-    expect(mocks.clearSession).toHaveBeenCalled();
+    expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
     expect(console.log).toHaveBeenCalledWith(
       expect.stringContaining('skipped session-name close'),
     );
@@ -331,7 +599,6 @@ describe('stopCommand retryability', () => {
       lifecycleStatus: 'recovery',
       cleanupError: 'Cleanup failed: environment identity mismatch',
     });
-    expect(mocks.clearSession).not.toHaveBeenCalled();
     expect(mocks.unregisterSession).not.toHaveBeenCalled();
   });
 });

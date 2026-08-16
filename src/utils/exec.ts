@@ -1,5 +1,6 @@
-import { execSync, type ChildProcess } from 'child_process';
-import { spawnShellCommand } from './process.js';
+import { execFileSync } from 'child_process';
+import { getIsolatedAgentBrowserEnvironment } from '../browser/isolation.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 
 export class ProofShotError extends Error {
   constructor(
@@ -12,107 +13,140 @@ export class ProofShotError extends Error {
 }
 
 export interface AgentBrowserCommandOptions {
+  allowedDomains?: string[];
   configPath?: string;
+  executablePath?: string;
+  json?: boolean;
+  namespace?: string;
   session?: string;
   socketDir?: string;
   timeoutMs?: number;
 }
 
-let defaultAgentBrowserOptions: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'> = {};
+export type AgentBrowserInvocation = {
+  executablePath: string;
+  args: string[];
+};
+
+let defaultAgentBrowserOptions: Pick<
+  AgentBrowserCommandOptions,
+  'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
+> = {};
 
 export function setAgentBrowserDefaults(
-  options: Pick<AgentBrowserCommandOptions, 'configPath' | 'socketDir'>,
+  options: Pick<
+    AgentBrowserCommandOptions,
+    'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
+  >,
 ): void {
   defaultAgentBrowserOptions = { ...options };
 }
 
 export function getAgentBrowserEnvironment(
-  options: Pick<AgentBrowserCommandOptions, 'socketDir'> = {},
+  options: Pick<
+    AgentBrowserCommandOptions,
+    'allowedDomains' | 'namespace' | 'socketDir'
+  > = {},
 ): NodeJS.ProcessEnv {
+  const allowedDomains =
+    options.allowedDomains ?? defaultAgentBrowserOptions.allowedDomains;
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
+  const namespace = options.namespace ?? defaultAgentBrowserOptions.namespace;
   return {
-    ...process.env,
+    ...getIsolatedAgentBrowserEnvironment(process.env),
     AGENT_BROWSER_IDLE_TIMEOUT_MS:
       process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || '1800000',
     ...(socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}),
+    ...(namespace ? { AGENT_BROWSER_NAMESPACE: namespace } : {}),
+    ...(allowedDomains && allowedDomains.length > 0
+      ? { AGENT_BROWSER_ALLOWED_DOMAINS: allowedDomains.join(',') }
+      : {}),
   };
 }
 
-export function quoteShellArgument(value: string): string {
-  const escaped = value.replace(/'/g, "'\\''");
-  return `'${escaped}'`;
-}
-
-export function buildAgentBrowserCommand(
-  command: string,
-  options: Pick<AgentBrowserCommandOptions, 'configPath' | 'session'> = {},
-): string {
+export function buildAgentBrowserInvocation(
+  commandArgs: readonly string[],
+  options: Pick<
+    AgentBrowserCommandOptions,
+    'configPath' | 'executablePath' | 'json' | 'session'
+  > = {},
+): AgentBrowserInvocation {
   const mergedOptions = {
     ...defaultAgentBrowserOptions,
     ...options,
   };
-  const configFlag = mergedOptions.configPath
-    ? ` --config ${quoteShellArgument(mergedOptions.configPath)}`
-    : '';
-  const sessionFlag = mergedOptions.session
-    ? ` --session ${quoteShellArgument(mergedOptions.session)}`
-    : '';
-  return `agent-browser${configFlag}${sessionFlag} ${command}`;
+  if (!mergedOptions.executablePath) {
+    throw new Error(
+      'agent-browser executable path has not been verified for this ProofShot operation.',
+    );
+  }
+
+  const args: string[] = [];
+  if (mergedOptions.configPath) {
+    args.push('--config', mergedOptions.configPath);
+  }
+  if (mergedOptions.session) {
+    args.push('--session', mergedOptions.session);
+  }
+  if (mergedOptions.json) {
+    args.push('--json');
+  }
+  args.push(...commandArgs);
+  return {
+    executablePath: mergedOptions.executablePath,
+    args,
+  };
+}
+
+export function executeAgentBrowser(
+  commandArgs: readonly string[],
+  options: AgentBrowserCommandOptions = {},
+): string {
+  const invocation = buildAgentBrowserInvocation(commandArgs, options);
+  return execFileSync(invocation.executablePath, invocation.args, {
+    encoding: 'utf-8',
+    timeout: options.timeoutMs ?? 30000,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: getAgentBrowserEnvironment(options),
+  });
 }
 
 /**
- * Execute an agent-browser command via CLI.
+ * Execute an agent-browser command via its exact executable and argv.
  * agent-browser uses a Rust CLI + persistent Node.js daemon architecture,
  * so calling it via CLI is the intended usage pattern.
  */
 export function ab(
-  command: string,
+  commandArgs: readonly string[],
   timeoutOrOptions: number | AgentBrowserCommandOptions = 30000,
 ): string {
   const options =
     typeof timeoutOrOptions === 'number'
       ? { timeoutMs: timeoutOrOptions }
       : timeoutOrOptions;
-  const fullCommand = buildAgentBrowserCommand(command, options);
   try {
-    return execSync(fullCommand, {
-      encoding: 'utf-8',
-      timeout: options.timeoutMs ?? 30000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: getAgentBrowserEnvironment(options),
-    }).trim();
-  } catch (error: any) {
-    const stderr = error?.stderr?.toString?.() || '';
-    const message = stderr || error?.message || 'Unknown error';
+    return executeAgentBrowser(commandArgs, options).trim();
+  } catch (error: unknown) {
+    const command = commandArgs[0] || 'command';
+    const stderr = readProcessOutput(error, 'stderr');
+    const message = sanitizeDiagnosticMessage(
+      stderr || readErrorMessage(error) || 'Unknown error',
+    );
     throw new ProofShotError(
-      `Browser command failed: ${fullCommand}\n${message}`,
+      `Browser command failed: agent-browser ${command}\n${message || 'Unknown error'}`,
       error,
     );
   }
 }
 
-export function exec(command: string, timeoutMs = 30000): string {
-  try {
-    return execSync(command, {
-      encoding: 'utf-8',
-      timeout: timeoutMs,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error: any) {
-    const stderr = error?.stderr?.toString?.() || '';
-    throw new ProofShotError(`Command failed: ${command}\n${stderr}`, error);
+function readProcessOutput(error: unknown, key: 'stderr' | 'stdout'): string {
+  if (typeof error !== 'object' || error === null || !(key in error)) {
+    return '';
   }
+  const output = (error as Record<'stderr' | 'stdout', unknown>)[key];
+  return Buffer.isBuffer(output) ? output.toString() : String(output || '');
 }
 
-export function spawnBackground(
-  command: string,
-  cwd?: string,
-): ChildProcess {
-  const proc = spawnShellCommand(command, {
-    cwd: cwd || process.cwd(),
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: true,
-  });
-  proc.unref();
-  return proc;
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

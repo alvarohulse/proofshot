@@ -125,7 +125,7 @@ Every `proofshot exec` or `agent-browser` command operates on the same browser s
 ## Troubleshooting
 
 **"No active session" error when running exec commands**
-You need to run `proofshot start` first. The session state is stored in `.session.json` inside the artifacts directory.
+Run `proofshot start` first. If several live sessions match the worktree, inspect `proofshot session list` and pass the exact ID with `--session`.
 
 **Video has long pauses with no activity**
 Install [ffmpeg](https://ffmpeg.org/) and ProofShot will automatically trim dead time from the video (5s buffer before the first action, 3s buffer after the last) and convert the finalized recording to H.264 MP4.

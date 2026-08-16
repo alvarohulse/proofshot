@@ -1,4 +1,6 @@
 import { stopRecording } from '../browser/capture.js';
+import { finalizePrivateNetworkCapture } from '../browser/evidence.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import {
   clearAgentBrowserSessionFiles,
@@ -122,9 +124,51 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
     );
   }
 
-  // Recording may have started even when its CLI call returned an error. Both
-  // operations are session-scoped and best effort. Never address a session
-  // name unless its daemon still has the identity captured by this start.
+  const browserSessionAddressable = canAddressOwnedBrowserSession(session);
+  if (
+    (session.networkCaptureStarted || session.networkCaptureActive) &&
+    session.privateEvidenceDir &&
+    session.networkHarPath &&
+    session.networkRequestsPath &&
+    session.networkSummaryPath
+  ) {
+    const allowBrowserCommands =
+      browserSessionAddressable && session.networkCaptureActive === true;
+    try {
+      finalizePrivateNetworkCapture(
+        session.sessionName,
+        {
+          privateDirectory: session.privateEvidenceDir,
+          harPath: session.networkHarPath,
+          requestsPath: session.networkRequestsPath,
+          summaryPath: session.networkSummaryPath,
+        },
+        { allowBrowserCommands },
+      );
+      session.networkEvidenceAvailable = true;
+      session.networkCaptureActive = false;
+      session.networkCaptureError = null;
+    } catch (error) {
+      session.networkEvidenceAvailable = false;
+      session.networkCaptureError =
+        sanitizeDiagnosticMessage(
+          error instanceof Error ? error.message : String(error),
+        ) || 'network capture failed';
+      const recordedBrowserIsGone = Boolean(
+        !allowBrowserCommands &&
+          session.browserProcess &&
+          !ownedProcessTreeIsAlive(session.browserProcess),
+      );
+      session.networkCaptureActive = !recordedBrowserIsGone;
+      if (!recordedBrowserIsGone) {
+        cleanupError ||= error;
+      }
+    }
+  }
+
+  // Recording may have started even when its CLI call returned an error.
+  // Never address a session name unless its daemon still has the identity
+  // captured by this start.
   if (canAddressOwnedBrowserSession(session)) {
     stopRecording(session.sessionName);
   }

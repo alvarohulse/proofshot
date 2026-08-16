@@ -1,99 +1,62 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { execSync } from 'child_process';
+import {
+  formatAgentBrowserOutputForDisplay,
+  sanitizeAgentBrowserError,
+  writePrivateAgentBrowserResult,
+  type AgentBrowserResultReceipt,
+} from '../browser/evidence.js';
+import {
+  buildSanitizedCommandIntent,
+  classifyInteraction,
+  sanitizeDiagnosticMessage,
+  sanitizePageUrl,
+} from '../browser/provenance.js';
+import {
+  assertControlledAgentBrowserCommand,
+  prepareControlledAgentBrowserCommand,
+} from '../browser/command-policy.js';
 import { loadConfig, normalizeViewport } from '../utils/config.js';
 import {
   ab,
-  buildAgentBrowserCommand,
-  getAgentBrowserEnvironment,
+  buildAgentBrowserInvocation,
+  executeAgentBrowser,
   setAgentBrowserDefaults,
+  type AgentBrowserInvocation,
 } from '../utils/exec.js';
 import {
-  loadSession,
   resolveSessionControlDir,
-  saveSession,
-  type SessionState,
 } from '../session/state.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
 import { canAddressOwnedBrowserSession } from '../session/lifecycle.js';
 import { getPageUrl } from '../browser/session.js';
-import { registerSession } from '../session/registry.js';
+import {
+  claimSessionOperation,
+  registerSession,
+  releaseSessionOperation,
+} from '../session/registry.js';
+import { resolveLiveSession } from '../session/selection.js';
+import {
+  appendSessionLogEntry,
+  persistSessionLogEntry,
+  type SessionLogEntry,
+} from '../session/action-log.js';
 
-const SESSION_LOG_FILENAME = 'session-log.json';
-const SESSION_LOG_LOCK_TIMEOUT_MS = 5000;
-const SESSION_LOG_STALE_LOCK_MS = 120000;
-
-export interface SessionLogEntry {
-  action: string;
-  relativeTimeSec: number;
-  timestamp: string;
-  outcome?: 'passed' | 'failed';
-  expectedSelector?: string;
-  error?: string;
-  pageUrl?: string;
-  element?: {
-    label: string;
-    bbox: { x: number; y: number; width: number; height: number };
-    viewport: { width: number; height: number };
-  };
-}
+type ExecOptions = {
+  session?: string;
+};
 
 /**
- * Load existing session log entries from disk.
+ * Build an executable + argv invocation for agent-browser.
  */
-export function loadSessionLog(sessionDir: string): SessionLogEntry[] {
-  const logPath = path.join(sessionDir, SESSION_LOG_FILENAME);
-  if (!fs.existsSync(logPath)) return [];
-  try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(logPath, 'utf-8'));
-    if (!Array.isArray(parsed)) {
-      throw new Error('session log root must be an array');
-    }
-    return parsed as SessionLogEntry[];
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`ProofShot session action log is corrupt: ${logPath}\n${message}`);
-  }
-}
-
-/**
- * For screenshot commands, resolve relative paths into the session directory
- * so agents can just say `proofshot exec screenshot step-name.png`.
- */
-function resolveScreenshotPath(args: string[], sessionDir: string): string[] {
-  if (args[0] !== 'screenshot' || args.length < 2) return args;
-
-  const screenshotPath = args[args.length - 1];
-  const resolved = path.resolve(sessionDir, screenshotPath);
-  if (path.dirname(resolved) !== path.resolve(sessionDir)) {
-    throw new Error(
-      'ProofShot screenshots must use a filename directly inside the active session.',
-    );
-  }
-  return [...args.slice(0, -1), resolved];
-}
-
-/**
- * Build the shell command string for agent-browser.
- *
- * For `eval` commands, we need to pass the JS code as a single quoted argument
- * to prevent the shell from interpreting parentheses, brackets, etc.
- * For other commands, simple joining is fine.
- */
-export function buildShellCommand(args: string[], sessionName?: string): string {
-  if (args[0] === 'eval' && args.length > 1) {
-    const jsCode = args.slice(1).join(' ');
-    const escaped = jsCode.replace(/'/g, "'\\''");
-    return buildAgentBrowserCommand(`eval '${escaped}'`, { session: sessionName });
-  }
-
-  const quotedArgs = args.map((arg) => {
-    if (/[(){}[\]$`!#&|;<>*? "'\\]/.test(arg)) {
-      const escaped = arg.replace(/'/g, "'\\''");
-      return `'${escaped}'`;
-    }
-    return arg;
+export function buildExecInvocation(
+  args: string[],
+  sessionName?: string,
+  structuredOutput = false,
+): AgentBrowserInvocation {
+  assertControlledAgentBrowserCommand(args);
+  return buildAgentBrowserInvocation(normalizeExecArgs(args), {
+    json: structuredOutput,
+    session: sessionName,
   });
-  return buildAgentBrowserCommand(quotedArgs.join(' '), { session: sessionName });
 }
 
 export function translateProofShotExecArgs(args: string[]): {
@@ -142,18 +105,21 @@ function captureElementData(
 
     // Strategy 1: Try id-based selector (works for inputs with id attributes)
     let elemId = '';
-    try { elemId = ab(`get attr ${ref} id`, { session: sessionName }); } catch { /* empty */ }
+    try { elemId = ab(['get', 'attr', ref, 'id'], { session: sessionName }); } catch { /* empty */ }
 
     if (elemId) {
       try {
-        const raw = ab(`get box '#${elemId}'`, { session: sessionName });
+        const raw = ab(['get', 'box', `#${elemId}`], { session: sessionName });
         bbox = JSON.parse(raw);
       } catch { /* empty */ }
 
       // For inputs, get label from associated <label> via eval (doesn't invalidate refs)
       try {
         const raw = ab(
-          `eval "document.getElementById('${elemId}')?.labels?.[0]?.textContent||document.getElementById('${elemId}')?.placeholder||document.getElementById('${elemId}')?.getAttribute('aria-label')||''"`,
+          [
+            'eval',
+            `document.getElementById(${JSON.stringify(elemId)})?.labels?.[0]?.textContent||document.getElementById(${JSON.stringify(elemId)})?.placeholder||document.getElementById(${JSON.stringify(elemId)})?.getAttribute('aria-label')||''`,
+          ],
           { session: sessionName },
         );
         label = JSON.parse(raw) || '';
@@ -162,21 +128,20 @@ function captureElementData(
 
     // Strategy 2: Try text-based selector (works for links, buttons)
     if (!bbox) {
-      try { label = ab(`get text ${ref}`, { session: sessionName }); } catch { /* empty */ }
+      try { label = ab(['get', 'text', ref], { session: sessionName }); } catch { /* empty */ }
       if (!label) {
-        try { label = ab(`get attr ${ref} placeholder`, { session: sessionName }); } catch { /* empty */ }
+        try { label = ab(['get', 'attr', ref, 'placeholder'], { session: sessionName }); } catch { /* empty */ }
       }
       if (!label) {
-        try { label = ab(`get attr ${ref} aria-label`, { session: sessionName }); } catch { /* empty */ }
+        try { label = ab(['get', 'attr', ref, 'aria-label'], { session: sessionName }); } catch { /* empty */ }
       }
       if (!label) {
-        try { label = ab(`get attr ${ref} name`, { session: sessionName }); } catch { /* empty */ }
+        try { label = ab(['get', 'attr', ref, 'name'], { session: sessionName }); } catch { /* empty */ }
       }
 
       if (label) {
         try {
-          const escaped = label.replace(/'/g, "\\'");
-          const raw = ab(`get box 'text=${escaped}'`, { session: sessionName });
+          const raw = ab(['get', 'box', `text=${label}`], { session: sessionName });
           bbox = JSON.parse(raw);
         } catch { /* empty */ }
       }
@@ -185,7 +150,7 @@ function captureElementData(
     if (!bbox) return null;
 
     return {
-      label: label || '',
+      label: sanitizeDiagnosticMessage(label) || '',
       bbox: { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height },
       viewport,
     };
@@ -213,22 +178,35 @@ function isRefTargetedAction(args: string[]): boolean {
  * 6. Pass through to agent-browser and return its output
  * 7. If action was `set viewport`, update cached viewport in session state
  */
-export async function execCommand(args: string[]): Promise<void> {
-  const action = args.join(' ');
+export async function execCommand(
+  args: string[],
+  options: ExecOptions = {},
+): Promise<void> {
+  const intent = buildSanitizedCommandIntent(args);
+  const action = intent.summary;
   const translated = translateProofShotExecArgs(args);
+  assertControlledAgentBrowserCommand(translated.agentBrowserArgs);
   let loggedEntry: SessionLogEntry | null = null;
   let sessionLogPath: string | null = null;
 
   // Load session state
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
-  const session = loadSession(controlDir);
-  setAgentBrowserDefaults({
-    configPath: session?.agentBrowserConfigPath || config.browser.configPath,
-    socketDir: session?.agentBrowserSocketDir,
+  const session = resolveLiveSession({
+    controlDir,
+    operation: 'exec',
+    sessionName: options.session,
   });
+  if (!session) {
+    console.error(
+      'Error: No active ProofShot session matches this worktree.\n' +
+        'Run "proofshot start" first, or inspect recovery state with "proofshot session list".',
+    );
+    process.exit(1);
+    return;
+  }
 
-  if (session && !session.recordingActive) {
+  if (!session.recordingActive) {
     console.error(
       'Error: Session has no active recording. Video capture is required.\n' +
         'Run "proofshot stop" to end this session, then start a new one.',
@@ -236,7 +214,7 @@ export async function execCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  if (session && !canAddressOwnedBrowserSession(session)) {
+  if (!canAddressOwnedBrowserSession(session)) {
     console.error(
       'Error: Browser ownership no longer matches this ProofShot session.\n' +
         'Refusing to address a possibly reused agent-browser session name.',
@@ -245,10 +223,23 @@ export async function execCommand(args: string[]): Promise<void> {
     return;
   }
 
+  const execLease = claimSessionOperation(session, 'exec');
+  try {
+  if (backfillSessionAgentBrowserRuntime(session)) {
+    registerSession(session);
+  }
+  setAgentBrowserDefaults({
+    allowedDomains: session.agentBrowserAllowedDomains,
+    configPath: session.agentBrowserConfigPath || config.browser.configPath,
+    executablePath: session.agentBrowserExecutablePath,
+    namespace: session.agentBrowserNamespace,
+    socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
+  });
+  const pageUrlBefore = capturePageUrl(session.sessionName);
   // Resolve args (screenshot path rewriting)
   let resolvedArgs = translated.agentBrowserArgs;
   if (session) {
-    resolvedArgs = resolveScreenshotPath(
+    resolvedArgs = prepareControlledAgentBrowserCommand(
       translated.agentBrowserArgs,
       session.sessionDir,
     );
@@ -271,85 +262,159 @@ export async function execCommand(args: string[]): Promise<void> {
 
     const entry: SessionLogEntry = {
       action,
+      category: classifyInteraction(args),
+      intent,
+      pageUrl: pageUrlBefore,
       relativeTimeSec,
       timestamp: now.toISOString(),
-      expectedSelector: translated.expectedSelector,
+      expectedSelector: sanitizeDiagnosticMessage(translated.expectedSelector),
     };
     if (elementData) {
       entry.element = elementData;
     }
 
-    const logPath = path.join(session.sessionDir, SESSION_LOG_FILENAME);
-    updateSessionLog(logPath, (entries) => {
-      entries.push(entry);
-    });
+    const logPath = appendSessionLogEntry(session.sessionDir, entry);
     loggedEntry = entry;
     sessionLogPath = logPath;
   }
 
-  // Build shell command with proper quoting
-  const shellCmd = buildShellCommand(resolvedArgs, session?.sessionName);
+  const commandArgs = normalizeExecArgs(resolvedArgs);
+  const executionStartedAt = Date.now();
 
   // Pass through to agent-browser
   try {
-    const result = execSync(shellCmd, {
-      encoding: 'utf-8',
-      timeout: 60000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: getAgentBrowserEnvironment(),
+    const result = executeAgentBrowser(commandArgs, {
+      json: Boolean(session),
+      session: session?.sessionName,
+      timeoutMs: 60000,
     });
     if (
       translated.expectedSelector &&
-      result.trim().toLowerCase() !== 'true'
+      !assertionPassed(result)
     ) {
       const assertionError = new Error(
         `Expected selector to be visible: ${translated.expectedSelector}`,
-      ) as Error & { status: number };
+      ) as Error & { status: number; stderr: string };
       assertionError.status = 1;
+      assertionError.stderr = assertionError.message;
       throw assertionError;
     }
-    if (result.trim()) {
-      process.stdout.write(result);
+    const displayedResult = formatAgentBrowserOutputForDisplay({
+      args,
+      rawOutput: result,
+      success: true,
+    });
+    if (displayedResult.trim()) {
+      process.stdout.write(displayedResult);
       // Ensure trailing newline
-      if (!result.endsWith('\n')) {
+      if (!displayedResult.endsWith('\n')) {
         process.stdout.write('\n');
       }
     }
-    const pageUrl = session ? getPageUrl(session.sessionName) || undefined : undefined;
-    persistActionOutcome(loggedEntry, sessionLogPath, 'passed', undefined, pageUrl);
+    const pageUrl = capturePageUrl(session.sessionName);
+    const agentBrowserResult = session
+      ? writePrivateAgentBrowserResult({
+          args,
+          sessionDir: session.sessionDir,
+          rawOutput: result,
+          success: true,
+        })
+      : undefined;
+    persistActionOutcome(
+      loggedEntry,
+      sessionLogPath,
+      'passed',
+      undefined,
+      pageUrl,
+      Date.now() - executionStartedAt,
+      agentBrowserResult,
+    );
   } catch (error: any) {
-    // Print stderr and exit with the same code
     const stderr = error?.stderr?.toString?.() || '';
     const stdout = error?.stdout?.toString?.() || '';
-    if (stdout) process.stdout.write(stdout);
-    if (stderr) process.stderr.write(stderr);
-    if (!stdout && !stderr && error?.message) {
-      process.stderr.write(`${error.message}\n`);
+    if (stdout) {
+      const displayedStdout = formatAgentBrowserOutputForDisplay({
+        args,
+        rawOutput: stdout,
+        success: false,
+      });
+      if (displayedStdout) {
+        process.stdout.write(`${displayedStdout}\n`);
+      }
     }
+    if (stderr) {
+      process.stderr.write(
+        `${sanitizeAgentBrowserError(args, stderr.trim())}\n`,
+      );
+    }
+    if (!stdout && !stderr) {
+      process.stderr.write(
+        `agent-browser exited with status ${error?.status || 1}\n`,
+      );
+    }
+    const rawErrorOutput = stdout || stderr;
+    const errorMessage =
+      stderr.trim() ||
+      stdout.trim() ||
+      `agent-browser exited with status ${error?.status || 1}`;
+    const persistedError = sanitizeAgentBrowserError(
+      args,
+      errorMessage,
+    );
+    const agentBrowserResult = session
+      ? writePrivateAgentBrowserResult({
+          args,
+          sessionDir: session.sessionDir,
+          rawOutput: rawErrorOutput,
+          success: false,
+          error: persistedError,
+        })
+      : undefined;
     persistActionOutcome(
       loggedEntry,
       sessionLogPath,
       'failed',
-      stderr.trim() || stdout.trim() || error?.message,
+      persistedError,
+      pageUrlBefore,
+      Date.now() - executionStartedAt,
+      agentBrowserResult,
     );
-    process.exit(error?.status || 1);
+    process.exitCode = error?.status || 1;
+    return;
   }
 
   // If the action was `set viewport`, update cached viewport in session state
   if (session && args[0] === 'set' && args[1] === 'viewport') {
     try {
-      const vpJson = ab("eval 'JSON.stringify({width: window.innerWidth, height: window.innerHeight})'", {
+      const vpJson = ab(['eval', 'JSON.stringify({width: window.innerWidth, height: window.innerHeight})'], {
         session: session.sessionName,
       });
       const vp = normalizeViewport(JSON.parse(vpJson));
       if (vp) {
         session.viewport = vp;
-        saveSession(session, controlDir);
         registerSession(session);
       }
     } catch {
       // Non-critical — viewport cache stays stale
     }
+  }
+  } finally {
+    if (session.operationLease?.id === execLease.id) {
+      releaseSessionOperation(session, execLease);
+    }
+  }
+}
+
+export {
+  assertControlledAgentBrowserCommand,
+  prepareControlledAgentBrowserCommand,
+};
+
+function capturePageUrl(sessionName: string): string | undefined {
+  try {
+    return sanitizePageUrl(getPageUrl(sessionName) || undefined);
+  } catch {
+    return undefined;
   }
 }
 
@@ -359,6 +424,8 @@ function persistActionOutcome(
   outcome: 'passed' | 'failed',
   error?: string,
   pageUrl?: string,
+  durationMs?: number,
+  agentBrowserResult?: AgentBrowserResultReceipt,
 ): void {
   if (!entry || !logPath) {
     return;
@@ -370,68 +437,34 @@ function persistActionOutcome(
   if (pageUrl) {
     entry.pageUrl = pageUrl;
   }
-  updateSessionLog(logPath, (entries) => {
-    const matchingEntry = [...entries]
-      .reverse()
-      .find(
-        (candidate) =>
-          candidate.timestamp === entry.timestamp &&
-          candidate.action === entry.action,
-      );
-    if (matchingEntry) {
-      matchingEntry.outcome = outcome;
-      if (error) {
-        matchingEntry.error = error;
-      }
-      if (pageUrl) {
-        matchingEntry.pageUrl = pageUrl;
-      }
-    }
-  });
+  if (durationMs !== undefined) {
+    entry.durationMs = durationMs;
+  }
+  if (agentBrowserResult) {
+    entry.agentBrowserResult = agentBrowserResult;
+  }
+  persistSessionLogEntry(logPath, entry);
 }
 
-function updateSessionLog(
-  logPath: string,
-  update: (entries: SessionLogEntry[]) => void,
-): void {
-  const lockPath = `${logPath}.lock`;
-  const deadline = Date.now() + SESSION_LOG_LOCK_TIMEOUT_MS;
-  let lockFd: number | null = null;
-  while (lockFd === null) {
-    try {
-      lockFd = fs.openSync(lockPath, 'wx', 0o600);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      try {
-        if (Date.now() - fs.statSync(lockPath).mtimeMs > SESSION_LOG_STALE_LOCK_MS) {
-          fs.unlinkSync(lockPath);
-          continue;
-        }
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw statError;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for session log lock: ${lockPath}`);
-      }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
-    }
+function assertionPassed(rawOutput: string): boolean {
+  if (rawOutput.trim().toLowerCase() === 'true') {
+    return true;
   }
-
   try {
-    const entries = loadSessionLog(path.dirname(logPath));
-    update(entries);
-    const temporaryPath = `${logPath}.${process.pid}.${Date.now()}.tmp`;
-    fs.writeFileSync(temporaryPath, JSON.stringify(entries, null, 2) + '\n', {
-      mode: 0o600,
-    });
-    fs.renameSync(temporaryPath, logPath);
-  } finally {
-    fs.closeSync(lockFd);
-    try {
-      fs.unlinkSync(lockPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    const parsed = JSON.parse(rawOutput) as {
+      data?: boolean | { visible?: unknown };
+    };
+    if (typeof parsed.data === 'boolean') {
+      return parsed.data;
     }
+    return parsed.data?.visible === true;
+  } catch {
+    return false;
   }
+}
+
+function normalizeExecArgs(args: string[]): string[] {
+  return args[0] === 'eval' && args.length > 1
+    ? ['eval', args.slice(1).join(' ')]
+    : args;
 }

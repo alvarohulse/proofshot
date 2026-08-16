@@ -8,18 +8,29 @@ import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
 import { stopRecording } from '../browser/capture.js';
 import {
-  loadSession,
-  clearSession,
+  finalizePrivateNetworkCapture,
+  loadSanitizedNetworkSummary,
+  type SanitizedNetworkSummary,
+} from '../browser/evidence.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
+import {
   resolveSessionControlDir,
-  saveSession,
   type SessionState,
 } from '../session/state.js';
+import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
+import { toAgentBrowserRuntimeReceipt } from '../browser/isolation.js';
 import {
   canAddressOwnedBrowserSession,
   stopOwnedBrowser,
   stopOwnedServer,
 } from '../session/lifecycle.js';
-import { registerSession, unregisterSession } from '../session/registry.js';
+import {
+  claimSessionOperation,
+  registerSession,
+  releaseSessionOperation,
+  unregisterSession,
+} from '../session/registry.js';
+import { resolveLiveSession } from '../session/selection.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
 import { writeViewer, type TimestampedLogEntry } from '../artifacts/viewer.js';
 import {
@@ -30,7 +41,10 @@ import { loadMetadata } from '../session/metadata.js';
 import { writeArtifactManifest } from '../session/manifest.js';
 import { extractServerErrors } from '../utils/error-patterns.js';
 import { processIdentityMatches } from '../utils/process.js';
-import { loadSessionLog, type SessionLogEntry } from './exec.js';
+import {
+  loadSessionLog,
+  type SessionLogEntry,
+} from '../session/action-log.js';
 import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
 
 /**
@@ -70,8 +84,30 @@ function parseTimestampedServerLog(
   return { entries, cleanText: cleanLines.join('\n') };
 }
 
+function sanitizeTimestampedEntry(
+  entry: TimestampedLogEntry,
+): TimestampedLogEntry {
+  return {
+    ...entry,
+    text: sanitizeEvidenceText(entry.text),
+  };
+}
+
+function sanitizeEvidenceText(value: string): string {
+  return sanitizeDiagnosticMessage(value) || '';
+}
+
+function isRegularFile(filePath: string): boolean {
+  try {
+    return fs.lstatSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 interface StopOptions {
   noClose?: boolean;
+  session?: string;
 }
 
 export async function stopCommand(options: StopOptions): Promise<void> {
@@ -79,25 +115,36 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const controlDir = resolveSessionControlDir(config.output);
 
   // Load session state
-  const session = loadSession(controlDir);
+  const session = resolveLiveSession({
+    controlDir,
+    operation: 'stop',
+    sessionName: options.session,
+  });
   if (!session) {
     console.log(
       chalk.dim('No active session found; all owned processes are already stopped.'),
     );
     return;
   }
+  const stopLease = claimSessionOperation(session, 'stop');
+  try {
+  if (backfillSessionAgentBrowserRuntime(session)) {
+    persistOwnedSession(session);
+  }
   setAgentBrowserDefaults({
+    allowedDomains: session.agentBrowserAllowedDomains,
     configPath: session.agentBrowserConfigPath || config.browser.configPath,
-    socketDir: session.agentBrowserSocketDir,
+    executablePath: session.agentBrowserExecutablePath,
+    namespace: session.agentBrowserNamespace,
+    socketDir: session.agentBrowserSocketRoot || session.agentBrowserSocketDir,
   });
-
   if (session.bundleComplete) {
     if (session.browserRetained && !options.noClose) {
       console.log(chalk.dim('Closing retained browser...'));
       const browserSessionAddressable = canAddressOwnedBrowserSession(session);
       await stopOwnedBrowser(session);
       session.browserRetained = false;
-      clearOwnedSession(session, controlDir);
+      clearOwnedSession(session);
       if (browserSessionAddressable) {
         console.log(chalk.green('✓') + ' Retained browser closed; proof artifacts were already bundled.');
       } else {
@@ -111,7 +158,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         chalk.dim('Proof artifacts are already bundled; the owned browser remains intentionally open.'),
       );
     } else {
-      clearOwnedSession(session, controlDir);
+      clearOwnedSession(session);
       console.log(chalk.dim('Proof artifacts are already bundled and all owned processes are stopped.'));
     }
     return;
@@ -122,7 +169,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   session.lifecycleStatus = 'stopping';
   session.cleanupError = null;
   session.stoppedAt ||= new Date().toISOString();
-  persistOwnedSession(session, controlDir);
+  persistOwnedSession(session);
   const retryingStoppedSession = !session.recordingActive;
   const recordingWasActive =
     session.recordingActive || Boolean(session.recordingStartedAt);
@@ -136,9 +183,32 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   );
   const durationMs = new Date(session.stoppedAt).getTime() - startTime;
   const durationSec = Math.round(durationMs / 1000);
+  const runtimeReceipt = session.agentBrowserRuntime
+    ? toAgentBrowserRuntimeReceipt(session.agentBrowserRuntime)
+    : undefined;
   const browserSessionAvailable = canAddressOwnedBrowserSession(session);
-
-  const priorConsoleEvidenceAvailable = session.consoleEvidenceAvailable === true;
+  const privateDirectory = path.join(session.sessionDir, 'private');
+  fs.mkdirSync(privateDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(privateDirectory, 0o700);
+  const privateBrowserDirectory = path.join(privateDirectory, 'browser');
+  fs.mkdirSync(privateBrowserDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(privateBrowserDirectory, 0o700);
+  const consoleErrorsPath = path.join(
+    privateBrowserDirectory,
+    'console-errors.log',
+  );
+  const consoleOutputPath = path.join(
+    privateBrowserDirectory,
+    'console-output.log',
+  );
+  const consoleEntriesPath = path.join(
+    privateBrowserDirectory,
+    'console-entries.json',
+  );
+  const priorConsoleEvidenceAvailable =
+    session.consoleEvidenceAvailable === true &&
+    isRegularFile(consoleErrorsPath) &&
+    isRegularFile(consoleOutputPath);
   if (!browserSessionAvailable && priorConsoleEvidenceAvailable) {
     console.log(
       chalk.dim('Browser already stopped; reusing console evidence collected before cleanup.'),
@@ -156,32 +226,32 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   let consoleErrors = '';
   let consoleOutput = '';
   let consoleEntries: TimestampedLogEntry[] = [];
-  const consoleErrorsPath = path.join(session.sessionDir, 'console-errors.log');
-  const consoleOutputPath = path.join(session.sessionDir, 'console-output.log');
-  const consoleEntriesPath = path.join(session.sessionDir, 'console-entries.json');
   let consoleCollectionSucceeded = false;
   if (browserSessionAvailable) {
     try {
-      consoleErrors = getConsoleErrors(session.sessionName);
-      consoleOutput = getConsoleOutput(session.sessionName);
+      const rawConsoleErrors = getConsoleErrors(session.sessionName);
+      const rawConsoleOutput = getConsoleOutput(session.sessionName);
       // Get timestamped console messages for viewer sync
       const consoleMessages = getConsoleOutputJson(session.sessionName);
-      consoleEntries = consoleMessages.map((msg) => ({
+      const rawConsoleEntries = consoleMessages.map((msg) => ({
         text: `[${msg.type}] ${msg.text}`,
         relativeTimeSec: Math.max(0, parseFloat(((msg.timestamp - startTime) / 1000).toFixed(1))),
       }));
+      writeTextFileAtomically(consoleErrorsPath, rawConsoleErrors);
+      writeTextFileAtomically(consoleOutputPath, rawConsoleOutput);
+      writeTextFileAtomically(
+        consoleEntriesPath,
+        JSON.stringify(rawConsoleEntries, null, 2) + '\n',
+      );
+      consoleErrors = sanitizeEvidenceText(rawConsoleErrors);
+      consoleOutput = sanitizeEvidenceText(rawConsoleOutput);
+      consoleEntries = rawConsoleEntries.map(sanitizeTimestampedEntry);
       consoleCollectionSucceeded = true;
     } catch {
       consoleCollectionSucceeded = false;
     }
   }
   if (consoleCollectionSucceeded) {
-    writeTextFileAtomically(consoleErrorsPath, consoleErrors);
-    writeTextFileAtomically(consoleOutputPath, consoleOutput);
-    writeTextFileAtomically(
-      consoleEntriesPath,
-      JSON.stringify(consoleEntries, null, 2) + '\n',
-    );
     const capturedErrorLines = consoleErrors
       .split('\n')
       .filter((line) => line.trim() && line.trim() !== 'No errors');
@@ -192,18 +262,20 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         : 0;
     // Persist evidence before any cleanup step can fail. A retry must not turn
     // successfully collected browser facts into an "unavailable" claim.
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   } else if (priorConsoleEvidenceAvailable) {
-    if (fs.existsSync(consoleErrorsPath)) {
-      consoleErrors = fs.readFileSync(consoleErrorsPath, 'utf-8');
-    }
-    if (fs.existsSync(consoleOutputPath)) {
-      consoleOutput = fs.readFileSync(consoleOutputPath, 'utf-8');
-    }
+    consoleErrors = sanitizeEvidenceText(
+      fs.readFileSync(consoleErrorsPath, 'utf-8'),
+    );
+    consoleOutput = sanitizeEvidenceText(
+      fs.readFileSync(consoleOutputPath, 'utf-8'),
+    );
     if (fs.existsSync(consoleEntriesPath)) {
       try {
         const savedEntries = JSON.parse(fs.readFileSync(consoleEntriesPath, 'utf-8'));
-        if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
+        if (Array.isArray(savedEntries)) {
+          consoleEntries = savedEntries.map(sanitizeTimestampedEntry);
+        }
       } catch {
         // Keep the persisted availability/count; only the optional timeline is absent.
       }
@@ -211,7 +283,75 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   } else {
     session.consoleEvidenceAvailable = false;
     session.consoleErrorCount = 0;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
+  }
+
+  let networkSummary: SanitizedNetworkSummary | null =
+    loadSanitizedNetworkSummary(session.networkSummaryPath);
+  const networkEvidencePaths =
+    session.privateEvidenceDir &&
+    session.networkHarPath &&
+    session.networkRequestsPath &&
+    session.networkSummaryPath
+      ? {
+          privateDirectory: session.privateEvidenceDir,
+          harPath: session.networkHarPath,
+          requestsPath: session.networkRequestsPath,
+          summaryPath: session.networkSummaryPath,
+        }
+      : null;
+  if (
+    !networkSummary &&
+    networkEvidencePaths &&
+    (session.networkCaptureStarted || session.networkCaptureActive)
+  ) {
+    console.log(chalk.dim('Collecting private network evidence...'));
+    const allowBrowserCommands =
+      browserSessionAvailable && session.networkCaptureActive === true;
+    try {
+      networkSummary = finalizePrivateNetworkCapture(
+        session.sessionName,
+        networkEvidencePaths,
+        { allowBrowserCommands },
+      );
+      session.networkEvidenceAvailable = true;
+      session.networkCaptureActive = false;
+      session.networkCaptureError = null;
+    } catch (error) {
+      session.networkEvidenceAvailable = false;
+      session.networkCaptureError =
+        sanitizeDiagnosticMessage(
+          error instanceof Error ? error.message : String(error),
+        ) || 'network capture failed';
+      console.log(
+        chalk.yellow('⚠') +
+          ` Private network evidence was incomplete: ${session.networkCaptureError}`,
+      );
+      const browserSessionStillAvailable =
+        allowBrowserCommands && canAddressOwnedBrowserSession(session);
+      if (browserSessionStillAvailable) {
+        session.lifecycleStatus = 'active';
+        session.stoppedAt = undefined;
+        session.networkCaptureActive = true;
+        persistOwnedSession(session);
+        throw error;
+      }
+      // Browser ownership is gone and there is no valid HAR to adopt. Mark
+      // capture unavailable so exact teardown and an INCOMPLETE bundle can
+      // finish without permanently wedging stop on an impossible retry.
+      session.networkCaptureActive = false;
+      persistOwnedSession(session);
+    }
+    persistOwnedSession(session);
+  } else if (networkSummary) {
+    session.networkEvidenceAvailable = true;
+    session.networkCaptureActive = false;
+    session.networkCaptureError = null;
+    persistOwnedSession(session);
+  } else if (session.networkCaptureStarted || session.networkCaptureActive) {
+    session.networkEvidenceAvailable = false;
+    session.networkCaptureActive = false;
+    persistOwnedSession(session);
   }
 
   // Step 2: Stop recording
@@ -220,7 +360,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     stopRecording(session.sessionName);
   }
   session.recordingActive = false;
-  persistOwnedSession(session, controlDir);
+  persistOwnedSession(session);
 
   // Step 3: Close browser (unless --no-close)
   const cleanupErrors: unknown[] = [];
@@ -245,7 +385,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     session.environment.healthFailures = captures
       .filter((capture) => !processIdentityMatches(capture.process))
       .map((capture) => capture.sourceId);
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
   const finalizedEnvironment = session.environment;
   if (session.environment && !session.environmentStopped) {
@@ -253,7 +393,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     try {
       await stopOwnedEnvironment(session.environment);
       session.environmentStopped = true;
-      persistOwnedSession(session, controlDir);
+      persistOwnedSession(session);
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -278,7 +418,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     session.lifecycleStatus = 'recovery';
     session.cleanupError =
       cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
     throw cleanupError;
   }
 
@@ -288,8 +428,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   if (fs.existsSync(session.serverErrorLog)) {
     const rawServerLog = fs.readFileSync(session.serverErrorLog, 'utf-8');
     const parsed = parseTimestampedServerLog(rawServerLog, startTime);
-    serverLog = parsed.cleanText;
-    serverEntries = parsed.entries;
+    serverLog = sanitizeEvidenceText(parsed.cleanText);
+    serverEntries = parsed.entries.map(sanitizeTimestampedEntry);
   }
 
   // Use session subfolder for all artifacts
@@ -326,7 +466,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     trimOffsetSec = recordingStartOffsetSec + videoTrimOffsetSec;
     session.videoTrimComplete = true;
     session.trimOffsetSec = trimOffsetSec;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
 
   // Step 6: Count errors
@@ -338,14 +478,16 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       ? consoleErrorLines.length
       : 0;
   const consoleEvidenceAvailable =
-    browserSessionAvailable || priorConsoleEvidenceAvailable;
-  const consoleErrorCount = browserSessionAvailable
+    consoleCollectionSucceeded || priorConsoleEvidenceAvailable;
+  const consoleErrorCount = consoleCollectionSucceeded
     ? observedConsoleErrorCount
-    : session.consoleErrorCount ?? 0;
-  if (browserSessionAvailable) {
-    session.consoleEvidenceAvailable = true;
+    : priorConsoleEvidenceAvailable
+      ? session.consoleErrorCount ?? 0
+      : 0;
+  if (session.consoleEvidenceAvailable !== consoleEvidenceAvailable) {
+    session.consoleEvidenceAvailable = consoleEvidenceAvailable;
     session.consoleErrorCount = consoleErrorCount;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
 
   // Extract errors from server log using multi-language patterns
@@ -363,8 +505,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const summaryPath = path.join(sessionDir, 'SUMMARY.md');
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),
-    description: session.description,
-    serverCommand: session.serverCommand,
+    description: sanitizeDiagnosticMessage(session.description || undefined) || null,
+    serverCommand:
+      sanitizeDiagnosticMessage(session.serverCommand || undefined) || null,
     port: session.port,
     headless: session.headless ?? config.headless ?? true,
     viewport: summaryViewport,
@@ -400,7 +543,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   }
   if (!session.sessionLogAdjusted) {
     session.sessionLogAdjusted = true;
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   }
 
   // Apply trimOffsetSec to log entries (same adjustment as session log)
@@ -425,11 +568,15 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     consoleEntries: viewerConsoleEntries,
     serverEntries: viewerServerEntries,
     environment: finalizedEnvironment,
+    networkSummary,
+    networkEvidenceRequired: session.networkCaptureStarted === true,
+    runtime: runtimeReceipt,
   });
 
   const viewerPath = writeViewer(sessionDir, {
-    description: session.description,
-    serverCommand: session.serverCommand,
+    description: sanitizeDiagnosticMessage(session.description || undefined) || null,
+    serverCommand:
+      sanitizeDiagnosticMessage(session.serverCommand || undefined) || null,
     durationSec: canonicalDurationSec,
     videoFilename: fs.existsSync(session.videoPath) ? path.basename(session.videoPath) : null,
     viewport: recordedViewport ?? undefined,
@@ -461,6 +608,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     metadata,
     evidence,
     verdict,
+    runtime: runtimeReceipt,
   });
 
   // Step 8: Retain exact browser ownership only when explicitly requested.
@@ -468,9 +616,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   session.browserRetained = Boolean(options.noClose);
   if (session.browserRetained) {
     session.lifecycleStatus = 'active';
-    persistOwnedSession(session, controlDir);
+    persistOwnedSession(session);
   } else {
-    clearOwnedSession(session, controlDir);
+    clearOwnedSession(session);
   }
 
   // Step 9: Print results
@@ -531,10 +679,19 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       console.log(chalk.dim(`  ... and ${serverErrorLines.length - 10} more (see SUMMARY.md)`));
     }
   }
+  // Most browser finalization calls are synchronous. Yield once before
+  // removing handlers so a signal received during them is reflected in the
+  // command's final exit status after exact teardown finishes.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   } finally {
     const interruptedBy = stopSignals.remove();
     if (interruptedBy) {
       process.exitCode = interruptedBy === 'SIGINT' ? 130 : 143;
+    }
+  }
+  } finally {
+    if (session.operationLease?.id === stopLease.id) {
+      releaseSessionOperation(session, stopLease);
     }
   }
 }
@@ -591,20 +748,19 @@ function installStopSignalHandlers(): {
 function writeTextFileAtomically(filePath: string, contents: string): void {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporaryPath, contents);
+    fs.writeFileSync(temporaryPath, contents, { mode: 0o600 });
     fs.renameSync(temporaryPath, filePath);
+    fs.chmodSync(filePath, 0o600);
   } finally {
     if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
   }
 }
 
-function persistOwnedSession(session: SessionState, controlDir: string): void {
-  saveSession(session, controlDir);
+function persistOwnedSession(session: SessionState): void {
   registerSession(session);
 }
 
-function clearOwnedSession(session: SessionState, controlDir: string): void {
-  clearSession(controlDir);
+function clearOwnedSession(session: SessionState): void {
   unregisterSession(session.sessionName);
 }
 
@@ -686,7 +842,7 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
   } else {
     md += `${data.serverErrorCount} error(s) detected:\n\n\`\`\`\n${data.serverLog.slice(0, 5000)}\n\`\`\`\n\n`;
     if (data.serverLog.length > 5000) {
-      md += `_(truncated — see server.log for full output)_\n\n`;
+      md += `_(truncated — raw output is retained privately)_\n\n`;
     }
   }
 

@@ -2,16 +2,22 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  assertTcpListenerInspectionAvailable,
   captureProcessIdentity,
   findExecutablePath,
+  findPidsListeningOnPort,
   getShellExecutable,
+  getTcpListenerInspectorStatus,
   isDetachedProcessIdentity,
   parseLinuxProcStat,
+  parseTcpListenerPidOutput,
   parseUnixProcessIdentity,
-  parseWindowsNetstatOutput,
+  parseWindowsProcessRecords,
+  processBelongsToOwnedTree,
   readCommandVersion,
   terminateOwnedProcess,
   terminateOwnedProcessTree,
+  windowsProcessHasAncestor,
 } from './process.js';
 
 function waitForExit(pid: number, timeoutMs = 3000): Promise<void> {
@@ -46,18 +52,202 @@ describe('getShellExecutable', () => {
   });
 });
 
-describe('parseWindowsNetstatOutput', () => {
-  it('returns unique listening pids for the requested port', () => {
-    const output = `
-Proto  Local Address          Foreign Address        State           PID
-TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       1234
-TCP    [::]:3000              [::]:0                 LISTENING       5678
-TCP    127.0.0.1:3000         127.0.0.1:51722        ESTABLISHED     9999
-TCP    0.0.0.0:4000           0.0.0.0:0              LISTENING       4321
-TCP    [::]:3000              [::]:0                 LISTENING       5678
-`;
+describe('TCP listener inspection', () => {
+  it('parses unique numeric listener pids', () => {
+    expect(parseTcpListenerPidOutput('5678\r\n 1234 \r\n5678\r\n')).toEqual([
+      1234,
+      5678,
+    ]);
+  });
 
-    expect(parseWindowsNetstatOutput(output, 3000)).toEqual([1234, 5678]);
+  it('rejects non-numeric listener output', () => {
+    expect(() => parseTcpListenerPidOutput('1234\nAccess denied\n')).toThrow(
+      /non-numeric PID/,
+    );
+  });
+
+  it('queries Windows listeners through locale-independent PowerShell objects', () => {
+    const runner = vi.fn(
+      (_command: string, _args: readonly string[]) => '5678\r\n1234\r\n',
+    );
+
+    expect(findPidsListeningOnPort(3000, 'win32', runner)).toEqual([1234, 5678]);
+    expect(runner).toHaveBeenCalledTimes(1);
+    const [command, args] = runner.mock.calls[0];
+    expect(command).toBe('powershell.exe');
+    expect(args.join(' ')).toContain('Get-NetTCPConnection -State Listen');
+    expect(args.join(' ')).toContain('LocalPort -eq 3000');
+    expect(args.join(' ')).toContain('OwningProcess');
+    expect(args.join(' ')).not.toContain('netstat');
+  });
+
+  it('preserves Windows listener command failures', () => {
+    const runner = vi.fn(() => {
+      throw Object.assign(new Error('PowerShell exited with status 1'), {
+        stderr: 'NetTCPIP provider unavailable',
+      });
+    });
+
+    expect(() => findPidsListeningOnPort(3000, 'win32', runner)).toThrow(
+      /Get-NetTCPConnection failed.*NetTCPIP provider unavailable/i,
+    );
+  });
+
+  it('rejects malformed Windows listener command output', () => {
+    const runner = vi.fn(() => 'OwningProcess\r\n1234\r\n');
+
+    expect(() => findPidsListeningOnPort(3000, 'win32', runner)).toThrow(
+      /non-numeric PID.*OwningProcess/,
+    );
+  });
+
+  it('reports a missing lsof prerequisite actionably', () => {
+    const missing = Object.assign(new Error('spawn lsof ENOENT'), { code: 'ENOENT' });
+    const runner = vi.fn(() => {
+      throw missing;
+    });
+
+    const status = getTcpListenerInspectorStatus('linux', runner);
+
+    expect(status).toMatchObject({ available: false, command: 'lsof' });
+    expect(status.error).toMatch(/lsof is required.*Install lsof/i);
+    expect(() => assertTcpListenerInspectionAvailable('linux', runner)).toThrow(
+      /lsof is required.*Install lsof/i,
+    );
+  });
+
+  it('preserves a failing lsof prerequisite diagnostic', () => {
+    const runner = vi.fn(() => {
+      throw Object.assign(new Error('lsof exited with status 2'), {
+        stderr: 'kernel inspection denied',
+      });
+    });
+
+    expect(() => assertTcpListenerInspectionAvailable('linux', runner)).toThrow(
+      /could not run lsof.*kernel inspection denied/i,
+    );
+  });
+});
+
+describe('owned process tree membership', () => {
+  it('requires the Linux boot and session to match', () => {
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 100,
+      startTime: '1',
+      bootId: 'boot-a',
+    };
+    const listener = {
+      pid: 200,
+      processGroupId: 200,
+      sessionId: 100,
+      startTime: '2',
+      bootId: 'boot-a',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'linux')).toBe(true);
+    expect(
+      processBelongsToOwnedTree(owned, { ...listener, sessionId: 201 }, 'linux'),
+    ).toBe(false);
+    expect(
+      processBelongsToOwnedTree(owned, { ...listener, bootId: 'boot-b' }, 'linux'),
+    ).toBe(false);
+  });
+
+  it('requires the macOS boot and process group to match', () => {
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 0,
+      startTime: '1',
+      bootId: 'boot-a',
+    };
+    const listener = {
+      pid: 200,
+      processGroupId: 100,
+      sessionId: 0,
+      startTime: '2',
+      bootId: 'boot-a',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'darwin')).toBe(true);
+    expect(
+      processBelongsToOwnedTree(
+        owned,
+        { ...listener, processGroupId: 201 },
+        'darwin',
+      ),
+    ).toBe(false);
+    expect(
+      processBelongsToOwnedTree(owned, { ...listener, bootId: 'boot-b' }, 'darwin'),
+    ).toBe(false);
+  });
+
+  it('requires bounded, cycle-safe Windows ancestry to the supervisor', () => {
+    const processes = new Map([
+      [400, { parentPid: 300, startTime: '4' }],
+      [300, { parentPid: 200, startTime: '3' }],
+      [200, { parentPid: 100, startTime: '2' }],
+      [100, { parentPid: 0, startTime: '1' }],
+      [500, { parentPid: 600, startTime: '5' }],
+      [600, { parentPid: 500, startTime: '5' }],
+    ]);
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 100,
+      startTime: '1',
+    };
+    const listener = {
+      pid: 400,
+      processGroupId: 400,
+      sessionId: 400,
+      startTime: '4',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'win32', processes)).toBe(true);
+    expect(windowsProcessHasAncestor(listener, owned, processes, 2)).toBe(false);
+    expect(windowsProcessHasAncestor(listener, owned, processes, 3)).toBe(true);
+    expect(
+      windowsProcessHasAncestor(
+        { ...listener, pid: 500, startTime: '5' },
+        owned,
+        processes,
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects reused Windows parent pids', () => {
+    const processes = new Map([
+      [400, { parentPid: 100, startTime: '4' }],
+      [100, { parentPid: 0, startTime: '5' }],
+    ]);
+    const owned = {
+      pid: 100,
+      processGroupId: 100,
+      sessionId: 100,
+      startTime: '5',
+    };
+    const listener = {
+      pid: 400,
+      processGroupId: 400,
+      sessionId: 400,
+      startTime: '4',
+    };
+
+    expect(processBelongsToOwnedTree(owned, listener, 'win32', processes)).toBe(false);
+  });
+
+  it('fails closed on malformed or contradictory Windows process snapshots', () => {
+    expect(parseWindowsProcessRecords('0 0 1\n100 0 1\n200 100 2\n')).toEqual(
+      new Map([
+        [100, { parentPid: 0, startTime: '1' }],
+        [200, { parentPid: 100, startTime: '2' }],
+      ]),
+    );
+    expect(parseWindowsProcessRecords('not-a-process-row')).toBeNull();
+    expect(parseWindowsProcessRecords('200 100 1\n200 101 1')).toBeNull();
   });
 });
 

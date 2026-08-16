@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startCommand } from './start.js';
 
@@ -8,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   getPageUrl: vi.fn(),
   closeBrowser: vi.fn(),
   startRecording: vi.fn(),
+  preparePrivateNetworkEvidence: vi.fn(),
+  startPrivateNetworkCapture: vi.fn(),
   ensureOutputDir: vi.fn(),
   generateTimestamp: vi.fn(),
   generateSessionDirName: vi.fn(),
@@ -15,16 +18,25 @@ const mocks = vi.hoisted(() => ({
   loadSession: vi.fn(),
   hasActiveSession: vi.fn(),
   clearSession: vi.fn(),
+  generateAgentBrowserNamespace: vi.fn(),
   generateAgentBrowserSessionName: vi.fn(),
   resolveSessionControlDir: vi.fn(),
   writeMetadata: vi.fn(),
   discoverBrowserExecutable: vi.fn(),
   browserSetupError: vi.fn(),
   prepareAgentBrowserSocketDir: vi.fn(),
+  resolveAgentBrowserRuntimeDir: vi.fn(),
   captureAgentBrowserProcessIdentity: vi.fn(),
+  canAddressOwnedBrowserSession: vi.fn(),
   cleanupFailedStart: vi.fn(),
   startOwnedEnvironment: vi.fn(),
+  resolveAgentBrowserRuntime: vi.fn(),
+  loadIsolatedAgentBrowserConfig: vi.fn(),
+  writeIsolatedAgentBrowserConfig: vi.fn(),
+  claimSessionOperation: vi.fn(),
   registerSession: vi.fn(),
+  releaseSessionOperation: vi.fn(),
+  sessionHasLiveOperation: vi.fn(),
   unregisterSession: vi.fn(),
   execSync: vi.fn(),
 }));
@@ -46,6 +58,10 @@ vi.mock('../browser/session.js', () => ({
 vi.mock('../browser/capture.js', () => ({
   startRecording: mocks.startRecording,
 }));
+vi.mock('../browser/evidence.js', () => ({
+  preparePrivateNetworkEvidence: mocks.preparePrivateNetworkEvidence,
+  startPrivateNetworkCapture: mocks.startPrivateNetworkCapture,
+}));
 
 vi.mock('../browser/discovery.js', () => ({
   discoverBrowserExecutable: mocks.discoverBrowserExecutable,
@@ -54,7 +70,14 @@ vi.mock('../browser/discovery.js', () => ({
 
 vi.mock('../browser/runtime.js', () => ({
   prepareAgentBrowserSocketDir: mocks.prepareAgentBrowserSocketDir,
+  resolveAgentBrowserRuntimeDir: mocks.resolveAgentBrowserRuntimeDir,
   captureAgentBrowserProcessIdentity: mocks.captureAgentBrowserProcessIdentity,
+}));
+
+vi.mock('../browser/isolation.js', () => ({
+  resolveAgentBrowserRuntime: mocks.resolveAgentBrowserRuntime,
+  loadIsolatedAgentBrowserConfig: mocks.loadIsolatedAgentBrowserConfig,
+  writeIsolatedAgentBrowserConfig: mocks.writeIsolatedAgentBrowserConfig,
 }));
 
 vi.mock('../artifacts/bundle.js', () => ({
@@ -68,11 +91,13 @@ vi.mock('../session/state.js', () => ({
   loadSession: mocks.loadSession,
   hasActiveSession: mocks.hasActiveSession,
   clearSession: mocks.clearSession,
+  generateAgentBrowserNamespace: mocks.generateAgentBrowserNamespace,
   generateAgentBrowserSessionName: mocks.generateAgentBrowserSessionName,
   resolveSessionControlDir: mocks.resolveSessionControlDir,
 }));
 
 vi.mock('../session/lifecycle.js', () => ({
+  canAddressOwnedBrowserSession: mocks.canAddressOwnedBrowserSession,
   cleanupFailedStart: mocks.cleanupFailedStart,
 }));
 vi.mock('../environment/runtime.js', () => ({
@@ -80,7 +105,10 @@ vi.mock('../environment/runtime.js', () => ({
 }));
 
 vi.mock('../session/registry.js', () => ({
+  claimSessionOperation: mocks.claimSessionOperation,
   registerSession: mocks.registerSession,
+  releaseSessionOperation: mocks.releaseSessionOperation,
+  sessionHasLiveOperation: mocks.sessionHasLiveOperation,
   unregisterSession: mocks.unregisterSession,
 }));
 
@@ -114,10 +142,15 @@ describe('startCommand', () => {
     mocks.hasActiveSession.mockReturnValue(false);
     mocks.loadSession.mockReturnValue(null);
     mocks.resolveSessionControlDir.mockReturnValue('/project/proofshot-artifacts');
+    mocks.ensureOutputDir.mockImplementation((directory: string) => directory);
     mocks.generateTimestamp.mockReturnValue('2026-04-08_07-28-00');
     mocks.generateSessionDirName.mockReturnValue('2026-04-08_07-28-00_test');
     mocks.generateAgentBrowserSessionName.mockReturnValue('ps-2026-04-deadbeef1234');
+    mocks.generateAgentBrowserNamespace.mockReturnValue('psn-deadbeef1234');
     mocks.prepareAgentBrowserSocketDir.mockReturnValue('/run/user/1000/proofshot');
+    mocks.resolveAgentBrowserRuntimeDir.mockReturnValue(
+      '/run/user/1000/proofshot/namespaces/psn-deadbeef1234/run',
+    );
     mocks.discoverBrowserExecutable.mockReturnValue('/usr/bin/chromium');
     mocks.getPageUrl.mockReturnValue('');
     mocks.captureAgentBrowserProcessIdentity.mockReturnValue({
@@ -126,8 +159,48 @@ describe('startCommand', () => {
       sessionId: 4001,
       startTime: '12345',
     });
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
+    mocks.resolveAgentBrowserRuntime.mockReturnValue({
+      contract: 'managed-preflight-v1',
+      executablePath: '/opt/node24/bin/agent-browser',
+      nativePath: '/opt/node24/lib/agent-browser-linux-x64',
+      nativeSha256: 'b'.repeat(64),
+      nodeVersion: 'v24.19.0',
+      sha256: 'a'.repeat(64),
+      version: '0.34.0',
+    });
+    mocks.loadIsolatedAgentBrowserConfig.mockReturnValue({});
+    mocks.writeIsolatedAgentBrowserConfig.mockReturnValue(
+      '/audit/private/agent-browser/config.json',
+    );
+    mocks.claimSessionOperation.mockImplementation((session, kind) => {
+      const lease = {
+        id: `${kind}-lease`,
+        kind,
+        owner: {
+          pid: process.pid,
+          processGroupId: process.pid,
+          sessionId: process.pid,
+          startTime: 'test',
+        },
+        startedAt: new Date().toISOString(),
+      };
+      session.operationLease = lease;
+      mocks.registerSession(session);
+      return lease;
+    });
+    mocks.releaseSessionOperation.mockImplementation((session) => {
+      delete session.operationLease;
+    });
+    mocks.sessionHasLiveOperation.mockReturnValue(false);
     mocks.startOwnedEnvironment.mockResolvedValue(null);
+    mocks.preparePrivateNetworkEvidence.mockReturnValue({
+      privateDirectory: '/audit/private/agent-browser',
+      harPath: '/audit/private/agent-browser/network.har',
+      requestsPath: '/audit/private/agent-browser/requests.json',
+      summaryPath: '/audit/network-summary.json',
+    });
     mocks.execSync.mockImplementation((command: string) => {
       if (command === 'git branch --show-current') return 'main';
       if (command === 'git rev-parse HEAD') return 'deadbeef';
@@ -152,13 +225,24 @@ describe('startCommand', () => {
     await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
     expect(mocks.startRecording).toHaveBeenCalledTimes(3);
     expect(mocks.cleanupFailedStart).toHaveBeenCalledTimes(1);
-    expect(mocks.saveSession).toHaveBeenCalled();
     expect(mocks.registerSession).toHaveBeenCalled();
-    expect(mocks.clearSession).toHaveBeenCalledWith('/project/proofshot-artifacts');
     expect(mocks.unregisterSession).toHaveBeenCalledWith('ps-2026-04-deadbeef1234');
   });
 
-  it('clears discoverable control state when recording never starts', async () => {
+  it('refuses incompatible inherited browser state before creating evidence', async () => {
+    mocks.loadIsolatedAgentBrowserConfig.mockImplementationOnce(() => {
+      throw new Error('AGENT_BROWSER_PROFILE is incompatible');
+    });
+
+    await expect(startCommand({})).rejects.toThrow('process.exit:1');
+
+    expect(mocks.resolveAgentBrowserRuntime).not.toHaveBeenCalled();
+    expect(mocks.ensureOutputDir).not.toHaveBeenCalled();
+    expect(mocks.openBrowser).not.toHaveBeenCalled();
+    expect(mocks.registerSession).not.toHaveBeenCalled();
+  });
+
+  it('clears discoverable registry state when recording never starts', async () => {
     mocks.startRecording.mockImplementation(() => {
       throw new Error('Recording already active');
     });
@@ -169,7 +253,7 @@ describe('startCommand', () => {
     await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
     expect(mocks.startRecording).toHaveBeenCalledTimes(3);
     expect(mocks.cleanupFailedStart).toHaveBeenCalledTimes(1);
-    expect(mocks.clearSession).toHaveBeenCalledWith('/project/proofshot-artifacts');
+    expect(mocks.unregisterSession).toHaveBeenCalledWith('ps-2026-04-deadbeef1234');
   });
 
   it('closes the session-scoped browser when browser open fails', async () => {
@@ -182,7 +266,60 @@ describe('startCommand', () => {
     await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
     expect(mocks.cleanupFailedStart).toHaveBeenCalledTimes(1);
     expect(mocks.startRecording).not.toHaveBeenCalled();
-    expect(mocks.clearSession).toHaveBeenCalledWith('/project/proofshot-artifacts');
+    expect(mocks.unregisterSession).toHaveBeenCalledWith('ps-2026-04-deadbeef1234');
+  });
+
+  it('does not print credential-bearing URLs or commands on start failure', async () => {
+    const credential = 'private-start-credential';
+    const targetUrl =
+      `https://user:${credential}@example.test/token/private-path?signature=${credential}`;
+    mocks.openBrowser.mockImplementation(() => {
+      throw new Error(
+        `Authorization: Basic ${credential} failed while opening ${targetUrl}`,
+      );
+    });
+    mocks.ensureDevServer.mockResolvedValue({
+      alreadyRunning: false,
+      port: 3000,
+      process: {
+        pid: 5001,
+        processGroupId: 5001,
+        sessionId: 5001,
+        startTime: 'server-start',
+      },
+    });
+
+    const commandPromise = startCommand({
+      run: `npm run dev -- --token=${credential}`,
+      url: targetUrl,
+    }).catch((error) => error);
+    await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
+
+    const output = JSON.stringify(vi.mocked(console.error).mock.calls);
+    expect(output).not.toContain(credential);
+    expect(output).not.toContain('private-path');
+    expect(output).not.toContain('npm run dev');
+  });
+
+  it('persists network cleanup state before starting HAR capture', async () => {
+    mocks.startPrivateNetworkCapture.mockImplementation(() => {
+      const persistedState = mocks.registerSession.mock.calls.at(-1)?.[0];
+      expect(persistedState).toMatchObject({
+        networkCaptureStarted: false,
+        networkCaptureActive: true,
+      });
+      throw new Error('HAR start response was lost');
+    });
+
+    const commandPromise = startCommand({}).catch((error) => error);
+    await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
+
+    expect(mocks.cleanupFailedStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        networkCaptureStarted: false,
+        networkCaptureActive: true,
+      }),
+    );
   });
 
   it('persists the intended target and stable control path with custom evidence output', async () => {
@@ -198,15 +335,61 @@ describe('startCommand', () => {
       'ps-2026-04-deadbeef1234',
       expect.objectContaining({ executablePath: '/usr/bin/chromium' }),
     );
-    const finalState = mocks.saveSession.mock.calls.at(-1)?.[0];
+    const finalState = mocks.registerSession.mock.calls.at(-1)?.[0];
     expect(finalState).toMatchObject({
       outputDir: '/audit/custom-evidence',
       targetUrl: 'http://127.0.0.1:43171/getting-started',
       recordingActive: true,
       lifecycleStatus: 'active',
-      agentBrowserSocketDir: '/run/user/1000/proofshot',
+      agentBrowserSocketDir:
+        '/run/user/1000/proofshot/namespaces/psn-deadbeef1234/run',
+      agentBrowserSocketRoot: '/run/user/1000/proofshot',
+      agentBrowserNamespace: 'psn-deadbeef1234',
+      agentBrowserAllowedDomains: ['127.0.0.1'],
+      agentBrowserConfigPath: '/audit/private/agent-browser/config.json',
+      agentBrowserExecutablePath: '/opt/node24/bin/agent-browser',
+      agentBrowserExecutableSha256: 'a'.repeat(64),
+      agentBrowserVersion: '0.34.0',
+      agentBrowserRuntime: {
+        contract: 'managed-preflight-v1',
+        executablePath: '/opt/node24/bin/agent-browser',
+        nativePath: '/opt/node24/lib/agent-browser-linux-x64',
+        nativeSha256: 'b'.repeat(64),
+        nodeVersion: 'v24.19.0',
+        sha256: 'a'.repeat(64),
+        version: '0.34.0',
+      },
     });
-    expect(mocks.saveSession.mock.calls.every((call) => call[1] === '/project/proofshot-artifacts')).toBe(true);
+    expect(finalState.controlDir).toBe('/project/proofshot-artifacts');
+  });
+
+  it('uses the canonical output paths returned by directory validation', async () => {
+    const requestedOutputDirectory = '/audit/custom-evidence';
+    const canonicalOutputDirectory = '/private/audit/custom-evidence';
+    const canonicalSessionDirectory = path.join(
+      canonicalOutputDirectory,
+      '2026-04-08_07-28-00_test_ps-2026-04-deadbeef1234',
+    );
+    mocks.ensureOutputDir.mockImplementation((directory: string) =>
+      directory === requestedOutputDirectory ? canonicalOutputDirectory : directory,
+    );
+
+    await startCommand({ output: requestedOutputDirectory });
+
+    const finalState = mocks.registerSession.mock.calls.at(-1)?.[0];
+    expect(finalState).toMatchObject({
+      outputDir: canonicalOutputDirectory,
+      sessionDir: canonicalSessionDirectory,
+      videoPath: path.join(canonicalSessionDirectory, 'session.webm'),
+    });
+    expect(mocks.ensureOutputDir).toHaveBeenNthCalledWith(
+      2,
+      canonicalSessionDirectory,
+    );
+    expect(mocks.ensureOutputDir).toHaveBeenNthCalledWith(
+      3,
+      path.join(canonicalSessionDirectory, 'private', 'environment'),
+    );
   });
 
   it('persists server ownership before waiting for readiness', async () => {
@@ -233,9 +416,8 @@ describe('startCommand', () => {
     await vi.runAllTimersAsync();
     await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
 
-    expect(mocks.saveSession).toHaveBeenCalledWith(
+    expect(mocks.registerSession).toHaveBeenCalledWith(
       expect.objectContaining({ serverProcess }),
-      '/project/proofshot-artifacts',
     );
     expect(mocks.cleanupFailedStart).toHaveBeenCalledWith(
       expect.objectContaining({ serverProcess }),
@@ -251,7 +433,6 @@ describe('startCommand', () => {
     const commandPromise = startCommand({}).catch((error) => error);
     await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
 
-    expect(mocks.clearSession).not.toHaveBeenCalled();
     expect(mocks.unregisterSession).not.toHaveBeenCalled();
     expect(mocks.registerSession).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -300,12 +481,11 @@ describe('startCommand', () => {
     expect(mocks.registerSession).toHaveBeenCalledWith(
       expect.objectContaining({ environment: environmentState }),
     );
-    expect(mocks.saveSession).toHaveBeenLastCalledWith(
+    expect(mocks.registerSession).toHaveBeenLastCalledWith(
       expect.objectContaining({
         recordingStartedAt: expect.any(String),
         recordingActive: true,
       }),
-      '/project/proofshot-artifacts',
     );
   });
 });

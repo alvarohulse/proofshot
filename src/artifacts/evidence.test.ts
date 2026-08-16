@@ -46,6 +46,10 @@ describe('canonical evidence and verdicts', () => {
       environmentEvent('Error: Vite stack exploded', 10),
       environmentEvent('GET /health', 11),
       environmentEvent('Error: Vite stack exploded', 12),
+      environmentEvent(
+        'Authorization: Basic cHJpdmF0ZTpzZWNyZXQ=',
+        12.5,
+      ),
       environmentEvent('[process stopped by ProofShot]', 13),
     ];
     fs.writeFileSync(
@@ -137,7 +141,7 @@ describe('canonical evidence and verdicts', () => {
       evidence.sources.find((source) => source.origin === 'browser'),
     ).toEqual(
       expect.objectContaining({
-        title: 'https://example.test',
+        title: 'https://example.test/',
         group: 'browser',
       }),
     );
@@ -149,6 +153,9 @@ describe('canonical evidence and verdicts', () => {
     expect(verdict.mediaTruncated).toBe(true);
     expect(fs.existsSync(path.join(sessionDir, 'evidence.json'))).toBe(true);
     expect(fs.existsSync(path.join(sessionDir, 'verdict.json'))).toBe(true);
+    expect(
+      fs.readFileSync(path.join(sessionDir, 'evidence.json'), 'utf-8'),
+    ).not.toContain('cHJpdmF0ZTpzZWNyZXQ=');
   });
 
   it('does not treat pre-recording lifecycle time as truncated media', () => {
@@ -237,6 +244,73 @@ describe('canonical evidence and verdicts', () => {
       visuallyBlank: true,
     });
     expect(verdict.status).toBe('INCOMPLETE');
+  });
+
+  it('does not accept synthetic DOM mutation as final behavioral proof', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-synthetic-action-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'synthetic-action',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'eval [REDACTED_SCRIPT]',
+          category: 'synthetic-dom',
+          intent: {
+            command: 'eval',
+            summary: 'eval [REDACTED_SCRIPT]',
+          },
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain(
+      'Synthetic DOM mutation is diagnostic-only and cannot serve as final behavioral proof.',
+    );
+  });
+
+  it('marks interrupted browser actions without an outcome as incomplete', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-interrupted-action-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'interrupted-action',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'click @e1',
+          category: 'pointer-keyboard',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain(
+      '1 browser action(s) had no recorded outcome.',
+    );
   });
 });
 

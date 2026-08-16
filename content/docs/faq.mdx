@@ -14,7 +14,7 @@ If your agent can run shell commands, it works with ProofShot. The CLI is agent-
 No. Skills install at user level (your home directory), so one `proofshot install` works across all projects on your machine. The optional `proofshot.config.json` is only needed if you want to customize defaults like port or viewport size.
 
 **What does the agent-browser dependency do?**
-[agent-browser](https://github.com/vercel-labs/agent-browser) is a Rust CLI + Node.js daemon that manages a headless Chromium browser. ProofShot delegates all browser work to it — opening pages, clicking elements, taking screenshots, recording video. It's installed automatically with ProofShot.
+[agent-browser](https://github.com/vercel-labs/agent-browser) is a Rust CLI + Node.js daemon that manages Chromium. ProofShot pins 0.34.0, requires its Node 24 runtime, and delegates browser interaction/recording to it. A dedicated launcher lets the project continue using its own runtime, such as Node 22 from `.nvmrc`.
 
 **Do I need ffmpeg?**
 No. ffmpeg is optional. Without it, ProofShot skips video trimming (you get the full uncut recording) and `.webm` to `.mp4` conversion (GitHub PR comments may not display `.webm` inline). Everything else works the same.
@@ -28,7 +28,7 @@ The skill file installed by `proofshot install` teaches your agent the three-ste
 Stable handles to interactive elements on a page. When your agent runs `proofshot exec snapshot -i`, it gets a list like `@e1: button "Submit"`, `@e2: input "Email"`. These references persist across commands within a session, so the agent can target elements reliably without CSS selectors.
 
 **Can I run multiple sessions at the same time?**
-Yes. Session state (`.session.json`) lives in each project's configured/default output directory, not globally. Different projects can run concurrently. A one-run `--output` override moves evidence without changing where that project finds active control state.
+Yes. Registry-backed session IDs, browser namespaces, sockets, operation leases, and evidence directories are independent even in one worktree. Commands auto-select one live match; with several, pass the printed ID using `--session`.
 
 **What languages does error detection support?**
 JavaScript/Node.js, Python, Ruby/Rails, Go, Java/Kotlin, Rust, PHP, C#/.NET, Elixir/Phoenix, plus generic patterns for `FATAL`, `CRITICAL`, and segfaults. See [How to add error patterns](/docs/guides/add-error-pattern) to extend support.
@@ -41,8 +41,17 @@ When ffmpeg is available, `proofshot stop` cuts dead time from the video — kee
 **"No active session" when running exec or stop**
 You need to run `proofshot start` before `exec`. `stop` is idempotent, so it succeeds without changing artifacts when the session is already stopped.
 
+**"Multiple active sessions" when running exec or stop**
+Run `proofshot session list`, then pass the exact ID with `proofshot exec --session ID ...` or `proofshot stop --session ID`.
+
+**agent-browser version or Node errors**
+Check the repository runtime (`.nvmrc` and `node --version`) separately from the configured agent-browser launcher. ProofShot requires the launcher to report agent-browser 0.34.0 under Node 24; do not change the project's runtime to fix the browser tool.
+
 **Chrome is installed, but an isolated HOME cannot find it**
 ProofShot checks system paths and executable-only browser caches under the real account home without reusing a browser profile or storage. You can also pass one exact path with `proofshot start --browser-executable /absolute/path/to/chrome`. If nothing is runnable, run the `agent-browser install` command printed by `proofshot start`.
+
+**Can ProofShot use my Chrome profile, saved state, cloud provider, or CDP browser?**
+No. Final proof uses a fresh local owned Chromium session. ProofShot rejects provider/CDP/auto-connect/profile/state/proxy modes and copies a validated config into private per-session state.
 
 **Server errors aren't being detected**
 Server log capture only works when ProofShot starts the server itself via `--run`. If your server was already running on the port, ProofShot skips spawning and gets no logs.
