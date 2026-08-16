@@ -1,7 +1,11 @@
 import chalk from 'chalk';
 import { PROOFSHOT_VERSION } from '../version.js';
 import { findConfigPath, loadConfig } from '../utils/config.js';
-import { findExecutablePath, readCommandVersion } from '../utils/process.js';
+import {
+  findExecutablePath,
+  getTcpListenerInspectorStatus,
+  readCommandVersion,
+} from '../utils/process.js';
 import { resolveSessionControlDir } from '../session/state.js';
 import { listRegisteredSessions } from '../session/registry.js';
 import {
@@ -29,6 +33,10 @@ export async function doctorCommand(): Promise<void> {
 
   const agentBrowserPath = findExecutablePath('agent-browser');
   const ffmpegPath = findExecutablePath('ffmpeg');
+  const listenerInspector = getTcpListenerInspectorStatus();
+  const listenerInspectorPath = listenerInspector.command
+    ? findExecutablePath(listenerInspector.command)
+    : null;
   const agentBrowserVersion = readCommandVersion('agent-browser');
   const ffmpegVersion = readCommandVersion('ffmpeg');
 
@@ -51,6 +59,18 @@ export async function doctorCommand(): Promise<void> {
   console.log(statusLabel(Boolean(ffmpegPath), 'ffmpeg'));
   printLine('Path', ffmpegPath || chalk.dim('not found'));
   printLine('Version', ffmpegVersion || chalk.dim('not available'));
+  console.log('');
+
+  console.log(
+    statusLabel(
+      listenerInspector.available,
+      `${listenerInspector.label} (TCP listener inspection)`,
+    ),
+  );
+  printLine('Path', listenerInspectorPath || chalk.dim('not found'));
+  if (listenerInspector.error) {
+    printLine('Issue', listenerInspector.error);
+  }
   console.log('');
 
   console.log(statusLabel(activeSessions.length > 0, 'active session'));

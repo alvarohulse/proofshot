@@ -2,13 +2,16 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  assertTcpListenerInspectionAvailable,
   captureProcessIdentity,
   findExecutablePath,
+  findPidsListeningOnPort,
   getShellExecutable,
+  getTcpListenerInspectorStatus,
   isDetachedProcessIdentity,
   parseLinuxProcStat,
+  parseTcpListenerPidOutput,
   parseUnixProcessIdentity,
-  parseWindowsNetstatOutput,
   parseWindowsProcessRecords,
   processBelongsToOwnedTree,
   readCommandVersion,
@@ -49,28 +52,80 @@ describe('getShellExecutable', () => {
   });
 });
 
-describe('parseWindowsNetstatOutput', () => {
-  it('returns unique listening pids for the requested port', () => {
-    const output = `
-Proto  Local Address          Foreign Address        State           PID
-TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       1234
-TCP    [::]:3000              [::]:0                 LISTENING       5678
-TCP    127.0.0.1:3000         127.0.0.1:51722        ESTABLISHED     9999
-TCP    0.0.0.0:4000           0.0.0.0:0              LISTENING       4321
-TCP    [::]:3000              [::]:0                 LISTENING       5678
-UDP    0.0.0.0:3000           *:*                                    7777
-`;
-
-    expect(parseWindowsNetstatOutput(output, 3000)).toEqual([1234, 5678]);
+describe('TCP listener inspection', () => {
+  it('parses unique numeric listener pids', () => {
+    expect(parseTcpListenerPidOutput('5678\r\n 1234 \r\n5678\r\n')).toEqual([
+      1234,
+      5678,
+    ]);
   });
 
-  it('invalidates the snapshot when any TCP row is malformed', () => {
-    const output = `
-TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       1234
-TCP    malformed:3000         0.0.0.0:0              LISTENING       5678
-`;
+  it('rejects non-numeric listener output', () => {
+    expect(() => parseTcpListenerPidOutput('1234\nAccess denied\n')).toThrow(
+      /non-numeric PID/,
+    );
+  });
 
-    expect(parseWindowsNetstatOutput(output, 3000)).toEqual([]);
+  it('queries Windows listeners through locale-independent PowerShell objects', () => {
+    const runner = vi.fn(
+      (_command: string, _args: readonly string[]) => '5678\r\n1234\r\n',
+    );
+
+    expect(findPidsListeningOnPort(3000, 'win32', runner)).toEqual([1234, 5678]);
+    expect(runner).toHaveBeenCalledTimes(1);
+    const [command, args] = runner.mock.calls[0];
+    expect(command).toBe('powershell.exe');
+    expect(args.join(' ')).toContain('Get-NetTCPConnection -State Listen');
+    expect(args.join(' ')).toContain('LocalPort -eq 3000');
+    expect(args.join(' ')).toContain('OwningProcess');
+    expect(args.join(' ')).not.toContain('netstat');
+  });
+
+  it('preserves Windows listener command failures', () => {
+    const runner = vi.fn(() => {
+      throw Object.assign(new Error('PowerShell exited with status 1'), {
+        stderr: 'NetTCPIP provider unavailable',
+      });
+    });
+
+    expect(() => findPidsListeningOnPort(3000, 'win32', runner)).toThrow(
+      /Get-NetTCPConnection failed.*NetTCPIP provider unavailable/i,
+    );
+  });
+
+  it('rejects malformed Windows listener command output', () => {
+    const runner = vi.fn(() => 'OwningProcess\r\n1234\r\n');
+
+    expect(() => findPidsListeningOnPort(3000, 'win32', runner)).toThrow(
+      /non-numeric PID.*OwningProcess/,
+    );
+  });
+
+  it('reports a missing lsof prerequisite actionably', () => {
+    const missing = Object.assign(new Error('spawn lsof ENOENT'), { code: 'ENOENT' });
+    const runner = vi.fn(() => {
+      throw missing;
+    });
+
+    const status = getTcpListenerInspectorStatus('linux', runner);
+
+    expect(status).toMatchObject({ available: false, command: 'lsof' });
+    expect(status.error).toMatch(/lsof is required.*Install lsof/i);
+    expect(() => assertTcpListenerInspectionAvailable('linux', runner)).toThrow(
+      /lsof is required.*Install lsof/i,
+    );
+  });
+
+  it('preserves a failing lsof prerequisite diagnostic', () => {
+    const runner = vi.fn(() => {
+      throw Object.assign(new Error('lsof exited with status 2'), {
+        stderr: 'kernel inspection denied',
+      });
+    });
+
+    expect(() => assertTcpListenerInspectionAvailable('linux', runner)).toThrow(
+      /could not run lsof.*kernel inspection denied/i,
+    );
   });
 });
 

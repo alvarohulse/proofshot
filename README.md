@@ -69,6 +69,8 @@ proofshot install
 
 The first command installs the CLI and the exact agent-browser 0.34.0 package. agent-browser requires Node 24; managed environments should expose it through a dedicated Node 24 launcher so project servers can continue using their repository runtime (for example, Node 22 from `.nvmrc`). The second command installs the ProofShot skill at user level.
 
+Starting a dev server with `--run` also requires `lsof` on Linux/macOS; Windows uses PowerShell's `Get-NetTCPConnection`. Run `proofshot doctor` to verify the listener-inspection prerequisite.
+
 ## How It Works
 
 Three-step workflow: **start**, **test**, **stop**.
@@ -250,7 +252,7 @@ proofshot clean
 
 ### `proofshot doctor`
 
-Print the current ProofShot environment, including config path, browser mode, viewport, installed binaries, and any active session.
+Print the current ProofShot environment, including config path, browser mode, viewport, installed binaries, TCP listener-inspection support, and any active session.
 
 ```bash
 proofshot doctor

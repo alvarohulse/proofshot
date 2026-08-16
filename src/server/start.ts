@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { isPortOpen, waitForPort } from '../utils/port.js';
 import {
+  assertTcpListenerInspectionAvailable,
   captureProcessIdentity,
   getShellExecutable,
   isDetachedProcessIdentity,
@@ -70,6 +71,8 @@ export async function ensureDevServer(
   logPath: string,
   onStarted?: (result: ServerStartResult) => void,
 ): Promise<ServerStartResult> {
+  assertTcpListenerInspectionAvailable();
+
   // Port ownership is not session ownership. Never kill an unrelated listener.
   if (await isPortOpen(port)) {
     throw new Error(
@@ -132,7 +135,15 @@ export async function ensureDevServer(
   // Small delay for stability
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  if (!ownedProcessTreeOwnsListeningPort(processIdentity, port)) {
+  let ownsListener: boolean;
+  try {
+    ownsListener = ownedProcessTreeOwnsListeningPort(processIdentity, port);
+  } catch (error) {
+    await terminateOwnedProcessTree(processIdentity);
+    throw error;
+  }
+
+  if (!ownsListener) {
     await terminateOwnedProcessTree(processIdentity);
     throw new Error(
       `The configured dev server process does not exclusively own the TCP listener on port ${port}.\n` +

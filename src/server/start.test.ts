@@ -14,6 +14,7 @@ import { ensureDevServer } from './start.js';
 
 const roots: string[] = [];
 const ownedProcesses: ProcessIdentity[] = [];
+const originalPath = process.env.PATH;
 
 function createRoot(): string {
   const cache = path.join(os.userInfo().homedir, '.cache');
@@ -25,6 +26,13 @@ function createRoot(): string {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function writeExecutable(root: string, name: string, source: string): string {
+  const executablePath = path.join(root, name);
+  fs.writeFileSync(executablePath, source, { mode: 0o700 });
+  fs.chmodSync(executablePath, 0o700);
+  return executablePath;
 }
 
 async function waitForOwnedTreeExit(
@@ -58,6 +66,7 @@ function readServer(port: number): Promise<string> {
 }
 
 afterEach(async () => {
+  process.env.PATH = originalPath;
   for (const identity of ownedProcesses.splice(0)) {
     await terminateOwnedProcessTree(identity, { graceMs: 200 });
   }
@@ -67,6 +76,45 @@ afterEach(async () => {
 });
 
 describe('ensureDevServer', () => {
+  it('preflights a missing lsof before spawning or creating logs', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const root = createRoot();
+    const logPath = path.join(root, 'server.log');
+    const onStarted = vi.fn();
+    process.env.PATH = root;
+
+    await expect(
+      ensureDevServer('unused command', 3000, 250, logPath, onStarted),
+    ).rejects.toThrow(/lsof is required.*Install lsof/i);
+    expect(onStarted).not.toHaveBeenCalled();
+    expect(fs.existsSync(logPath)).toBe(false);
+  });
+
+  it('preflights a failing lsof before spawning or creating logs', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const root = createRoot();
+    const logPath = path.join(root, 'server.log');
+    const onStarted = vi.fn();
+    writeExecutable(
+      root,
+      'lsof',
+      '#!/bin/sh\necho "listener inspection unavailable" >&2\nexit 2\n',
+    );
+    process.env.PATH = root;
+
+    await expect(
+      ensureDevServer('unused command', 3000, 250, logPath, onStarted),
+    ).rejects.toThrow(/could not run lsof.*listener inspection unavailable/i);
+    expect(onStarted).not.toHaveBeenCalled();
+    expect(fs.existsSync(logPath)).toBe(false);
+  });
+
   it('fails actionably without killing an unrelated occupied listener', async () => {
     const listener = http.createServer((_request, response) => response.end('unrelated'));
     await new Promise<void>((resolve) => listener.listen(0, '127.0.0.1', resolve));
@@ -130,6 +178,62 @@ describe('ensureDevServer', () => {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     expect(await isPortOpen(port)).toBe(false);
+  });
+
+  it('exact-cleans the owned tree and preserves a runtime inspection error', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const root = createRoot();
+    const scriptPath = path.join(root, 'server.mjs');
+    const logPath = path.join(root, 'server.log');
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "import http from 'node:http';",
+        'const port = Number(process.argv[2]);',
+        "const server = http.createServer((_req, res) => res.end('ok'));",
+        "server.listen(port, '127.0.0.1');",
+      ].join('\n'),
+    );
+    writeExecutable(
+      root,
+      'lsof',
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "-v" ]; then exit 0; fi',
+        'echo "listener inspection denied" >&2',
+        'exit 2',
+      ].join('\n'),
+    );
+    process.env.PATH = root;
+
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const address = probe.address();
+    if (!address || typeof address === 'string') throw new Error('missing probe port');
+    const port = address.port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    let startedProcess: ProcessIdentity | undefined;
+    const start = ensureDevServer(
+      `${shellQuote(process.execPath)} ${shellQuote(scriptPath)} ${port}`,
+      port,
+      3000,
+      logPath,
+      ({ process }) => {
+        startedProcess = process;
+        ownedProcesses.push(process);
+      },
+    );
+
+    await expect(start).rejects.toThrow(
+      /lsof failed while inspecting.*listener inspection denied/i,
+    );
+    if (!startedProcess) throw new Error('missing started process identity');
+    await waitForOwnedTreeExit(startedProcess);
+    expect(ownedProcessTreeIsAlive(startedProcess)).toBe(false);
   });
 
   it('rejects a same-port starter whose owned supervisor loses the bind race', async () => {
