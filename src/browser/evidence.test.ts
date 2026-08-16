@@ -228,12 +228,27 @@ describe('private browser evidence', () => {
     ['csrftoken', 'private-csrf-token'],
     ['awsaccesskeyid', 'private-access-key-id'],
     ['AwsAccessKeyId', 'private-mixed-case-access-key-id'],
+    ['accesstoken', 'private-access-token'],
+    ['refreshtoken', 'private-refresh-token'],
+    ['idtoken', 'private-id-token'],
+    ['clientsecret', 'private-client-secret'],
+    ['passwordhash', 'private-password-hash'],
+    ['authorizationcode', 'private-authorization-code'],
+    ['sessiontoken', 'private-session-token'],
+    ['bearertoken', 'private-bearer-token'],
+    ['secretaccesskey', 'private-secret-access-key'],
   ])('redacts fused structured field %s', (field, secret) => {
     const display = formatAgentBrowserOutputForDisplay({
       args: ['snapshot', '-i'],
       rawOutput: JSON.stringify({
         success: true,
-        data: { [field]: secret, monkey: 'visible', decode: 'visible' },
+        data: {
+          [field]: secret,
+          monkey: 'visible',
+          decode: 'visible',
+          bodyguard: 'visible',
+          tokenizer: 'visible',
+        },
       }),
       success: true,
     });
@@ -244,9 +259,24 @@ describe('private browser evidence', () => {
     expect(result.data[field]).toBe('[REDACTED]');
     expect(result.data.monkey).toBe('visible');
     expect(result.data.decode).toBe('visible');
+    expect(result.data.bodyguard).toBe('visible');
+    expect(result.data.tokenizer).toBe('visible');
   });
 
-  it.each(['value', 'data-access-token', 'sessionid'])(
+  it.each([
+    'value',
+    'data-access-token',
+    'sessionid',
+    'accesstoken',
+    'refreshtoken',
+    'idtoken',
+    'clientsecret',
+    'passwordhash',
+    'authorizationcode',
+    'sessiontoken',
+    'bearertoken',
+    'secretaccesskey',
+  ])(
     'redacts get attr output for secret attribute %s',
     (attribute) => {
       expect(
@@ -265,6 +295,10 @@ describe('private browser evidence', () => {
   it.each([
     ['aria-label', 'Submit'],
     ['data-testid', 'submit-button'],
+    ['monkey', 'visible-monkey'],
+    ['decode', 'visible-decode'],
+    ['bodyguard', 'visible-bodyguard'],
+    ['tokenizer', 'visible-tokenizer'],
   ])('keeps safe get attr output useful for %s', (attribute, value) => {
     expect(
       formatAgentBrowserOutputForDisplay({

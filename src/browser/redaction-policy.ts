@@ -13,12 +13,26 @@ const HIGH_CONFIDENCE_SECRET_TERMS = new Set([
   'token',
 ]);
 const URL_ONLY_SECRET_TERMS = new Set(['code', 'key']);
-const FUSED_SECRET_TERMS = new Set([
-  'authcode',
-  'authtoken',
-  'awsaccesskeyid',
-  'csrftoken',
-  'sessionid',
+const CONVENTIONAL_FUSED_SECRET_SUFFIXES = [
+  'accesskeyid',
+  'accesskey',
+  'apikey',
+  'authorization',
+  'cookie',
+  'credential',
+  'password',
+  'secret',
+  'signature',
+  'token',
+];
+const CONVENTIONAL_FUSED_SECRET_QUALIFIERS = new Set([
+  'accesskey',
+  'accesskeyid',
+  'code',
+  'hash',
+  'id',
+  'key',
+  'token',
 ]);
 const PLURAL_FIELD_TERMS = new Map([
   ['apikeys', 'apikey'],
@@ -89,11 +103,36 @@ function normalizeFieldName(value: string): string[] {
 function containsHighConfidenceSecretTerm(terms: string[]): boolean {
   return (
     terms.some((term) => HIGH_CONFIDENCE_SECRET_TERMS.has(term)) ||
-    terms.some((term) => FUSED_SECRET_TERMS.has(term)) ||
-    FUSED_SECRET_TERMS.has(terms.join('')) ||
+    terms.some(hasConventionalFusedSecretShape) ||
+    hasConventionalFusedSecretShape(terms.join('')) ||
     terms.includes('apikey') ||
     isApiKey(terms)
   );
+}
+
+// Separator-free field names are sensitive only when they end in a
+// credential noun, or begin with one followed by a bounded credential
+// qualifier. Avoid broad substring matching: bodyguard and tokenizer are not
+// secret fields, while passwordhash and authorizationcode are.
+function hasConventionalFusedSecretShape(term: string): boolean {
+  for (const suffix of CONVENTIONAL_FUSED_SECRET_SUFFIXES) {
+    if (
+      term.length > suffix.length &&
+      (term.endsWith(suffix) || term.endsWith(`${suffix}s`))
+    ) {
+      return true;
+    }
+  }
+  for (const prefix of HIGH_CONFIDENCE_SECRET_TERMS) {
+    if (!term.startsWith(prefix)) {
+      continue;
+    }
+    const qualifier = term.slice(prefix.length);
+    if (CONVENTIONAL_FUSED_SECRET_QUALIFIERS.has(qualifier)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isApiKey(terms: string[]): boolean {

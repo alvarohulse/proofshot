@@ -272,6 +272,15 @@ describe('browser interaction provenance', () => {
     ['csrftoken', 'private-csrf-token'],
     ['awsaccesskeyid', 'private-access-key-id'],
     ['AwsAccessKeyId', 'private-mixed-case-access-key-id'],
+    ['accesstoken', 'private-access-token'],
+    ['refreshtoken', 'private-refresh-token'],
+    ['idtoken', 'private-id-token'],
+    ['clientsecret', 'private-client-secret'],
+    ['passwordhash', 'private-password-hash'],
+    ['authorizationcode', 'private-authorization-code'],
+    ['sessiontoken', 'private-session-token'],
+    ['bearertoken', 'private-bearer-token'],
+    ['secretaccesskey', 'private-secret-access-key'],
   ])('redacts fused secret field %s in diagnostics and URLs', (field, secret) => {
     expect(sanitizeDiagnosticMessage(`${field}=${secret}`)).toBe(
       `${field}=[REDACTED]`,
@@ -285,7 +294,7 @@ describe('browser interaction provenance', () => {
     );
   });
 
-  it.each(['monkey', 'decode'])(
+  it.each(['monkey', 'decode', 'bodyguard', 'tokenizer'])(
     'keeps unrelated fused field %s visible in diagnostics and URLs',
     (field) => {
       expect(sanitizeDiagnosticMessage(`${field}=visible`)).toBe(

@@ -41,11 +41,30 @@ describe('browser redaction policy', () => {
     'csrftoken',
     'awsaccesskeyid',
     'AwsAccessKeyId',
+    'accesstoken',
+    'refreshtoken',
+    'idtoken',
+    'clientsecret',
+    'passwordhash',
+    'authorizationcode',
+    'sessiontoken',
+    'bearertoken',
+    'secretaccesskey',
   ])('recognizes normalized high-confidence field %s', (field) => {
     expect(isHighConfidenceSecretField(field)).toBe(true);
   });
 
-  it.each(['code', 'codes', 'key', 'keys', 'status', 'monkey', 'decode'])(
+  it.each([
+    'code',
+    'codes',
+    'key',
+    'keys',
+    'status',
+    'monkey',
+    'decode',
+    'bodyguard',
+    'tokenizer',
+  ])(
     'does not treat ambiguous or unrelated field %s as high-confidence',
     (field) => {
       expect(isHighConfidenceSecretField(field)).toBe(false);
