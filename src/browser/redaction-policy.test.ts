@@ -34,6 +34,13 @@ describe('browser redaction policy', () => {
     'api-key',
     'apiKey',
     'apiKeys',
+    'sessionid',
+    'SESSIONID',
+    'authcode',
+    'authtoken',
+    'csrftoken',
+    'awsaccesskeyid',
+    'AwsAccessKeyId',
   ])('recognizes normalized high-confidence field %s', (field) => {
     expect(isHighConfidenceSecretField(field)).toBe(true);
   });

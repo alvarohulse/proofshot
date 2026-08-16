@@ -13,6 +13,13 @@ const HIGH_CONFIDENCE_SECRET_TERMS = new Set([
   'token',
 ]);
 const URL_ONLY_SECRET_TERMS = new Set(['code', 'key']);
+const FUSED_SECRET_TERMS = new Set([
+  'authcode',
+  'authtoken',
+  'awsaccesskeyid',
+  'csrftoken',
+  'sessionid',
+]);
 const PLURAL_FIELD_TERMS = new Map([
   ['apikeys', 'apikey'],
   ['auths', 'auth'],
@@ -82,6 +89,8 @@ function normalizeFieldName(value: string): string[] {
 function containsHighConfidenceSecretTerm(terms: string[]): boolean {
   return (
     terms.some((term) => HIGH_CONFIDENCE_SECRET_TERMS.has(term)) ||
+    terms.some((term) => FUSED_SECRET_TERMS.has(term)) ||
+    FUSED_SECRET_TERMS.has(terms.join('')) ||
     terms.includes('apikey') ||
     isApiKey(terms)
   );

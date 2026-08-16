@@ -222,6 +222,63 @@ describe('private browser evidence', () => {
   });
 
   it.each([
+    ['sessionid', 'private-session-id'],
+    ['authcode', 'private-auth-code'],
+    ['authtoken', 'private-auth-token'],
+    ['csrftoken', 'private-csrf-token'],
+    ['awsaccesskeyid', 'private-access-key-id'],
+    ['AwsAccessKeyId', 'private-mixed-case-access-key-id'],
+  ])('redacts fused structured field %s', (field, secret) => {
+    const display = formatAgentBrowserOutputForDisplay({
+      args: ['snapshot', '-i'],
+      rawOutput: JSON.stringify({
+        success: true,
+        data: { [field]: secret, monkey: 'visible', decode: 'visible' },
+      }),
+      success: true,
+    });
+    const result = JSON.parse(display) as {
+      data: Record<string, unknown>;
+    };
+
+    expect(result.data[field]).toBe('[REDACTED]');
+    expect(result.data.monkey).toBe('visible');
+    expect(result.data.decode).toBe('visible');
+  });
+
+  it.each(['value', 'data-access-token', 'sessionid'])(
+    'redacts get attr output for secret attribute %s',
+    (attribute) => {
+      expect(
+        formatAgentBrowserOutputForDisplay({
+          args: ['get', 'attr', '@e1', attribute],
+          rawOutput: JSON.stringify({
+            success: true,
+            data: { value: 'private-value', origin: 'attribute' },
+          }),
+          success: true,
+        }),
+      ).toBe('[REDACTED]');
+    },
+  );
+
+  it.each([
+    ['aria-label', 'Submit'],
+    ['data-testid', 'submit-button'],
+  ])('keeps safe get attr output useful for %s', (attribute, value) => {
+    expect(
+      formatAgentBrowserOutputForDisplay({
+        args: ['get', 'attr', '@e1', attribute],
+        rawOutput: JSON.stringify({
+          success: true,
+          data: { value, origin: 'attribute' },
+        }),
+        success: true,
+      }),
+    ).toBe(value);
+  });
+
+  it.each([
     '--auth=private-auth',
     '--cookies=private-cookie',
     '--session=private-session',

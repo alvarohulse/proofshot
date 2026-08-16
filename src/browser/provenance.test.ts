@@ -265,6 +265,38 @@ describe('browser interaction provenance', () => {
     expect(message).toBe(`${field}=[REDACTED]`);
   });
 
+  it.each([
+    ['sessionid', 'private-session-id'],
+    ['authcode', 'private-auth-code'],
+    ['authtoken', 'private-auth-token'],
+    ['csrftoken', 'private-csrf-token'],
+    ['awsaccesskeyid', 'private-access-key-id'],
+    ['AwsAccessKeyId', 'private-mixed-case-access-key-id'],
+  ])('redacts fused secret field %s in diagnostics and URLs', (field, secret) => {
+    expect(sanitizeDiagnosticMessage(`${field}=${secret}`)).toBe(
+      `${field}=[REDACTED]`,
+    );
+    expect(
+      sanitizePageUrl(
+        `https://example.test/callback?${field}=${secret}&safe=yes`,
+      ),
+    ).toBe(
+      `https://example.test/callback?${field}=%5BREDACTED%5D&safe=yes`,
+    );
+  });
+
+  it.each(['monkey', 'decode'])(
+    'keeps unrelated fused field %s visible in diagnostics and URLs',
+    (field) => {
+      expect(sanitizeDiagnosticMessage(`${field}=visible`)).toBe(
+        `${field}=visible`,
+      );
+      expect(
+        sanitizePageUrl(`https://example.test/callback?${field}=visible`),
+      ).toBe(`https://example.test/callback?${field}=visible`);
+    },
+  );
+
   it('keeps ambiguous diagnostic keys visible but redacts them in URLs', () => {
     expect(
       sanitizeDiagnosticMessage(

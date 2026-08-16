@@ -331,8 +331,19 @@ function commandResultMayContainSecrets(args: string[]): boolean {
   ) {
     return true;
   }
-  if (command === 'get' && args[1]?.toLowerCase() === 'value') {
-    return true;
+  if (command === 'get') {
+    const getAction = args[1]?.toLowerCase();
+    if (getAction === 'value') {
+      return true;
+    }
+    if (getAction === 'attr') {
+      const attribute = args[3];
+      return (
+        typeof attribute === 'string' &&
+        (attribute.toLowerCase() === 'value' ||
+          isHighConfidenceSecretField(attribute))
+      );
+    }
   }
   if (command === 'find') {
     return ['fill', 'select', 'type'].some((action) =>
