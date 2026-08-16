@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  canAddressOwnedBrowserSession: vi.fn(),
   claimSessionOperation: vi.fn(),
   cleanupFailedStart: vi.fn(),
   getRegisteredSession: vi.fn(),
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../session/lifecycle.js', () => ({
+  canAddressOwnedBrowserSession: mocks.canAddressOwnedBrowserSession,
   cleanupFailedStart: mocks.cleanupFailedStart,
 }));
 vi.mock('../session/registry.js', () => ({
@@ -51,6 +53,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
   mocks.cleanupFailedStart.mockResolvedValue(undefined);
   mocks.claimSessionOperation.mockImplementation((session) => {
     const lease = {
@@ -122,6 +125,21 @@ describe('session commands', () => {
 
     expect(session.cleanupError).toBe('identity mismatch');
     expect(mocks.registerSession).toHaveBeenCalledWith(session);
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses to clean an addressable live browser session', async () => {
+    const session = buildSession({ lifecycleStatus: 'recovery' });
+    mocks.getRegisteredSession.mockReturnValue(session);
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(true);
+
+    await sessionCleanCommand({ session: session.sessionName });
+
+    expect(process.exitCode).toBe(1);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('browser session is still live'),
+    );
+    expect(mocks.cleanupFailedStart).not.toHaveBeenCalled();
     expect(mocks.unregisterSession).not.toHaveBeenCalled();
   });
 

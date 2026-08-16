@@ -1,5 +1,8 @@
 import chalk from 'chalk';
-import { cleanupFailedStart } from '../session/lifecycle.js';
+import {
+  canAddressOwnedBrowserSession,
+  cleanupFailedStart,
+} from '../session/lifecycle.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import {
   claimSessionOperation,
@@ -66,6 +69,14 @@ export async function sessionCleanCommand(options: SessionCleanOptions): Promise
 
   let failures = 0;
   for (const session of sessions) {
+    if (canAddressOwnedBrowserSession(session)) {
+      failures += 1;
+      console.error(
+        `${chalk.red('✗')} Kept ${session.sessionName}: browser session is still live; ` +
+          `use "proofshot stop --session ${session.sessionName}".`,
+      );
+      continue;
+    }
     let recoveryLease;
     try {
       recoveryLease = claimSessionOperation(session, 'recovery');

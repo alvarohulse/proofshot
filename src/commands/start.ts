@@ -29,7 +29,10 @@ import {
   type SessionState,
 } from '../session/state.js';
 import { backfillSessionAgentBrowserRuntime } from '../session/browser-runtime.js';
-import { cleanupFailedStart } from '../session/lifecycle.js';
+import {
+  canAddressOwnedBrowserSession,
+  cleanupFailedStart,
+} from '../session/lifecycle.js';
 import {
   claimSessionOperation,
   registerSession,
@@ -76,7 +79,11 @@ export async function startCommand(options: StartOptions): Promise<void> {
       process.exit(1);
       return;
     }
-    const liveSessions = existingSessions.filter(sessionHasVerifiedLiveOwnership);
+    const liveSessions = existingSessions.filter(
+      (session) =>
+        sessionHasVerifiedLiveOwnership(session) ||
+        canAddressOwnedBrowserSession(session),
+    );
     if (liveSessions.length > 0) {
       console.error(
         chalk.red('✗') +

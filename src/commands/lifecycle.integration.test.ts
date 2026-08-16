@@ -242,7 +242,10 @@ if (
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
   process.exit(0);
 }
-if (command === 'hang') {
+if (
+  command === 'wait' &&
+  process.env.FAKE_AGENT_BROWSER_HANG_WAIT === '1'
+) {
   spawnSync(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
   });
@@ -499,6 +502,72 @@ describe('isolated CLI lifecycle', () => {
     expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
     await waitForProcessExit(session.browserProcess.pid);
     cleanupProcesses.splice(cleanupProcesses.indexOf(session.browserProcess), 1);
+  }, 30000);
+
+  it('refuses force and recovery cleanup for a live legacy browser', async () => {
+    const { base, audit } = createAuditRoot();
+    const tools = writeFixtureTools(base);
+    const env = isolatedEnvironment(audit, tools);
+    fs.mkdirSync(env.HOME!, { recursive: true });
+    fs.writeFileSync(
+      path.join(audit, 'proofshot.config.json'),
+      JSON.stringify({ output: './proofshot-artifacts' }),
+    );
+
+    const start = runCli(audit, env, [
+      'start',
+      '--url',
+      'https://example.invalid/legacy-live',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+    const [session] = readRegisteredSessions(env);
+    const browserProcess = session.browserProcess;
+    cleanupProcesses.push(browserProcess);
+    const registryPath = path.join(
+      registryDirectory(env),
+      `${session.sessionName}.json`,
+    );
+    delete session.browserProcess;
+    fs.writeFileSync(registryPath, JSON.stringify(session, null, 2) + '\n');
+    const registryBefore = fs.readFileSync(registryPath, 'utf-8');
+    const browserLogBefore = fs.readFileSync(tools.browserLog, 'utf-8');
+
+    const forcedStart = runCli(audit, env, [
+      'start',
+      '--force',
+      '--url',
+      'https://example.invalid/replacement',
+      '--browser-executable',
+      tools.browserPath,
+    ]);
+    expect(forcedStart.status).toBe(1);
+    expect(forcedStart.stderr).toContain(
+      '--force cannot clean a verified live ProofShot session',
+    );
+
+    for (const cleanArgs of [
+      ['session', 'clean', '--session', session.sessionName],
+      ['session', 'clean', '--all'],
+    ]) {
+      const clean = runCli(audit, env, cleanArgs);
+      expect(clean.status).toBe(1);
+      expect(clean.stderr).toContain('browser session is still live');
+    }
+
+    expect(fs.readFileSync(registryPath, 'utf-8')).toBe(registryBefore);
+    expect(fs.readFileSync(tools.browserLog, 'utf-8')).toBe(browserLogBefore);
+    expect(processIsAlive(browserProcess.pid)).toBe(true);
+
+    const stop = runCli(audit, env, [
+      'stop',
+      '--session',
+      session.sessionName,
+    ]);
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    await waitForProcessExit(browserProcess.pid);
+    cleanupProcesses.splice(cleanupProcesses.indexOf(browserProcess), 1);
   }, 30000);
 
   it('refuses --force while stop finalizes after exact browser cleanup', async () => {
@@ -1225,11 +1294,15 @@ describe('isolated CLI lifecycle', () => {
         'exec',
         '--session',
         sessions[0].sessionName,
-        'hang',
+        'wait',
+        '10000',
       ],
       {
         cwd: audit,
-        env,
+        env: {
+          ...env,
+          FAKE_AGENT_BROWSER_HANG_WAIT: '1',
+        },
         detached: true,
         stdio: 'ignore',
       },
@@ -1261,7 +1334,7 @@ describe('isolated CLI lifecycle', () => {
     const pendingActions = JSON.parse(
       fs.readFileSync(interruptedLogPath, 'utf-8'),
     );
-    expect(pendingActions.at(-1).action).toBe('hang');
+    expect(pendingActions.at(-1).action).toBe('wait 10000');
     expect('outcome' in pendingActions.at(-1)).toBe(false);
 
     const unaffectedExec = runCli(audit, env, [

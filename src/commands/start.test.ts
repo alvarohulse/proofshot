@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   prepareAgentBrowserSocketDir: vi.fn(),
   resolveAgentBrowserRuntimeDir: vi.fn(),
   captureAgentBrowserProcessIdentity: vi.fn(),
+  canAddressOwnedBrowserSession: vi.fn(),
   cleanupFailedStart: vi.fn(),
   startOwnedEnvironment: vi.fn(),
   resolveAgentBrowserRuntime: vi.fn(),
@@ -95,6 +96,7 @@ vi.mock('../session/state.js', () => ({
 }));
 
 vi.mock('../session/lifecycle.js', () => ({
+  canAddressOwnedBrowserSession: mocks.canAddressOwnedBrowserSession,
   cleanupFailedStart: mocks.cleanupFailedStart,
 }));
 vi.mock('../environment/runtime.js', () => ({
@@ -155,6 +157,7 @@ describe('startCommand', () => {
       sessionId: 4001,
       startTime: '12345',
     });
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
     mocks.cleanupFailedStart.mockResolvedValue(undefined);
     mocks.resolveAgentBrowserRuntime.mockReturnValue({
       executablePath: '/opt/node24/bin/agent-browser',
