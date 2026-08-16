@@ -51,6 +51,17 @@ function readSensitiveAssignment(
   }
 
   const first = value[valueStart];
+  if (
+    first === '\\' &&
+    (value[valueStart + 1] === '"' || value[valueStart + 1] === "'")
+  ) {
+    const quote = value[valueStart + 1];
+    return {
+      replacement: `\\${quote}${REDACTED}\\${quote}`,
+      valueEnd: findEscapedQuotedEnd(value, valueStart),
+      valueStart,
+    };
+  }
   if (first === '"' || first === "'") {
     return {
       replacement: `${first}${REDACTED}${first}`,
@@ -66,8 +77,11 @@ function readSensitiveAssignment(
     };
   }
 
+  const delimiter = key.value.toLowerCase() === 'authorization'
+    ? /[\r\n,;]/
+    : /[\s,;&}\]]/;
   let valueEnd = valueStart;
-  while (!/[\s,;&}\]]/.test(value[valueEnd] || '')) {
+  while (valueEnd < value.length && !delimiter.test(value[valueEnd])) {
     valueEnd += 1;
   }
   if (valueEnd === valueStart) {
@@ -81,6 +95,19 @@ function readKey(
   start: number,
 ): { end: number; value: string } | null {
   const first = value[start];
+  if (
+    first === '\\' &&
+    (value[start + 1] === '"' || value[start + 1] === "'")
+  ) {
+    const end = findEscapedQuotedEnd(value, start);
+    const hasClosingQuote =
+      end > start + 3 &&
+      value[end - 2] === '\\' &&
+      value[end - 1] === value[start + 1];
+    return hasClosingQuote
+      ? { end, value: value.slice(start + 2, end - 2) }
+      : null;
+  }
   if (first === '"' || first === "'") {
     if (start > 0 && value[start - 1] === '\\') {
       return null;
@@ -124,6 +151,20 @@ function findQuotedEnd(value: string, start: number): number {
       return index + 1;
     } else if (character === '\n' || character === '\r') {
       return index;
+    }
+  }
+  return value.length;
+}
+
+function findEscapedQuotedEnd(value: string, start: number): number {
+  const quote = value[start + 1];
+  for (let index = start + 2; index < value.length - 1; index += 1) {
+    if (
+      value[index] === '\\' &&
+      value[index + 1] === quote &&
+      value[index - 1] !== '\\'
+    ) {
+      return index + 2;
     }
   }
   return value.length;

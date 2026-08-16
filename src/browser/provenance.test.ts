@@ -209,6 +209,15 @@ describe('browser interaction provenance', () => {
     expect(message).toContain('[REDACTED]');
   });
 
+  it('redacts complete unquoted authorization values', () => {
+    const message = sanitizeDiagnosticMessage(
+      'authorization=Token private-secret',
+    );
+
+    expect(message).not.toContain('private-secret');
+    expect(message).toBe('authorization=[REDACTED]');
+  });
+
   it('redacts compound secret keys and complete quoted values', () => {
     const message = sanitizeDiagnosticMessage(
       [
@@ -245,6 +254,15 @@ describe('browser interaction provenance', () => {
     expect(message).toContain('"safe":"visible"');
     expect(message).toContain('"status":"healthy"');
     expect(message).toContain('"safeList":["one","two"]');
+  });
+
+  it('redacts secret keys inside escaped JSON diagnostics', () => {
+    const message = sanitizeDiagnosticMessage(
+      String.raw`message="{\"accessToken\":\"private-access\",\"safe\":\"visible\"}"`,
+    );
+
+    expect(message).not.toContain('private-access');
+    expect(message).toContain(String.raw`\"safe\":\"visible\"`);
   });
 
   it('redacts signed URL keys and sensitive path values', () => {
