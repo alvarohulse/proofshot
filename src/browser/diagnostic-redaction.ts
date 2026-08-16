@@ -43,10 +43,10 @@ function readSensitiveAssignment(
   }
 
   let valueStart = separator + 1;
-  while (isHorizontalWhitespace(value[valueStart])) {
+  while (isWhitespace(value[valueStart])) {
     valueStart += 1;
   }
-  if (valueStart >= value.length || /[\r\n]/.test(value[valueStart])) {
+  if (valueStart >= value.length) {
     return null;
   }
 
@@ -77,16 +77,15 @@ function readSensitiveAssignment(
     };
   }
 
-  const delimiter = key.value.toLowerCase() === 'authorization'
-    ? /[\r\n,;]/
-    : /[\s,;&}\]]/;
-  let valueEnd = valueStart;
-  while (valueEnd < value.length && !delimiter.test(value[valueEnd])) {
-    valueEnd += 1;
-  }
-  if (valueEnd === valueStart) {
-    return null;
-  }
+  // Free-form values have no reliable intra-line boundary. A value beginning
+  // on a continuation line is even less structured, so consume the remainder.
+  const startsOnContinuationLine = /[\r\n]/.test(
+    value.slice(separator + 1, valueStart),
+  );
+  const lineEnd = value.slice(valueStart).search(/[\r\n]/);
+  const valueEnd = startsOnContinuationLine || lineEnd < 0
+    ? value.length
+    : valueStart + lineEnd;
   return { replacement: REDACTED, valueEnd, valueStart };
 }
 
@@ -138,6 +137,10 @@ function isHorizontalWhitespace(value: string | undefined): boolean {
   return value !== undefined && /\s/.test(value) && !/[\r\n]/.test(value);
 }
 
+function isWhitespace(value: string | undefined): boolean {
+  return value !== undefined && /\s/.test(value);
+}
+
 function findQuotedEnd(value: string, start: number): number {
   const quote = value[start];
   let escaped = false;
@@ -149,8 +152,6 @@ function findQuotedEnd(value: string, start: number): number {
       escaped = true;
     } else if (character === quote) {
       return index + 1;
-    } else if (character === '\n' || character === '\r') {
-      return index;
     }
   }
   return value.length;

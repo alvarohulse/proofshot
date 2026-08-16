@@ -218,6 +218,25 @@ describe('browser interaction provenance', () => {
     expect(message).toBe('authorization=[REDACTED]');
   });
 
+  it('fails closed for compound, free-form, and multiline sensitive fields', () => {
+    const message = [
+      'HTTP_AUTHORIZATION=Token private-env-auth',
+      'Cookie: theme=light; session=private-cookie',
+      'body=private payload-contents',
+      'password:\n  private-next-line',
+      'token="private-first-line\nprivate-second-line"',
+    ]
+      .map((diagnostic) => sanitizeDiagnosticMessage(diagnostic))
+      .join('\n');
+
+    expect(message).not.toContain('private-env-auth');
+    expect(message).not.toContain('private-cookie');
+    expect(message).not.toContain('payload-contents');
+    expect(message).not.toContain('private-next-line');
+    expect(message).not.toContain('private-first-line');
+    expect(message).not.toContain('private-second-line');
+  });
+
   it('redacts compound secret keys and complete quoted values', () => {
     const message = sanitizeDiagnosticMessage(
       [
