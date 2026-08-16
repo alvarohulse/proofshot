@@ -104,7 +104,7 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 | `session-log.json` | Action timeline with timestamps and element data |
 | `evidence.json` | Canonical browser/environment events, incidents, source integrity, and media timing |
 | `verdict.json` | Structured `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED` verdict |
-| `artifact-manifest.json` | Finalized repository/commit provenance and ordered artifact hashes |
+| `artifact-manifest.json` | Finalized repository/commit/runtime provenance and ordered artifact hashes |
 | `network-summary.json` | Sanitized request method/status/timing/error metadata |
 
 Raw agent-browser JSON, HAR, browser-console, and ProofShot-owned server evidence stays under the session's `private/` directory with user-only permissions. It is excluded from manifests and publication; only curated media and sanitized summaries are reviewable artifacts.
@@ -164,7 +164,7 @@ You can also configure browser launch behavior in `proofshot.config.json`:
 
 Set `browser.configPath` for a project-specific agent-browser config. ProofShot validates it, rejects provider/CDP/profile/state/proxy modes, and copies it into private per-session state. Without this option, ProofShot uses an empty per-session config instead of inheriting user or project agent-browser defaults.
 
-ProofShot requires agent-browser 0.34.0 or newer, a local Chrome/Chromium executable, an explicit target-domain allowlist, and a fresh isolated session. Cloud providers, shared CDP browsers, persistent profiles/state, and auto-connect are refused. If no runnable browser is found, `start` prints the exact `agent-browser install` action. An explicit `--browser-executable` takes precedence for one run.
+ProofShot requires agent-browser 0.34.0, a local Chrome/Chromium executable, an explicit target-domain allowlist, and a fresh isolated session. Cloud providers, shared CDP browsers, persistent profiles/state, and auto-connect are refused. If no runnable browser is found, `start` prints the exact `agent-browser install` action. An explicit `--browser-executable` takes precedence for one run.
 
 `--output` changes only where evidence is written. Registry-backed control state remains discoverable across processes. Concurrent sessions in one worktree are supported; commands resolve a single live session automatically and require `--session <id>` when several live sessions match. `--force` recovers proven stale state only and refuses live processes or lifecycle operations.
 

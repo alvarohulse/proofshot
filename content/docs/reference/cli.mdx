@@ -64,7 +64,7 @@ proofshot start --headed                                    # Show the browser w
 
 **What happens:**
 1. Starts either `--run` or the configured owned `environment` (the two are mutually exclusive), attaches every configured log source, and completes readiness checks
-2. Requires agent-browser 0.34+, a local Chromium executable, a safe per-session config, and a target-domain allowlist
+2. Requires agent-browser 0.34.0, a local Chromium executable, a safe per-session config, and a target-domain allowlist
 3. Creates a unique browser namespace/private evidence directory and registers an immutable session ID
 4. Navigates to `--url`, starts private HAR capture, and starts video recording
 5. Persists exact process identities and lifecycle operation ownership for cross-process recovery

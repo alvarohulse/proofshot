@@ -15,4 +15,4 @@ With multiple sessions, pass the printed ID to `proofshot exec --session ID ...`
 
 Keep raw JSON, HAR, response bodies, credentials, and customer data private under the task's `~/data` evidence root. Report the local path without copying raw artifacts into prompts, scratch, PRs, or uploads. Copy only exercised final flows into PR User Testing instructions, then dry-run ordered explicit publication with repeated `--session` flags.
 
-Browser tooling requires agent-browser 0.34+ through its Node 24 launcher; project commands continue to honor the repository runtime. Recover with `proofshot session list` and `proofshot session clean --session ID`, never broad process cleanup.
+Browser tooling requires agent-browser 0.34.0 through its Node 24 launcher; project commands continue to honor the repository runtime. Recover with `proofshot session list` and `proofshot session clean --session ID`, never broad process cleanup.

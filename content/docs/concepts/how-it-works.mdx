@@ -47,7 +47,7 @@ ProofShot uses a three-phase model.
 1. Check if the port is available (fail fast on conflicts)
 2. Spawn an isolated dev-server process session if `--run` is provided, pipe timestamped output to `server.log`, and persist its immutable PID/process-group identity
 3. Wait for the port to respond (polls every 500ms, 30s timeout)
-4. Verify agent-browser 0.34+, reject inherited provider/CDP/profile/state modes, and copy a safe config into private per-session state
+4. Verify agent-browser 0.34.0, reject inherited provider/CDP/profile/state modes, and copy a safe config into private per-session state
 5. Open the requested URL in a unique namespace with a target-domain allowlist and persist the daemon identity
 6. Start private HAR capture and video recording
 7. Register the immutable session ID and operation lease under the user state directory; write `metadata.json` beside the evidence

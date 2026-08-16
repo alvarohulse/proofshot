@@ -45,7 +45,7 @@ You need to run `proofshot start` before `exec`. `stop` is idempotent, so it suc
 Run `proofshot session list`, then pass the exact ID with `proofshot exec --session ID ...` or `proofshot stop --session ID`.
 
 **agent-browser version or Node errors**
-Check the repository runtime (`.nvmrc` and `node --version`) separately from the configured agent-browser launcher. ProofShot requires the launcher to report agent-browser 0.34.0 or newer under Node 24; do not change the project's runtime to fix the browser tool.
+Check the repository runtime (`.nvmrc` and `node --version`) separately from the configured agent-browser launcher. ProofShot requires the launcher to report agent-browser 0.34.0 under Node 24; do not change the project's runtime to fix the browser tool.
 
 **Chrome is installed, but an isolated HOME cannot find it**
 ProofShot checks system paths and executable-only browser caches under the real account home without reusing a browser profile or storage. You can also pass one exact path with `proofshot start --browser-executable /absolute/path/to/chrome`. If nothing is runnable, run the `agent-browser install` command printed by `proofshot start`.

@@ -10,7 +10,7 @@ Use this workflow after a UI or visual behavior changes.
 
 ## 1. Explore and write the brief
 
-Use the approved local `agent-browser` launcher before recording. Keep project commands on the repository runtime; browser tooling uses its separate Node 24 launcher and agent-browser 0.34.0 or newer.
+Use the approved local `agent-browser` launcher before recording. Keep project commands on the repository runtime; browser tooling uses its separate Node 24 launcher and agent-browser 0.34.0.
 
 Maintain one Markdown brief in the task's persistent `~/data` directory. Define User Stories (actor, goal, benefit), stable Use Cases (preconditions, starting state, test data, success criteria), user-level User Flows, Iteration Feedback, and final User Testing instructions.
 

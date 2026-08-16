@@ -9,7 +9,7 @@ Use this workflow after a UI or visual behavior changes.
 
 ## 1. Explore
 
-Use the approved local `agent-browser` launcher to understand the feature before recording proof. Keep the project on its repository runtime; browser tooling uses its separate Node 24 launcher and agent-browser 0.34.0 or newer.
+Use the approved local `agent-browser` launcher to understand the feature before recording proof. Keep the project on its repository runtime; browser tooling uses its separate Node 24 launcher and agent-browser 0.34.0.
 
 Maintain one Markdown brief in the task's persistent `~/data` directory:
 
