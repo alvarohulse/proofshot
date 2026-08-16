@@ -217,6 +217,19 @@ describe('browser interaction provenance', () => {
     );
   });
 
+  it.each([
+    [
+      'request failed at HTTPS://user:pass@example.test/auth/verify-email/private-token?code=private-code&safe=yes',
+      'request failed at https://example.test/auth/%5BREDACTED%5D/%5BREDACTED%5D?code=%5BREDACTED%5D&safe=yes',
+    ],
+    [
+      'request failed at hTtP://user:pass@example.test/authorization/unknown/private-token?key=private-key&safe=yes',
+      'request failed at http://example.test/authorization/%5BREDACTED%5D/%5BREDACTED%5D?key=%5BREDACTED%5D&safe=yes',
+    ],
+  ])('sanitizes mixed-case HTTP URLs in diagnostics', (message, expected) => {
+    expect(sanitizeDiagnosticMessage(message)).toBe(expected);
+  });
+
   it('redacts secret-shaped diagnostics before persistence', () => {
     const message = sanitizeDiagnosticMessage(
       [
@@ -240,6 +253,12 @@ describe('browser interaction provenance', () => {
     ['auth', 'private-auth'],
     ['session', 'private-session'],
     ['signature', 'private-signature'],
+    ['tokens', 'private-tokens'],
+    ['accessTokens', 'private-access-tokens'],
+    ['sessions', 'private-sessions'],
+    ['signatures', 'private-signatures'],
+    ['passwords', 'private-passwords'],
+    ['secrets', 'private-secrets'],
   ])('redacts shared diagnostic field %s', (field, secret) => {
     const message = sanitizeDiagnosticMessage(`${field}=${secret}`);
 
@@ -247,15 +266,17 @@ describe('browser interaction provenance', () => {
   });
 
   it('keeps ambiguous diagnostic keys visible but redacts them in URLs', () => {
-    expect(sanitizeDiagnosticMessage('code=visible key=visible')).toBe(
-      'code=visible key=visible',
-    );
+    expect(
+      sanitizeDiagnosticMessage(
+        'code=visible codes=visible key=visible keys=visible',
+      ),
+    ).toBe('code=visible codes=visible key=visible keys=visible');
     expect(
       sanitizePageUrl(
-        'https://example.test/callback?code=private-code&key=private-key',
+        'https://example.test/callback?code=private-code&codes=private-codes&key=private-key&keys=private-keys',
       ),
     ).toBe(
-      'https://example.test/callback?code=%5BREDACTED%5D&key=%5BREDACTED%5D',
+      'https://example.test/callback?code=%5BREDACTED%5D&codes=%5BREDACTED%5D&key=%5BREDACTED%5D&keys=%5BREDACTED%5D',
     );
     expect(
       sanitizeDiagnosticMessage(

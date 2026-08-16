@@ -11,7 +11,7 @@ const REDACTED_BATCH = '[REDACTED_BATCH]';
 const MAX_BATCH_DEPTH = 8;
 const AUTH_FLOW_PATH_KEY = /^(?:invite|invitation|magic[-_]?link|password[-_]?reset|reset[-_]?password)$/i;
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
-const HTTP_URL = /https?:\/\/[^\s"'<>]+/g;
+const HTTP_URL = /https?:\/\/[^\s"'<>]+/gi;
 
 const HYBRID_ACTIONS = new Set(['check', 'fill', 'select', 'type', 'uncheck']);
 const OBSERVATION_ACTIONS = new Set([

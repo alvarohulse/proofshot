@@ -16,28 +16,36 @@ describe('browser redaction policy', () => {
     'credential',
     'credentials',
     'password',
+    'passwords',
     'clientSecret',
+    'clientSecrets',
     'session',
     'sessionId',
+    'sessions',
     'sig',
+    'sigs',
     'X-Amz-Signature',
+    'signatures',
     'accessToken',
+    'accessTokens',
     'headers',
     'requestBody',
+    'responseBodies',
     'api-key',
     'apiKey',
+    'apiKeys',
   ])('recognizes normalized high-confidence field %s', (field) => {
     expect(isHighConfidenceSecretField(field)).toBe(true);
   });
 
-  it.each(['code', 'key', 'status', 'monkey', 'decode'])(
+  it.each(['code', 'codes', 'key', 'keys', 'status', 'monkey', 'decode'])(
     'does not treat ambiguous or unrelated field %s as high-confidence',
     (field) => {
       expect(isHighConfidenceSecretField(field)).toBe(false);
     },
   );
 
-  it.each(['code', 'inviteCode', 'key', 'product_key'])(
+  it.each(['code', 'codes', 'inviteCode', 'key', 'keys', 'product_key'])(
     'treats ambiguous field %s as sensitive only in URL context',
     (field) => {
       expect(isSensitiveUrlField(field)).toBe(true);
@@ -48,6 +56,7 @@ describe('browser redaction policy', () => {
     expect(isSecretBearingCommandArgument('--cookies')).toBe(true);
     expect(isSecretBearingCommandArgument('--api-key=private')).toBe(true);
     expect(isSecretBearingCommandArgument('--access-token=private')).toBe(true);
+    expect(isSecretBearingCommandArgument('--access-tokens=private')).toBe(true);
     expect(isSecretBearingCommandArgument('--code=visible')).toBe(false);
     expect(isSecretBearingCommandArgument('--key')).toBe(false);
     expect(

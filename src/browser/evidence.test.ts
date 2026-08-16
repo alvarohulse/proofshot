@@ -189,6 +189,39 @@ describe('private browser evidence', () => {
   });
 
   it.each([
+    ['tokens', 'private-tokens'],
+    ['accessTokens', 'private-access-tokens'],
+    ['sessions', 'private-sessions'],
+    ['signatures', 'private-signatures'],
+    ['passwords', 'private-passwords'],
+    ['secrets', 'private-secrets'],
+  ])('redacts plural structured field %s', (field, secret) => {
+    const display = formatAgentBrowserOutputForDisplay({
+      args: ['snapshot', '-i'],
+      rawOutput: JSON.stringify({
+        success: true,
+        data: {
+          [field]: secret,
+          code: 'visible-code',
+          codes: 'visible-codes',
+          key: 'visible-key',
+          keys: 'visible-keys',
+        },
+      }),
+      success: true,
+    });
+    const result = JSON.parse(display) as {
+      data: Record<string, unknown>;
+    };
+
+    expect(result.data[field]).toBe('[REDACTED]');
+    expect(result.data.code).toBe('visible-code');
+    expect(result.data.codes).toBe('visible-codes');
+    expect(result.data.key).toBe('visible-key');
+    expect(result.data.keys).toBe('visible-keys');
+  });
+
+  it.each([
     '--auth=private-auth',
     '--cookies=private-cookie',
     '--session=private-session',

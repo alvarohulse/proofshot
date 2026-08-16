@@ -3,11 +3,8 @@ const HIGH_CONFIDENCE_SECRET_TERMS = new Set([
   'authorization',
   'body',
   'cookie',
-  'cookies',
   'credential',
-  'credentials',
   'header',
-  'headers',
   'password',
   'secret',
   'session',
@@ -16,6 +13,23 @@ const HIGH_CONFIDENCE_SECRET_TERMS = new Set([
   'token',
 ]);
 const URL_ONLY_SECRET_TERMS = new Set(['code', 'key']);
+const PLURAL_FIELD_TERMS = new Map([
+  ['apikeys', 'apikey'],
+  ['auths', 'auth'],
+  ['authorizations', 'authorization'],
+  ['bodies', 'body'],
+  ['codes', 'code'],
+  ['cookies', 'cookie'],
+  ['credentials', 'credential'],
+  ['headers', 'header'],
+  ['keys', 'key'],
+  ['passwords', 'password'],
+  ['secrets', 'secret'],
+  ['sessions', 'session'],
+  ['sigs', 'sig'],
+  ['signatures', 'signature'],
+  ['tokens', 'token'],
+]);
 
 export function isHighConfidenceSecretField(value: string): boolean {
   const terms = normalizeFieldName(value);
@@ -61,7 +75,8 @@ function normalizeFieldName(value: string): string[] {
     .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
-    .filter((term) => term.length > 0);
+    .filter((term) => term.length > 0)
+    .map((term) => PLURAL_FIELD_TERMS.get(term) || term);
 }
 
 function containsHighConfidenceSecretTerm(terms: string[]): boolean {
