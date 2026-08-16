@@ -49,6 +49,10 @@ const CONVENTIONAL_FUSED_SECRET_FIELD_GRAMMAR: readonly FusedSecretFieldRule[] =
     suffixes: ['key', 'keys'],
   },
   {
+    prefixes: ['secret'],
+    suffixes: ['key', 'keys'],
+  },
+  {
     prefixes: ['request', 'response'],
     suffixes: ['body', 'bodies', 'header', 'headers'],
   },

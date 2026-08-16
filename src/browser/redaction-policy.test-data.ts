@@ -29,6 +29,8 @@ export const CONVENTIONAL_FUSED_SECRET_FIELDS = [
   'passwordhashes',
   'secretaccesskey',
   'secretaccesskeys',
+  'secretkey',
+  'secretkeys',
   'requestbody',
   'requestbodies',
   'responsebody',
