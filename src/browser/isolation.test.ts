@@ -82,6 +82,16 @@ describe('agent-browser isolation', () => {
     );
   });
 
+  it('rejects JSON output mode from an explicit config', () => {
+    const directory = createDirectory();
+    const configPath = path.join(directory, 'agent-browser.json');
+    fs.writeFileSync(configPath, JSON.stringify({ json: true }));
+
+    expect(() => loadIsolatedAgentBrowserConfig(configPath, {})).toThrow(
+      'config key "json"',
+    );
+  });
+
   it('copies a safe config into private per-session state', () => {
     const directory = createDirectory();
     const sourcePath = path.join(directory, 'source.json');

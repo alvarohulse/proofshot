@@ -35,6 +35,7 @@ const INCOMPATIBLE_CONFIG_KEYS = new Set([
   'headed',
   'initscript',
   'initscripts',
+  'json',
   'profile',
   'plugins',
   'provider',
