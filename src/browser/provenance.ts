@@ -5,6 +5,8 @@ const MAX_BATCH_DEPTH = 8;
 const SECRET_FLAG = /^(?:--)?(?:authorization|cookie|credential|headers|password|secret|token|api[-_]?key|body)$/i;
 const SECRET_QUERY_PARAMETER = /(?:auth|code|cookie|credential|key|password|secret|session|sig(?:nature)?|token)/i;
 const SECRET_PATH_KEY = /^(?:auth|authorization|credential|credentials|invite|invitation|key|magic[-_]?link|password|password[-_]?reset|reset[-_]?password|secret|session|sig|signature|token|api[-_]?key)$/i;
+const AUTH_FLOW_PATH_KEY = /^(?:invite|invitation|magic[-_]?link|password[-_]?reset|reset[-_]?password)$/i;
+const SECRET_DIAGNOSTIC_ASSIGNMENT = /(["']?)((?:[a-z0-9]+[-_])*(?:authorization|cookie|credential|password|secret|token|api[-_]?key))\1\s*[:=]\s*(?:(["'])([^\r\n]*?)\3|[^\s,;]+)/gi;
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
 const HYBRID_ACTIONS = new Set(['check', 'fill', 'select', 'type', 'uncheck']);
@@ -273,14 +275,18 @@ export function sanitizeDiagnosticMessage(value: string | undefined): string | u
     .replace(/\b(?:Basic|Bearer)\s+[^\s"',;]+/gi, REDACTED)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(
-      /\b(authorization|cookie|credential|password|secret|token|api[-_]?key)\b\s*[:=]\s*([^\s,;]+)/gi,
-      `$1=${REDACTED}`,
+      SECRET_DIAGNOSTIC_ASSIGNMENT,
+      (_match, keyQuote: string, key: string, valueQuote: string | undefined) =>
+        `${keyQuote}${key}${keyQuote}=${
+          valueQuote ? `${valueQuote}${REDACTED}${valueQuote}` : REDACTED
+        }`,
     )
     .replace(/https?:\/\/[^\s"'<>]+/g, sanitizeUrlValue);
 }
 
 function sanitizeUrlPath(pathname: string): string {
   let redactNext = false;
+  let redactRemainder = false;
   return pathname
     .split('/')
     .map((segment) => {
@@ -289,6 +295,9 @@ function sanitizeUrlPath(pathname: string): string {
         decoded = decodeURIComponent(segment);
       } catch {
         decoded = segment;
+      }
+      if (redactRemainder) {
+        return segment ? encodeURIComponent(REDACTED) : segment;
       }
       if (redactNext) {
         redactNext = false;
@@ -302,7 +311,11 @@ function sanitizeUrlPath(pathname: string): string {
         return `${encodeURIComponent(decoded.slice(0, equalsIndex))}=${encodeURIComponent(REDACTED)}`;
       }
       if (SECRET_PATH_KEY.test(decoded)) {
-        redactNext = true;
+        if (AUTH_FLOW_PATH_KEY.test(decoded)) {
+          redactRemainder = true;
+        } else {
+          redactNext = true;
+        }
       }
       return segment;
     })

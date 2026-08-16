@@ -209,6 +209,23 @@ describe('browser interaction provenance', () => {
     expect(message).toContain('[REDACTED]');
   });
 
+  it('redacts compound secret keys and complete quoted values', () => {
+    const message = sanitizeDiagnosticMessage(
+      [
+        'client_secret=private-client-secret',
+        'access_token: private-access-token',
+        'password="correct horse battery staple"',
+        "refresh_token='private refresh token'",
+      ].join('\n'),
+    );
+
+    expect(message).not.toContain('private-client-secret');
+    expect(message).not.toContain('private-access-token');
+    expect(message).not.toContain('correct horse battery staple');
+    expect(message).not.toContain('private refresh token');
+    expect(message).not.toContain('horse battery staple');
+  });
+
   it('redacts signed URL keys and sensitive path values', () => {
     expect(
       sanitizePageUrl(
@@ -231,5 +248,19 @@ describe('browser interaction provenance', () => {
     expect(
       sanitizePageUrl('https://example.test/magic-link/private-magic-token'),
     ).toBe('https://example.test/magic-link/%5BREDACTED%5D');
+    expect(
+      sanitizePageUrl(
+        'https://example.test/invite/accept/private-invite-token',
+      ),
+    ).toBe(
+      'https://example.test/invite/%5BREDACTED%5D/%5BREDACTED%5D',
+    );
+    expect(
+      sanitizePageUrl(
+        'https://example.test/reset-password/confirm/private-reset-token',
+      ),
+    ).toBe(
+      'https://example.test/reset-password/%5BREDACTED%5D/%5BREDACTED%5D',
+    );
   });
 });
