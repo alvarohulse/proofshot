@@ -328,13 +328,15 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       if (browserSessionStillAvailable) {
         session.lifecycleStatus = 'active';
         session.stoppedAt = undefined;
+        session.networkCaptureActive = true;
+        persistOwnedSession(session);
+        throw error;
       }
-      // A browser can disappear while the HAR stop command is flushing its
-      // pending file. Keep the session retryable so a later stop can adopt
-      // that local evidence without addressing the lost browser.
-      session.networkCaptureActive = true;
+      // Browser ownership is gone and there is no valid HAR to adopt. Mark
+      // capture unavailable so exact teardown and an INCOMPLETE bundle can
+      // finish without permanently wedging stop on an impossible retry.
+      session.networkCaptureActive = false;
       persistOwnedSession(session);
-      throw error;
     }
     persistOwnedSession(session);
   } else if (networkSummary) {
