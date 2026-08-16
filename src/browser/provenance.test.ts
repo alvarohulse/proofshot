@@ -226,6 +226,27 @@ describe('browser interaction provenance', () => {
     expect(message).not.toContain('horse battery staple');
   });
 
+  it('redacts structured and escaped diagnostic secret values', () => {
+    const message = sanitizeDiagnosticMessage(
+      [
+        '{"clientSecret":"private-client","safe":"visible"}',
+        '{"auth":{"accessToken":"private-access"},"status":"healthy"}',
+        '{"token":["private-first","private-second"],"safeList":["one","two"]}',
+        String.raw`password="private-prefix \"quoted\" private-suffix"`,
+      ].join('\n'),
+    );
+
+    expect(message).not.toContain('private-client');
+    expect(message).not.toContain('private-access');
+    expect(message).not.toContain('private-first');
+    expect(message).not.toContain('private-second');
+    expect(message).not.toContain('private-prefix');
+    expect(message).not.toContain('private-suffix');
+    expect(message).toContain('"safe":"visible"');
+    expect(message).toContain('"status":"healthy"');
+    expect(message).toContain('"safeList":["one","two"]');
+  });
+
   it('redacts signed URL keys and sensitive path values', () => {
     expect(
       sanitizePageUrl(
@@ -261,6 +282,20 @@ describe('browser interaction provenance', () => {
       ),
     ).toBe(
       'https://example.test/reset-password/%5BREDACTED%5D/%5BREDACTED%5D',
+    );
+    expect(
+      sanitizePageUrl(
+        'https://example.test/auth/invite/accept/private-token',
+      ),
+    ).toBe(
+      'https://example.test/auth/invite/%5BREDACTED%5D/%5BREDACTED%5D',
+    );
+    expect(
+      sanitizePageUrl(
+        'https://example.test/api/auth/reset-password/confirm/private-token',
+      ),
+    ).toBe(
+      'https://example.test/api/auth/reset-password/%5BREDACTED%5D/%5BREDACTED%5D',
     );
   });
 });

@@ -1,0 +1,160 @@
+const REDACTED = '[REDACTED]';
+const SECRET_KEY = /(?:^|[-_])(?:authorization|body|cookie|credentials?|headers?|password|secret|token|api[-_]?key)$/i;
+
+type Assignment = {
+  replacement: string;
+  valueEnd: number;
+  valueStart: number;
+};
+
+export function redactDiagnosticAssignments(value: string): string {
+  let copyStart = 0;
+  let cursor = 0;
+  let sanitized = '';
+  while (cursor < value.length) {
+    const assignment = readSensitiveAssignment(value, cursor);
+    if (!assignment) {
+      cursor += 1;
+      continue;
+    }
+    sanitized += value.slice(copyStart, assignment.valueStart);
+    sanitized += assignment.replacement;
+    copyStart = assignment.valueEnd;
+    cursor = assignment.valueEnd;
+  }
+  return sanitized + value.slice(copyStart);
+}
+
+function readSensitiveAssignment(
+  value: string,
+  start: number,
+): Assignment | null {
+  const key = readKey(value, start);
+  if (!key || !isSensitiveKey(key.value)) {
+    return null;
+  }
+
+  let separator = key.end;
+  while (isHorizontalWhitespace(value[separator])) {
+    separator += 1;
+  }
+  if (![':', '='].includes(value[separator] || '')) {
+    return null;
+  }
+
+  let valueStart = separator + 1;
+  while (isHorizontalWhitespace(value[valueStart])) {
+    valueStart += 1;
+  }
+  if (valueStart >= value.length || /[\r\n]/.test(value[valueStart])) {
+    return null;
+  }
+
+  const first = value[valueStart];
+  if (first === '"' || first === "'") {
+    return {
+      replacement: `${first}${REDACTED}${first}`,
+      valueEnd: findQuotedEnd(value, valueStart),
+      valueStart,
+    };
+  }
+  if (first === '{' || first === '[') {
+    return {
+      replacement: JSON.stringify(REDACTED),
+      valueEnd: findCompositeEnd(value, valueStart),
+      valueStart,
+    };
+  }
+
+  let valueEnd = valueStart;
+  while (!/[\s,;&}\]]/.test(value[valueEnd] || '')) {
+    valueEnd += 1;
+  }
+  if (valueEnd === valueStart) {
+    return null;
+  }
+  return { replacement: REDACTED, valueEnd, valueStart };
+}
+
+function readKey(
+  value: string,
+  start: number,
+): { end: number; value: string } | null {
+  const first = value[start];
+  if (first === '"' || first === "'") {
+    if (start > 0 && value[start - 1] === '\\') {
+      return null;
+    }
+    const end = findQuotedEnd(value, start);
+    return end > start + 1 && value[end - 1] === first
+      ? { end, value: value.slice(start + 1, end - 1) }
+      : null;
+  }
+  if (!/[A-Za-z0-9_-]/.test(first || '')) {
+    return null;
+  }
+  if (start > 0 && /[A-Za-z0-9_-]/.test(value[start - 1])) {
+    return null;
+  }
+  let end = start;
+  while (/[A-Za-z0-9_-]/.test(value[end] || '')) {
+    end += 1;
+  }
+  return { end, value: value.slice(start, end) };
+}
+
+function isSensitiveKey(key: string): boolean {
+  return SECRET_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, '$1-$2'));
+}
+
+function isHorizontalWhitespace(value: string | undefined): boolean {
+  return value !== undefined && /\s/.test(value) && !/[\r\n]/.test(value);
+}
+
+function findQuotedEnd(value: string, start: number): number {
+  const quote = value[start];
+  let escaped = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const character = value[index];
+    if (escaped) {
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === quote) {
+      return index + 1;
+    } else if (character === '\n' || character === '\r') {
+      return index;
+    }
+  }
+  return value.length;
+}
+
+function findCompositeEnd(value: string, start: number): number {
+  const closers = [value[start] === '{' ? '}' : ']'];
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let index = start + 1; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '{' || character === '[') {
+      closers.push(character === '{' ? '}' : ']');
+    } else if (character === closers[closers.length - 1]) {
+      closers.pop();
+      if (closers.length === 0) {
+        return index + 1;
+      }
+    }
+  }
+  return value.length;
+}

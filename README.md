@@ -162,7 +162,9 @@ You can also configure browser launch behavior in `proofshot.config.json`:
 }
 ```
 
-Set `browser.configPath` for a project-specific agent-browser config. ProofShot validates it, rejects provider/CDP/profile/state/proxy modes, and copies it into private per-session state. Without this option, ProofShot uses an empty per-session config instead of inheriting user or project agent-browser defaults.
+Set `browser.configPath` for a project-specific agent-browser config. ProofShot validates it, rejects provider/CDP/profile/state/proxy and default JSON-output modes, and copies it into private per-session state. Without this option, ProofShot uses an empty per-session config instead of inheriting user or project agent-browser defaults.
+
+ProofShot rejects inherited `AGENT_BROWSER_JSON` at session preflight and strips it from every agent-browser subprocess. ProofShot enables JSON only for individual internal calls whose structured output it parses; a global JSON mode would change normal command output and break evidence capture.
 
 ProofShot requires agent-browser 0.34.0, a local Chrome/Chromium executable, an explicit target-domain allowlist, and a fresh isolated session. Cloud providers, shared CDP browsers, persistent profiles/state, and auto-connect are refused. If no runnable browser is found, `start` prints the exact `agent-browser install` action. An explicit `--browser-executable` takes precedence for one run.
 

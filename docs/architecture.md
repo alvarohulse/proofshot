@@ -56,7 +56,7 @@ ProofShot uses a three-phase model: **start**, **exec** (repeated), **stop**.
 proofshot start --run "npm run dev" --port 3000 --description "Login flow"
 ```
 
-1. Verify agent-browser 0.34.0, reject inherited provider/CDP/profile/state modes, and copy a safe config into private per-session state
+1. Verify agent-browser 0.34.0, reject inherited provider/CDP/profile/state/default-JSON modes, and copy a safe config into private per-session state
 2. Create a collision-safe session ID, namespace, socket root, domain allowlist, evidence directory, and immutable start-operation lease
 3. Spawn an exact-owned dev server/environment when configured and persist process identities before waiting for readiness
 4. Open fresh local Chromium and persist the daemon identity
@@ -209,6 +209,8 @@ src/
 **Pinned browser contract.** agent-browser 0.34.0 is an exact runtime dependency and requires Node 24. Managed installations use a dedicated launcher so project commands keep their repository runtime.
 
 Finalized evidence records the managed launcher contract and the hashes of the launcher and executed native artifact. This receipt identifies the runtime used for the session; it does not attest how the package dependency was installed.
+
+ProofShot rejects inherited `AGENT_BROWSER_JSON` and the equivalent config key, then strips the environment variable from every subprocess. Structured output is enabled only on the internal calls that parse it; ordinary passthrough commands retain their expected text output.
 
 **Registry-backed session control.** User-state registry files point to per-run evidence while immutable IDs, namespaces, sockets, and operation leases allow concurrent sessions in the same worktree. `clean` refuses while any matching registry record remains.
 

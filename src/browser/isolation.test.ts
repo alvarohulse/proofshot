@@ -51,6 +51,7 @@ describe('agent-browser isolation', () => {
       'AGENT_BROWSER_PROVIDER',
       'AGENT_BROWSER_CDP',
       'AGENT_BROWSER_AUTO_CONNECT',
+      'AGENT_BROWSER_JSON',
       'AGENT_BROWSER_PROFILE',
       'AGENT_BROWSER_PLUGINS',
       'AGENT_BROWSER_STATE',
@@ -111,6 +112,7 @@ describe('agent-browser isolation', () => {
 
   it('strips incompatible modes from every agent-browser subprocess', () => {
     const environment = getIsolatedAgentBrowserEnvironment({
+      AGENT_BROWSER_JSON: '1',
       AGENT_BROWSER_PROVIDER: 'browserbase',
       AGENT_BROWSER_PROFILE: './shared',
       PATH: '/usr/bin',

@@ -1,3 +1,5 @@
+import { redactDiagnosticAssignments } from './diagnostic-redaction.js';
+
 const REDACTED = '[REDACTED]';
 const REDACTED_ARGUMENTS = '[REDACTED_ARGUMENTS]';
 const REDACTED_BATCH = '[REDACTED_BATCH]';
@@ -6,7 +8,6 @@ const SECRET_FLAG = /^(?:--)?(?:authorization|cookie|credential|headers|password
 const SECRET_QUERY_PARAMETER = /(?:auth|code|cookie|credential|key|password|secret|session|sig(?:nature)?|token)/i;
 const SECRET_PATH_KEY = /^(?:auth|authorization|credential|credentials|invite|invitation|key|magic[-_]?link|password|password[-_]?reset|reset[-_]?password|secret|session|sig|signature|token|api[-_]?key)$/i;
 const AUTH_FLOW_PATH_KEY = /^(?:invite|invitation|magic[-_]?link|password[-_]?reset|reset[-_]?password)$/i;
-const SECRET_DIAGNOSTIC_ASSIGNMENT = /(["']?)((?:[a-z0-9]+[-_])*(?:authorization|cookie|credential|password|secret|token|api[-_]?key))\1\s*[:=]\s*(?:(["'])([^\r\n]*?)\3|[^\s,;]+)/gi;
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
 const HYBRID_ACTIONS = new Set(['check', 'fill', 'select', 'type', 'uncheck']);
@@ -263,39 +264,27 @@ export function sanitizeDiagnosticMessage(value: string | undefined): string | u
   if (!value) {
     return value;
   }
-  return value
-    .replace(
-      /(["']?authorization["']?\s*[:=]\s*)(["'])([^\r\n]*?)\2/gi,
-      `$1$2${REDACTED}$2`,
-    )
-    .replace(
-      /\bauthorization\b\s*[:=]\s*[^\r\n,;]+/gi,
-      `authorization=${REDACTED}`,
-    )
+  const sanitizedTokens = value
     .replace(/\b(?:Basic|Bearer)\s+[^\s"',;]+/gi, REDACTED)
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
-    .replace(
-      SECRET_DIAGNOSTIC_ASSIGNMENT,
-      (_match, keyQuote: string, key: string, valueQuote: string | undefined) =>
-        `${keyQuote}${key}${keyQuote}=${
-          valueQuote ? `${valueQuote}${REDACTED}${valueQuote}` : REDACTED
-        }`,
-    )
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED);
+  return redactDiagnosticAssignments(sanitizedTokens)
     .replace(/https?:\/\/[^\s"'<>]+/g, sanitizeUrlValue);
 }
 
 function sanitizeUrlPath(pathname: string): string {
+  const segments = pathname.split('/');
+  const decodedSegments = segments.map((segment) => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  });
   let redactNext = false;
   let redactRemainder = false;
-  return pathname
-    .split('/')
-    .map((segment) => {
-      let decoded: string;
-      try {
-        decoded = decodeURIComponent(segment);
-      } catch {
-        decoded = segment;
-      }
+  return segments
+    .map((segment, index) => {
+      const decoded = decodedSegments[index];
       if (redactRemainder) {
         return segment ? encodeURIComponent(REDACTED) : segment;
       }
@@ -313,6 +302,11 @@ function sanitizeUrlPath(pathname: string): string {
       if (SECRET_PATH_KEY.test(decoded)) {
         if (AUTH_FLOW_PATH_KEY.test(decoded)) {
           redactRemainder = true;
+        } else if (
+          decoded.toLowerCase() === 'auth' &&
+          AUTH_FLOW_PATH_KEY.test(decodedSegments[index + 1] || '')
+        ) {
+          return segment;
         } else {
           redactNext = true;
         }
