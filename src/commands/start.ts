@@ -164,11 +164,10 @@ export async function startCommand(options: StartOptions): Promise<void> {
     openUrl,
     config.browser.allowedDomains,
   );
-  const outputDir = path.resolve(config.output);
+  const requestedOutputDir = path.resolve(config.output);
   const timestamp = generateTimestamp();
   const sessionName = generateAgentBrowserSessionName(timestamp);
   const sessionDirName = generateSessionDirName(timestamp, options.description || null);
-  const sessionDir = path.join(outputDir, `${sessionDirName}_${sessionName}`);
   const agentBrowserNamespace = generateAgentBrowserNamespace(sessionName);
   let socketRoot: string;
   let socketDir: string;
@@ -214,8 +213,10 @@ export async function startCommand(options: StartOptions): Promise<void> {
 
   if (browserExecutable) config.browser.executablePath = browserExecutable;
 
-  ensureOutputDir(outputDir);
-  ensureOutputDir(sessionDir);
+  const outputDir = ensureOutputDir(requestedOutputDir);
+  const sessionDir = ensureOutputDir(
+    path.join(outputDir, `${sessionDirName}_${sessionName}`),
+  );
 
   const videoPath = path.join(sessionDir, 'session.webm');
   const networkEvidence = preparePrivateNetworkEvidence(sessionDir);
@@ -227,12 +228,9 @@ export async function startCommand(options: StartOptions): Promise<void> {
     networkEvidence.privateDirectory,
     isolatedAgentBrowserConfig,
   );
-  const privateEnvironmentDirectory = path.join(
-    sessionDir,
-    'private',
-    'environment',
+  const privateEnvironmentDirectory = ensureOutputDir(
+    path.join(sessionDir, 'private', 'environment'),
   );
-  ensureOutputDir(privateEnvironmentDirectory);
   setAgentBrowserDefaults({
     allowedDomains: agentBrowserAllowedDomains,
     configPath: agentBrowserConfigPath,

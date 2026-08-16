@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { startCommand } from './start.js';
 
@@ -141,6 +142,7 @@ describe('startCommand', () => {
     mocks.hasActiveSession.mockReturnValue(false);
     mocks.loadSession.mockReturnValue(null);
     mocks.resolveSessionControlDir.mockReturnValue('/project/proofshot-artifacts');
+    mocks.ensureOutputDir.mockImplementation((directory: string) => directory);
     mocks.generateTimestamp.mockReturnValue('2026-04-08_07-28-00');
     mocks.generateSessionDirName.mockReturnValue('2026-04-08_07-28-00_test');
     mocks.generateAgentBrowserSessionName.mockReturnValue('ps-2026-04-deadbeef1234');
@@ -359,6 +361,35 @@ describe('startCommand', () => {
       },
     });
     expect(finalState.controlDir).toBe('/project/proofshot-artifacts');
+  });
+
+  it('uses the canonical output paths returned by directory validation', async () => {
+    const requestedOutputDirectory = '/audit/custom-evidence';
+    const canonicalOutputDirectory = '/private/audit/custom-evidence';
+    const canonicalSessionDirectory = path.join(
+      canonicalOutputDirectory,
+      '2026-04-08_07-28-00_test_ps-2026-04-deadbeef1234',
+    );
+    mocks.ensureOutputDir.mockImplementation((directory: string) =>
+      directory === requestedOutputDirectory ? canonicalOutputDirectory : directory,
+    );
+
+    await startCommand({ output: requestedOutputDirectory });
+
+    const finalState = mocks.registerSession.mock.calls.at(-1)?.[0];
+    expect(finalState).toMatchObject({
+      outputDir: canonicalOutputDirectory,
+      sessionDir: canonicalSessionDirectory,
+      videoPath: path.join(canonicalSessionDirectory, 'session.webm'),
+    });
+    expect(mocks.ensureOutputDir).toHaveBeenNthCalledWith(
+      2,
+      canonicalSessionDirectory,
+    );
+    expect(mocks.ensureOutputDir).toHaveBeenNthCalledWith(
+      3,
+      path.join(canonicalSessionDirectory, 'private', 'environment'),
+    );
   });
 
   it('persists server ownership before waiting for readiness', async () => {
