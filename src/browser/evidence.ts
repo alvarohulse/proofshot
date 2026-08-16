@@ -5,10 +5,11 @@ import {
   sanitizeDiagnosticMessage,
   sanitizePageUrl,
 } from './provenance.js';
+import {
+  isHighConfidenceSecretField,
+  isSecretBearingCommandArgument,
+} from './redaction-policy.js';
 import { ab } from '../utils/exec.js';
-
-const SECRET_BEARING_FLAG =
-  /^(?:--)?(?:authorization|body|cookie|credential|headers?|password|secret|token|api[-_]?key)(?:=|$)/i;
 
 export type AgentBrowserResultReceipt = {
   success: boolean;
@@ -299,7 +300,7 @@ function commandResultMayContainSecrets(args: string[]): boolean {
   if (!command) {
     return true;
   }
-  if (args.slice(1).some((argument) => SECRET_BEARING_FLAG.test(argument))) {
+  if (args.slice(1).some(isSecretBearingCommandArgument)) {
     return true;
   }
   if (
@@ -354,15 +355,11 @@ function sanitizeStructuredValue(value: unknown): unknown {
   const record = value as Record<string, unknown>;
   const namedSecret =
     typeof record.name === 'string' &&
-    /authorization|body|cookie|credential|headers?|password|secret|token|api[-_]?key/i.test(
-      record.name,
-    );
+    isHighConfidenceSecretField(record.name);
   return Object.fromEntries(
     Object.entries(record).map(([key, entry]) => {
       const isSensitive =
-        /authorization|body|cookie|credential|headers?|password|secret|token|api[-_]?key/i.test(
-          key,
-        ) || (namedSecret && key === 'value');
+        isHighConfidenceSecretField(key) || (namedSecret && key === 'value');
       return [key, isSensitive ? '[REDACTED]' : sanitizeStructuredValue(entry)];
     }),
   );

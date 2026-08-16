@@ -1,5 +1,6 @@
+import { isHighConfidenceSecretField } from './redaction-policy.js';
+
 const REDACTED = '[REDACTED]';
-const SECRET_KEY = /(?:^|[-_])(?:authorization|body|cookie|credentials?|headers?|password|secret|token|api[-_]?key)$/i;
 
 type Assignment = {
   replacement: string;
@@ -127,7 +128,7 @@ function readKey(
 }
 
 function isSensitiveKey(key: string): boolean {
-  return SECRET_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, '$1-$2'));
+  return isHighConfidenceSecretField(key);
 }
 
 function isHorizontalWhitespace(value: string | undefined): boolean {

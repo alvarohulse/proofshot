@@ -1,14 +1,17 @@
 import { redactDiagnosticAssignments } from './diagnostic-redaction.js';
+import {
+  isAuthenticationPathSegment,
+  isSecretBearingCommandArgument,
+  isSensitiveUrlField,
+} from './redaction-policy.js';
 
 const REDACTED = '[REDACTED]';
 const REDACTED_ARGUMENTS = '[REDACTED_ARGUMENTS]';
 const REDACTED_BATCH = '[REDACTED_BATCH]';
 const MAX_BATCH_DEPTH = 8;
-const SECRET_FLAG = /^(?:--)?(?:authorization|cookie|credential|headers|password|secret|token|api[-_]?key|body)$/i;
-const SECRET_QUERY_PARAMETER = /(?:auth|code|cookie|credential|key|password|secret|session|sig(?:nature)?|token)/i;
-const SECRET_PATH_KEY = /^(?:auth|authorization|credential|credentials|invite|invitation|key|magic[-_]?link|password|password[-_]?reset|reset[-_]?password|secret|session|sig|signature|token|api[-_]?key)$/i;
 const AUTH_FLOW_PATH_KEY = /^(?:invite|invitation|magic[-_]?link|password[-_]?reset|reset[-_]?password)$/i;
 const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
+const HTTP_URL = /https?:\/\/[^\s"'<>]+/g;
 
 const HYBRID_ACTIONS = new Set(['check', 'fill', 'select', 'type', 'uncheck']);
 const OBSERVATION_ACTIONS = new Set([
@@ -249,7 +252,7 @@ function sanitizeUrlValue(value: string): string {
     url.password = '';
     url.pathname = sanitizeUrlPath(url.pathname);
     for (const key of url.searchParams.keys()) {
-      if (SECRET_QUERY_PARAMETER.test(key)) {
+      if (isSensitiveUrlField(key)) {
         url.searchParams.set(key, REDACTED);
       }
     }
@@ -267,8 +270,25 @@ export function sanitizeDiagnosticMessage(value: string | undefined): string | u
   const sanitizedTokens = value
     .replace(/\b(?:Basic|Bearer)\s+[^\s"',;]+/gi, REDACTED)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED);
-  return redactDiagnosticAssignments(sanitizedTokens)
-    .replace(/https?:\/\/[^\s"'<>]+/g, sanitizeUrlValue);
+  return redactDiagnosticAssignmentsOutsideUrls(sanitizedTokens);
+}
+
+function redactDiagnosticAssignmentsOutsideUrls(value: string): string {
+  const sanitizedUrls: string[] = [];
+  let markerPrefix = '\0PROOFSHOT_SANITIZED_URL_';
+  while (value.includes(markerPrefix)) {
+    markerPrefix += '_';
+  }
+  const masked = value.replace(HTTP_URL, (url) => {
+    const marker = `${markerPrefix}${sanitizedUrls.length}\0`;
+    sanitizedUrls.push(sanitizeUrlValue(url));
+    return marker;
+  });
+  let sanitized = redactDiagnosticAssignments(masked);
+  sanitizedUrls.forEach((url, index) => {
+    sanitized = sanitized.replace(`${markerPrefix}${index}\0`, () => url);
+  });
+  return sanitized;
 }
 
 function sanitizeUrlPath(pathname: string): string {
@@ -295,21 +315,20 @@ function sanitizeUrlPath(pathname: string): string {
       const equalsIndex = decoded.indexOf('=');
       if (
         equalsIndex > 0 &&
-        SECRET_PATH_KEY.test(decoded.slice(0, equalsIndex))
+        isSensitiveUrlField(decoded.slice(0, equalsIndex))
       ) {
         return `${encodeURIComponent(decoded.slice(0, equalsIndex))}=${encodeURIComponent(REDACTED)}`;
       }
-      if (SECRET_PATH_KEY.test(decoded)) {
-        if (AUTH_FLOW_PATH_KEY.test(decoded)) {
-          redactRemainder = true;
-        } else if (
-          decoded.toLowerCase() === 'auth' &&
-          AUTH_FLOW_PATH_KEY.test(decodedSegments[index + 1] || '')
-        ) {
-          return segment;
-        } else {
-          redactNext = true;
-        }
+      if (isAuthenticationPathSegment(decoded)) {
+        redactRemainder = true;
+        return segment;
+      }
+      if (AUTH_FLOW_PATH_KEY.test(decoded)) {
+        redactRemainder = true;
+        return segment;
+      }
+      if (isSensitiveUrlField(decoded)) {
+        redactNext = true;
       }
       return segment;
     })
@@ -374,12 +393,12 @@ function sanitizeArguments(command: string, args: string[]): string[] {
     if (
       index > 0 &&
       equalsIndex > 0 &&
-      SECRET_FLAG.test(argument.slice(0, equalsIndex))
+      isSecretBearingCommandArgument(argument)
     ) {
       sanitized.push(`${argument.slice(0, equalsIndex)}=${REDACTED}`);
       continue;
     }
-    if (index > 0 && SECRET_FLAG.test(argument)) {
+    if (index > 0 && isSecretBearingCommandArgument(argument)) {
       sanitized.push(argument);
       redactNext = true;
       continue;

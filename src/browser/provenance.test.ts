@@ -176,6 +176,32 @@ describe('browser interaction provenance', () => {
     );
   });
 
+  it.each([
+    ['--auth', 'private-auth'],
+    ['--cookies', 'private-cookie'],
+    ['--session', 'private-session'],
+    ['--signature', 'private-signature'],
+  ])('redacts shared secret flag %s', (flag, secret) => {
+    const summary = buildSanitizedCommandIntent([
+      'open',
+      'https://example.test',
+      flag,
+      secret,
+    ]).summary;
+
+    expect(summary).not.toContain(secret);
+    expect(summary).toContain(`${flag} [REDACTED]`);
+  });
+
+  it('still sanitizes secret-shaped URL arguments as URLs', () => {
+    expect(
+      buildSanitizedCommandIntent([
+        'open',
+        'https://example.test/session/private-session',
+      ]).summary,
+    ).toBe('open https://example.test/session/%5BREDACTED%5D');
+  });
+
   it('sanitizes fragments, opaque URLs, and malformed URLs without recursion', () => {
     expect(
       sanitizePageUrl(
@@ -207,6 +233,35 @@ describe('browser interaction provenance', () => {
     expect(message).not.toContain('private-path');
     expect(message).toContain('safe=yes');
     expect(message).toContain('[REDACTED]');
+  });
+
+  it.each([
+    ['cookies', 'private-cookie'],
+    ['auth', 'private-auth'],
+    ['session', 'private-session'],
+    ['signature', 'private-signature'],
+  ])('redacts shared diagnostic field %s', (field, secret) => {
+    const message = sanitizeDiagnosticMessage(`${field}=${secret}`);
+
+    expect(message).toBe(`${field}=[REDACTED]`);
+  });
+
+  it('keeps ambiguous diagnostic keys visible but redacts them in URLs', () => {
+    expect(sanitizeDiagnosticMessage('code=visible key=visible')).toBe(
+      'code=visible key=visible',
+    );
+    expect(
+      sanitizePageUrl(
+        'https://example.test/callback?code=private-code&key=private-key',
+      ),
+    ).toBe(
+      'https://example.test/callback?code=%5BREDACTED%5D&key=%5BREDACTED%5D',
+    );
+    expect(
+      sanitizeDiagnosticMessage(
+        'token=https://example.test/callback?safe=visible',
+      ),
+    ).toBe('token=[REDACTED]');
   });
 
   it('redacts complete unquoted authorization values', () => {
@@ -353,14 +408,27 @@ describe('browser interaction provenance', () => {
         'https://example.test/auth/invite/accept/private-token',
       ),
     ).toBe(
-      'https://example.test/auth/invite/%5BREDACTED%5D/%5BREDACTED%5D',
+      'https://example.test/auth/%5BREDACTED%5D/%5BREDACTED%5D/%5BREDACTED%5D',
     );
     expect(
       sanitizePageUrl(
         'https://example.test/api/auth/reset-password/confirm/private-token',
       ),
     ).toBe(
-      'https://example.test/api/auth/reset-password/%5BREDACTED%5D/%5BREDACTED%5D',
+      'https://example.test/api/auth/%5BREDACTED%5D/%5BREDACTED%5D/%5BREDACTED%5D',
     );
+  });
+
+  it.each([
+    [
+      'https://example.test/auth/verify-email/private-token',
+      'https://example.test/auth/%5BREDACTED%5D/%5BREDACTED%5D',
+    ],
+    [
+      'https://example.test/authorization/unknown/private-token',
+      'https://example.test/authorization/%5BREDACTED%5D/%5BREDACTED%5D',
+    ],
+  ])('redacts every path segment after a generic auth route', (url, expected) => {
+    expect(sanitizePageUrl(url)).toBe(expected);
   });
 });

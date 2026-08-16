@@ -156,6 +156,56 @@ describe('private browser evidence', () => {
     ).not.toContain('private-value');
   });
 
+  it('applies the shared secret policy to structured browser results', () => {
+    const display = formatAgentBrowserOutputForDisplay({
+      args: ['snapshot', '-i'],
+      rawOutput: JSON.stringify({
+        success: true,
+        data: {
+          auth: 'private-auth',
+          cookies: [{ name: 'theme', value: 'private-cookie' }],
+          session: 'private-session',
+          signature: 'private-signature',
+          code: 'visible-code',
+          key: 'visible-key',
+          status: 'visible',
+        },
+      }),
+      success: true,
+    });
+    const result = JSON.parse(display) as {
+      data: Record<string, unknown>;
+    };
+
+    expect(result.data).toMatchObject({
+      auth: '[REDACTED]',
+      cookies: '[REDACTED]',
+      session: '[REDACTED]',
+      signature: '[REDACTED]',
+      code: 'visible-code',
+      key: 'visible-key',
+      status: 'visible',
+    });
+  });
+
+  it.each([
+    '--auth=private-auth',
+    '--cookies=private-cookie',
+    '--session=private-session',
+    '--signature=private-signature',
+  ])('redacts output from shared secret-bearing flag %s', (flag) => {
+    expect(
+      formatAgentBrowserOutputForDisplay({
+        args: ['snapshot', flag],
+        rawOutput: JSON.stringify({
+          success: true,
+          data: { status: 'private-output' },
+        }),
+        success: true,
+      }),
+    ).toBe('[REDACTED]');
+  });
+
   it('still stops HAR capture when the request inventory command fails', () => {
     const sessionDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'proofshot-network-finalize-'),
