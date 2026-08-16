@@ -253,6 +253,18 @@ describe('browser interaction provenance', () => {
     expect(authorization).toContain('safe=visible');
   });
 
+  it('redacts continuations separated by blank lines', () => {
+    for (const newline of ['\n', '\r\n']) {
+      const message = sanitizeDiagnosticMessage(
+        `body=private-first${newline}${newline}  private-second${newline}safe=visible`,
+      );
+
+      expect(message).not.toContain('private-first');
+      expect(message).not.toContain('private-second');
+      expect(message).toContain('safe=visible');
+    }
+  });
+
   it('redacts compound secret keys and complete quoted values', () => {
     const message = sanitizeDiagnosticMessage(
       [

@@ -171,15 +171,27 @@ function findEscapedQuotedEnd(value: string, start: number): number {
 function findFreeFormEnd(value: string, start: number): number {
   let end = findLineEnd(value, start);
   while (end < value.length) {
-    const nextLineStart = skipLineBreak(value, end);
-    let contentStart = nextLineStart;
-    while (isHorizontalWhitespace(value[contentStart])) {
-      contentStart += 1;
+    let probe = end;
+    while (probe < value.length) {
+      const nextLineStart = skipLineBreak(value, probe);
+      let contentStart = nextLineStart;
+      while (isHorizontalWhitespace(value[contentStart])) {
+        contentStart += 1;
+      }
+      const nextLineEnd = findLineEnd(value, contentStart);
+      if (contentStart === nextLineEnd) {
+        probe = nextLineEnd;
+        continue;
+      }
+      if (contentStart === nextLineStart) {
+        return end;
+      }
+      end = nextLineEnd;
+      break;
     }
-    if (contentStart === nextLineStart) {
+    if (probe >= value.length) {
       return end;
     }
-    end = findLineEnd(value, contentStart);
   }
   return end;
 }
