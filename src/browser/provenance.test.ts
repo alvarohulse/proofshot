@@ -237,6 +237,22 @@ describe('browser interaction provenance', () => {
     expect(message).not.toContain('private-second-line');
   });
 
+  it('redacts indented continuations without swallowing later diagnostics', () => {
+    const body = sanitizeDiagnosticMessage(
+      'body=private-first\n  private-second\nsafe=visible',
+    );
+    const authorization = sanitizeDiagnosticMessage(
+      'Authorization: Digest private-first\n\tresponse=private-second\nsafe=visible',
+    );
+
+    expect(body).not.toContain('private-first');
+    expect(body).not.toContain('private-second');
+    expect(body).toContain('safe=visible');
+    expect(authorization).not.toContain('private-first');
+    expect(authorization).not.toContain('private-second');
+    expect(authorization).toContain('safe=visible');
+  });
+
   it('redacts compound secret keys and complete quoted values', () => {
     const message = sanitizeDiagnosticMessage(
       [

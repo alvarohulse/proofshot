@@ -77,16 +77,13 @@ function readSensitiveAssignment(
     };
   }
 
-  // Free-form values have no reliable intra-line boundary. A value beginning
-  // on a continuation line is even less structured, so consume the remainder.
-  const startsOnContinuationLine = /[\r\n]/.test(
-    value.slice(separator + 1, valueStart),
-  );
-  const lineEnd = value.slice(valueStart).search(/[\r\n]/);
-  const valueEnd = startsOnContinuationLine || lineEnd < 0
-    ? value.length
-    : valueStart + lineEnd;
-  return { replacement: REDACTED, valueEnd, valueStart };
+  // Free-form values have no reliable intra-line boundary. Folded headers and
+  // diagnostic continuations remain part of the field while they are indented.
+  return {
+    replacement: REDACTED,
+    valueEnd: findFreeFormEnd(value, valueStart),
+    valueStart,
+  };
 }
 
 function readKey(
@@ -169,6 +166,36 @@ function findEscapedQuotedEnd(value: string, start: number): number {
     }
   }
   return value.length;
+}
+
+function findFreeFormEnd(value: string, start: number): number {
+  let end = findLineEnd(value, start);
+  while (end < value.length) {
+    const nextLineStart = skipLineBreak(value, end);
+    let contentStart = nextLineStart;
+    while (isHorizontalWhitespace(value[contentStart])) {
+      contentStart += 1;
+    }
+    if (contentStart === nextLineStart) {
+      return end;
+    }
+    end = findLineEnd(value, contentStart);
+  }
+  return end;
+}
+
+function findLineEnd(value: string, start: number): number {
+  let end = start;
+  while (end < value.length && !/[\r\n]/.test(value[end])) {
+    end += 1;
+  }
+  return end;
+}
+
+function skipLineBreak(value: string, start: number): number {
+  return value[start] === '\r' && value[start + 1] === '\n'
+    ? start + 2
+    : start + 1;
 }
 
 function findCompositeEnd(value: string, start: number): number {
