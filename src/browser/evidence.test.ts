@@ -77,7 +77,31 @@ describe('private browser evidence', () => {
     expect(serialized).not.toContain('private-error');
   });
 
-  it('redacts sensitive structured results before writing local action evidence', () => {
+  it('redacts signed URL keys and sensitive endpoint path values', () => {
+    const summary = buildSanitizedNetworkSummary({
+      log: {
+        entries: [
+          {
+            time: 1,
+            request: {
+              method: 'GET',
+              url: 'https://example.test/download/token/private-path?signature=private-signature',
+            },
+            response: { status: 200 },
+          },
+        ],
+      },
+    });
+
+    const serialized = JSON.stringify(summary);
+    expect(serialized).not.toContain('private-path');
+    expect(serialized).not.toContain('private-signature');
+    expect(summary.requests[0]?.endpoint).toBe(
+      'https://example.test/download/token/%5BREDACTED%5D',
+    );
+  });
+
+  it('keeps raw structured results only in private action evidence', () => {
     const sessionDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'proofshot-private-result-'),
     );
@@ -95,8 +119,8 @@ describe('private browser evidence', () => {
       });
       const evidencePath = path.join(sessionDir, receipt.evidencePath);
       const evidence = fs.readFileSync(evidencePath, 'utf-8');
-      expect(evidence).not.toContain('private-cookie');
-      expect(evidence).toContain('[REDACTED]');
+      expect(evidence).toContain('private-cookie');
+      expect(receipt.evidencePath).toMatch(/^private\/agent-browser\/actions\//);
       expect(fs.statSync(evidencePath).mode & 0o777).toBe(0o600);
     } finally {
       fs.rmSync(sessionDir, { recursive: true, force: true });

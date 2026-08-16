@@ -383,24 +383,24 @@ export function generateViewer(data: ViewerData): string {
   let consoleLogBodyHtml: string;
   if (data.consoleEntries && data.consoleEntries.length > 0) {
     const built = buildTimestampedLogLines(data.consoleEntries);
-    consoleLogBodyHtml = `<pre class="log-pre">${built.html}</pre>${built.truncated ? '<p class="log-truncated">Log truncated at 2000 entries. See console-output.log for full output.</p>' : ''}`;
+    consoleLogBodyHtml = `<pre class="log-pre">${built.html}</pre>${built.truncated ? '<p class="log-truncated">Log truncated at 2000 entries. Raw output is retained privately.</p>' : ''}`;
   } else {
     const consoleTrunc = truncateLog(data.consoleOutput ?? '', MAX_LOG_BYTES);
     const consoleLogLines = buildLogLines(consoleTrunc.text);
     consoleLogBodyHtml = consoleLogLines
-      ? `<pre class="log-pre">${consoleLogLines}</pre>${consoleTrunc.truncated ? '<p class="log-truncated">Log truncated at 50 KB. See console-output.log for full output.</p>' : ''}`
+      ? `<pre class="log-pre">${consoleLogLines}</pre>${consoleTrunc.truncated ? '<p class="log-truncated">Log truncated at 50 KB. Raw output is retained privately.</p>' : ''}`
       : '<p class="log-empty">No console output captured</p>';
   }
 
   let serverLogBodyHtml: string;
   if (data.serverEntries && data.serverEntries.length > 0) {
     const built = buildTimestampedLogLines(data.serverEntries);
-    serverLogBodyHtml = `<pre class="log-pre">${built.html}</pre>${built.truncated ? '<p class="log-truncated">Log truncated at 2000 entries. See server.log for full output.</p>' : ''}`;
+    serverLogBodyHtml = `<pre class="log-pre">${built.html}</pre>${built.truncated ? '<p class="log-truncated">Log truncated at 2000 entries. Raw output is retained privately.</p>' : ''}`;
   } else {
     const serverTrunc = truncateLog(data.serverLog ?? '', MAX_LOG_BYTES);
     const serverLogLines = buildLogLines(serverTrunc.text);
     serverLogBodyHtml = serverLogLines
-      ? `<pre class="log-pre">${serverLogLines}</pre>${serverTrunc.truncated ? '<p class="log-truncated">Log truncated at 50 KB. See server.log for full output.</p>' : ''}`
+      ? `<pre class="log-pre">${serverLogLines}</pre>${serverTrunc.truncated ? '<p class="log-truncated">Log truncated at 50 KB. Raw output is retained privately.</p>' : ''}`
       : '<p class="log-empty">No server log captured</p>';
   }
 

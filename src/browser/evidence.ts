@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
-import { sanitizeDiagnosticMessage } from './provenance.js';
+import {
+  sanitizeDiagnosticMessage,
+  sanitizePageUrl,
+} from './provenance.js';
 import { ab } from '../utils/exec.js';
 
 const SECRET_BEARING_FLAG =
@@ -217,9 +220,10 @@ export function writePrivateAgentBrowserResult(options: {
     actionsDirectory,
     `${Date.now()}-${randomUUID()}.json`,
   );
-  const result = sanitizeStructuredResult(
-    parseStructuredResult(options.rawOutput, options.success, options.error),
-    options.args,
+  const result = parseStructuredResult(
+    options.rawOutput,
+    options.success,
+    options.error,
   );
   writeJsonFile(filePath, result);
   const evidencePath = path
@@ -449,7 +453,7 @@ function toSanitizedRequest(entry: Record<string, unknown>): SanitizedNetworkReq
 
 function sanitizeEndpoint(value: string): string {
   try {
-    const url = new URL(value);
+    const url = new URL(sanitizePageUrl(value) || value);
     return `${url.origin}${url.pathname}`;
   } catch {
     return sanitizeDiagnosticMessage(value) || '';

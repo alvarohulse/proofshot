@@ -367,7 +367,6 @@ function classifyArtifact(file: string): ManifestArtifactKind | null {
   if (isSessionRoot && basename === 'network-summary.json') {
     return 'network-summary';
   }
-  if (file.endsWith('.log') || file.endsWith('.ndjson')) return 'log';
   return null;
 }
 

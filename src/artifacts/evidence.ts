@@ -4,7 +4,11 @@ import { createHash, randomUUID } from 'crypto';
 import { execFileSync } from 'child_process';
 import { PNG } from 'pngjs';
 import type { SanitizedNetworkSummary } from '../browser/evidence.js';
-import type { SessionLogEntry } from '../session/action-log.js';
+import {
+  sanitizeSessionLogEntry,
+  type SessionLogEntry,
+} from '../session/action-log.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 import { loadEvidenceEvents } from '../environment/evidence.js';
 import type {
   EnvironmentState,
@@ -94,12 +98,20 @@ export type EvidenceBuildOptions = {
 export function writeCanonicalEvidence(
   options: EvidenceBuildOptions,
 ): { evidence: CanonicalEvidence; verdict: Verdict } {
-  const events = collectEvents(options);
+  const sanitizedOptions = {
+    ...options,
+    actions: options.actions.map(sanitizeSessionLogEntry),
+  };
+  const events = collectEvents(sanitizedOptions);
   applyPresentationFilters(events, options.environment?.sources || []);
-  const incidents = buildIncidents(events);
-  const screenshots = inspectScreenshots(options.sessionDir, options.actions);
+  const sanitizedEvents = events.map(sanitizeEvidenceEvent);
+  const incidents = buildIncidents(sanitizedEvents);
+  const screenshots = inspectScreenshots(
+    sanitizedOptions.sessionDir,
+    sanitizedOptions.actions,
+  );
   const mediaDurationSec = probeMediaDuration(options.videoPath);
-  const actionDuration = options.actions
+  const actionDuration = sanitizedOptions.actions
     .map((entry) => entry.relativeTimeSec)
     .filter(Number.isFinite)
     .reduce((maximum, current) => Math.max(maximum, current), 0);
@@ -110,10 +122,7 @@ export function writeCanonicalEvidence(
       : Math.max(0, actionDuration - mediaDurationSec);
   const mediaTruncated =
     mediaDivergenceSec !== null && mediaDivergenceSec > 1;
-  const sources = buildSourceSummaries(
-    events,
-    incidents,
-  );
+  const sources = buildSourceSummaries(sanitizedEvents, incidents);
   const evidence: CanonicalEvidence = {
     version: 1,
     sessionId: options.sessionId,
@@ -122,14 +131,14 @@ export function writeCanonicalEvidence(
     mediaDurationSec,
     mediaDivergenceSec,
     mediaTruncated,
-    actions: options.actions,
-    events,
+    actions: sanitizedOptions.actions,
+    events: sanitizedEvents,
     sources,
     incidents,
     screenshots,
     network: options.networkSummary,
   };
-  const verdict = buildVerdict(options, evidence);
+  const verdict = buildVerdict(sanitizedOptions, evidence);
   writeJsonAtomically(
     path.join(options.sessionDir, 'evidence.json'),
     evidence,
@@ -139,6 +148,18 @@ export function writeCanonicalEvidence(
     verdict,
   );
   return { evidence, verdict };
+}
+
+function sanitizeEvidenceEvent(event: EvidenceEvent): EvidenceEvent {
+  return {
+    ...event,
+    group: sanitizeDiagnosticMessage(event.group) || 'environment',
+    sourceId: sanitizeDiagnosticMessage(event.sourceId) || 'source',
+    sourceTitle: sanitizeDiagnosticMessage(event.sourceTitle) || 'Source',
+    text: sanitizeDiagnosticMessage(event.text) || '[REDACTED]',
+    navigationId: sanitizeDiagnosticMessage(event.navigationId),
+    pageUrl: sanitizeDiagnosticMessage(event.pageUrl),
+  };
 }
 
 function writeJsonAtomically(filePath: string, value: unknown): void {

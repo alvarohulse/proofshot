@@ -91,6 +91,7 @@ describe('ensureDevServer', () => {
     expect(isDetachedProcessIdentity(result.process)).toBe(true);
     expect(onStarted).toHaveBeenCalledWith(result);
     expect(fs.readFileSync(logPath, 'utf-8')).toMatch(/^\d{13}\tserver-ready$/m);
+    expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
 
     await terminateOwnedProcessTree(result.process, { graceMs: 300 });
     ownedProcesses.pop();

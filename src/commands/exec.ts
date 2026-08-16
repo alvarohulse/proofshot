@@ -150,7 +150,7 @@ function captureElementData(
     if (!bbox) return null;
 
     return {
-      label: label || '',
+      label: sanitizeDiagnosticMessage(label) || '',
       bbox: { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height },
       viewport,
     };

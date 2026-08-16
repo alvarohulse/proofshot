@@ -46,6 +46,10 @@ describe('canonical evidence and verdicts', () => {
       environmentEvent('Error: Vite stack exploded', 10),
       environmentEvent('GET /health', 11),
       environmentEvent('Error: Vite stack exploded', 12),
+      environmentEvent(
+        'Authorization: Basic cHJpdmF0ZTpzZWNyZXQ=',
+        12.5,
+      ),
       environmentEvent('[process stopped by ProofShot]', 13),
     ];
     fs.writeFileSync(
@@ -137,7 +141,7 @@ describe('canonical evidence and verdicts', () => {
       evidence.sources.find((source) => source.origin === 'browser'),
     ).toEqual(
       expect.objectContaining({
-        title: 'https://example.test',
+        title: 'https://example.test/',
         group: 'browser',
       }),
     );
@@ -149,6 +153,9 @@ describe('canonical evidence and verdicts', () => {
     expect(verdict.mediaTruncated).toBe(true);
     expect(fs.existsSync(path.join(sessionDir, 'evidence.json'))).toBe(true);
     expect(fs.existsSync(path.join(sessionDir, 'verdict.json'))).toBe(true);
+    expect(
+      fs.readFileSync(path.join(sessionDir, 'evidence.json'), 'utf-8'),
+    ).not.toContain('cHJpdmF0ZTpzZWNyZXQ=');
   });
 
   it('does not treat pre-recording lifecycle time as truncated media', () => {

@@ -69,8 +69,8 @@ Edit `src/utils/error-patterns.ts` — add a new entry to the `PATTERNS` array:
 | `metadata.json` | `start` | Git branch, commit SHA, timestamp (persists after stop) |
 | `session.mp4` | `stop` | Finalized H.264 recording (`start` captures temporary `session.webm`) |
 | `session-log.json` | `exec` (appended each call) | Action timeline with relative timestamps |
-| `server.log` | `start` (piped stdout+stderr) | All dev server output |
-| `console-output.log` | `stop` | Browser console output |
+| `private/server.log` | `start` (piped stdout+stderr) | Private raw dev server output |
+| `private/browser/console-output.log` | `stop` | Private raw browser console output |
 | `network-summary.json` | `stop` | Sanitized endpoint/method/status/timing/error metadata |
 | `private/agent-browser/` | `exec` / `stop` | User-only raw JSON/HAR; excluded from manifests and publication |
 | `step-*.png` | `exec screenshot` | Screenshots at key moments |

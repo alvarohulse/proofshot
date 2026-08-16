@@ -42,6 +42,13 @@ describe('finalized artifact manifests', () => {
     );
     temporaryDirectories.push(sessionDir);
     fs.mkdirSync(path.join(sessionDir, 'logs'));
+    fs.mkdirSync(path.join(sessionDir, 'private', 'browser'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(sessionDir, 'private', 'browser', 'console-output.log'),
+      'Authorization: Basic private-manifest-secret',
+    );
     for (const [file, contents] of [
       ['second.png', 'second'],
       ['first.png', 'first'],
@@ -113,8 +120,12 @@ describe('finalized artifact manifests', () => {
       manifest.artifacts.find(
         (artifact) => artifact.path === 'logs/frontend.log',
       ),
-    ).toBeDefined();
+    ).toBeUndefined();
     expect(loadArtifactManifest(sessionDir)).toEqual(manifest);
+    expect(JSON.stringify(manifest)).not.toContain('private-manifest-secret');
+    expect(
+      manifest.artifacts.some((artifact) => artifact.path.startsWith('private/')),
+    ).toBe(false);
     expect(() =>
       validateManifestArtifacts(sessionDir, manifest),
     ).not.toThrow();

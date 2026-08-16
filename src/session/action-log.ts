@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AgentBrowserResultReceipt } from '../browser/evidence.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 import type {
   InteractionCategory,
   SanitizedCommandIntent,
@@ -52,7 +53,7 @@ export function appendSessionLogEntry(
 ): string {
   const logPath = path.join(sessionDir, SESSION_LOG_FILENAME);
   updateSessionLog(logPath, (entries) => {
-    entries.push(entry);
+    entries.push(sanitizeSessionLogEntry(entry));
   });
   return logPath;
 }
@@ -70,9 +71,32 @@ export function persistSessionLogEntry(
           candidate.action === entry.action,
       );
     if (matchingEntry) {
-      Object.assign(matchingEntry, entry);
+      Object.assign(matchingEntry, sanitizeSessionLogEntry(entry));
     }
   });
+}
+
+export function sanitizeSessionLogEntry(entry: SessionLogEntry): SessionLogEntry {
+  return {
+    ...entry,
+    action: sanitizeDiagnosticMessage(entry.action) || '[REDACTED]',
+    intent: entry.intent
+      ? {
+          ...entry.intent,
+          summary:
+            sanitizeDiagnosticMessage(entry.intent.summary) || '[REDACTED]',
+        }
+      : undefined,
+    expectedSelector: sanitizeDiagnosticMessage(entry.expectedSelector),
+    error: sanitizeDiagnosticMessage(entry.error),
+    pageUrl: sanitizeDiagnosticMessage(entry.pageUrl),
+    element: entry.element
+      ? {
+          ...entry.element,
+          label: sanitizeDiagnosticMessage(entry.element.label) || '',
+        }
+      : undefined,
+  };
 }
 
 function updateSessionLog(

@@ -193,10 +193,29 @@ describe('browser interaction provenance', () => {
 
   it('redacts secret-shaped diagnostics before persistence', () => {
     const message = sanitizeDiagnosticMessage(
-      'authorization: Bearer private-token token=another-private-value',
+      [
+        'Authorization: Bearer private-bearer-token',
+        'authorization=Basic cHJpdmF0ZTpzZWNyZXQ=',
+        'token=another-private-value',
+        'https://downloads.example.test/accounts/token/private-path/report?X-Amz-Signature=private-signature&safe=yes',
+      ].join('\n'),
     );
-    expect(message).not.toContain('private-token');
+    expect(message).not.toContain('private-bearer-token');
+    expect(message).not.toContain('cHJpdmF0ZTpzZWNyZXQ=');
     expect(message).not.toContain('another-private-value');
+    expect(message).not.toContain('private-signature');
+    expect(message).not.toContain('private-path');
+    expect(message).toContain('safe=yes');
     expect(message).toContain('[REDACTED]');
+  });
+
+  it('redacts signed URL keys and sensitive path values', () => {
+    expect(
+      sanitizePageUrl(
+        'https://example.test/api/credentials/private-credential/file?sig=private-sig&signature=private-signature&view=full',
+      ),
+    ).toBe(
+      'https://example.test/api/credentials/%5BREDACTED%5D/file?sig=%5BREDACTED%5D&signature=%5BREDACTED%5D&view=full',
+    );
   });
 });

@@ -1006,7 +1006,7 @@ describe('isolated CLI lifecycle', () => {
       secretEntry.agentBrowserResult.evidencePath,
     );
     expect(fs.statSync(privateResultPath).mode & 0o777).toBe(0o600);
-    expect(fs.readFileSync(privateResultPath, 'utf-8')).not.toContain(secret);
+    expect(fs.readFileSync(privateResultPath, 'utf-8')).toContain(secret);
 
     const failedSecret = 'proofshot-failed-secret';
     const failedSecretExec = runCli(audit, postStartEnv, [
@@ -1040,7 +1040,7 @@ describe('isolated CLI lifecycle', () => {
         ),
         'utf-8',
       ),
-    ).not.toContain(failedSecret);
+    ).toContain(failedSecret);
 
     const failedExec = runCli(audit, postStartEnv, [
       'exec',
@@ -1363,7 +1363,10 @@ describe('isolated CLI lifecycle', () => {
         'utf-8',
       ),
     );
-    expect(interruptedVerdict).toMatchObject({ status: 'INCOMPLETE' });
+    expect(interruptedVerdict).toMatchObject({ status: 'BLOCKED' });
+    expect(interruptedVerdict.reasons).toContain(
+      'Browser console evidence was unavailable.',
+    );
     expect(interruptedVerdict.reasons).toContain(
       '1 browser action(s) had no recorded outcome.',
     );

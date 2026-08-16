@@ -83,6 +83,27 @@ function parseTimestampedServerLog(
   return { entries, cleanText: cleanLines.join('\n') };
 }
 
+function sanitizeTimestampedEntry(
+  entry: TimestampedLogEntry,
+): TimestampedLogEntry {
+  return {
+    ...entry,
+    text: sanitizeEvidenceText(entry.text),
+  };
+}
+
+function sanitizeEvidenceText(value: string): string {
+  return sanitizeDiagnosticMessage(value) || '';
+}
+
+function isRegularFile(filePath: string): boolean {
+  try {
+    return fs.lstatSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
 interface StopOptions {
   noClose?: boolean;
   session?: string;
@@ -162,8 +183,28 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const durationMs = new Date(session.stoppedAt).getTime() - startTime;
   const durationSec = Math.round(durationMs / 1000);
   const browserSessionAvailable = canAddressOwnedBrowserSession(session);
-
-  const priorConsoleEvidenceAvailable = session.consoleEvidenceAvailable === true;
+  const privateDirectory = path.join(session.sessionDir, 'private');
+  fs.mkdirSync(privateDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(privateDirectory, 0o700);
+  const privateBrowserDirectory = path.join(privateDirectory, 'browser');
+  fs.mkdirSync(privateBrowserDirectory, { recursive: true, mode: 0o700 });
+  fs.chmodSync(privateBrowserDirectory, 0o700);
+  const consoleErrorsPath = path.join(
+    privateBrowserDirectory,
+    'console-errors.log',
+  );
+  const consoleOutputPath = path.join(
+    privateBrowserDirectory,
+    'console-output.log',
+  );
+  const consoleEntriesPath = path.join(
+    privateBrowserDirectory,
+    'console-entries.json',
+  );
+  const priorConsoleEvidenceAvailable =
+    session.consoleEvidenceAvailable === true &&
+    isRegularFile(consoleErrorsPath) &&
+    isRegularFile(consoleOutputPath);
   if (!browserSessionAvailable && priorConsoleEvidenceAvailable) {
     console.log(
       chalk.dim('Browser already stopped; reusing console evidence collected before cleanup.'),
@@ -181,32 +222,32 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   let consoleErrors = '';
   let consoleOutput = '';
   let consoleEntries: TimestampedLogEntry[] = [];
-  const consoleErrorsPath = path.join(session.sessionDir, 'console-errors.log');
-  const consoleOutputPath = path.join(session.sessionDir, 'console-output.log');
-  const consoleEntriesPath = path.join(session.sessionDir, 'console-entries.json');
   let consoleCollectionSucceeded = false;
   if (browserSessionAvailable) {
     try {
-      consoleErrors = getConsoleErrors(session.sessionName);
-      consoleOutput = getConsoleOutput(session.sessionName);
+      const rawConsoleErrors = getConsoleErrors(session.sessionName);
+      const rawConsoleOutput = getConsoleOutput(session.sessionName);
       // Get timestamped console messages for viewer sync
       const consoleMessages = getConsoleOutputJson(session.sessionName);
-      consoleEntries = consoleMessages.map((msg) => ({
+      const rawConsoleEntries = consoleMessages.map((msg) => ({
         text: `[${msg.type}] ${msg.text}`,
         relativeTimeSec: Math.max(0, parseFloat(((msg.timestamp - startTime) / 1000).toFixed(1))),
       }));
+      writeTextFileAtomically(consoleErrorsPath, rawConsoleErrors);
+      writeTextFileAtomically(consoleOutputPath, rawConsoleOutput);
+      writeTextFileAtomically(
+        consoleEntriesPath,
+        JSON.stringify(rawConsoleEntries, null, 2) + '\n',
+      );
+      consoleErrors = sanitizeEvidenceText(rawConsoleErrors);
+      consoleOutput = sanitizeEvidenceText(rawConsoleOutput);
+      consoleEntries = rawConsoleEntries.map(sanitizeTimestampedEntry);
       consoleCollectionSucceeded = true;
     } catch {
       consoleCollectionSucceeded = false;
     }
   }
   if (consoleCollectionSucceeded) {
-    writeTextFileAtomically(consoleErrorsPath, consoleErrors);
-    writeTextFileAtomically(consoleOutputPath, consoleOutput);
-    writeTextFileAtomically(
-      consoleEntriesPath,
-      JSON.stringify(consoleEntries, null, 2) + '\n',
-    );
     const capturedErrorLines = consoleErrors
       .split('\n')
       .filter((line) => line.trim() && line.trim() !== 'No errors');
@@ -219,16 +260,18 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     // successfully collected browser facts into an "unavailable" claim.
     persistOwnedSession(session);
   } else if (priorConsoleEvidenceAvailable) {
-    if (fs.existsSync(consoleErrorsPath)) {
-      consoleErrors = fs.readFileSync(consoleErrorsPath, 'utf-8');
-    }
-    if (fs.existsSync(consoleOutputPath)) {
-      consoleOutput = fs.readFileSync(consoleOutputPath, 'utf-8');
-    }
+    consoleErrors = sanitizeEvidenceText(
+      fs.readFileSync(consoleErrorsPath, 'utf-8'),
+    );
+    consoleOutput = sanitizeEvidenceText(
+      fs.readFileSync(consoleOutputPath, 'utf-8'),
+    );
     if (fs.existsSync(consoleEntriesPath)) {
       try {
         const savedEntries = JSON.parse(fs.readFileSync(consoleEntriesPath, 'utf-8'));
-        if (Array.isArray(savedEntries)) consoleEntries = savedEntries;
+        if (Array.isArray(savedEntries)) {
+          consoleEntries = savedEntries.map(sanitizeTimestampedEntry);
+        }
       } catch {
         // Keep the persisted availability/count; only the optional timeline is absent.
       }
@@ -379,8 +422,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   if (fs.existsSync(session.serverErrorLog)) {
     const rawServerLog = fs.readFileSync(session.serverErrorLog, 'utf-8');
     const parsed = parseTimestampedServerLog(rawServerLog, startTime);
-    serverLog = parsed.cleanText;
-    serverEntries = parsed.entries;
+    serverLog = sanitizeEvidenceText(parsed.cleanText);
+    serverEntries = parsed.entries.map(sanitizeTimestampedEntry);
   }
 
   // Use session subfolder for all artifacts
@@ -429,12 +472,14 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       ? consoleErrorLines.length
       : 0;
   const consoleEvidenceAvailable =
-    browserSessionAvailable || priorConsoleEvidenceAvailable;
-  const consoleErrorCount = browserSessionAvailable
+    consoleCollectionSucceeded || priorConsoleEvidenceAvailable;
+  const consoleErrorCount = consoleCollectionSucceeded
     ? observedConsoleErrorCount
-    : session.consoleErrorCount ?? 0;
-  if (browserSessionAvailable) {
-    session.consoleEvidenceAvailable = true;
+    : priorConsoleEvidenceAvailable
+      ? session.consoleErrorCount ?? 0
+      : 0;
+  if (session.consoleEvidenceAvailable !== consoleEvidenceAvailable) {
+    session.consoleEvidenceAvailable = consoleEvidenceAvailable;
     session.consoleErrorCount = consoleErrorCount;
     persistOwnedSession(session);
   }
@@ -454,8 +499,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const summaryPath = path.join(sessionDir, 'SUMMARY.md');
   const summary = generateProofSummary({
     projectDirectory: session.startDirectory || process.cwd(),
-    description: session.description,
-    serverCommand: session.serverCommand,
+    description: sanitizeDiagnosticMessage(session.description || undefined) || null,
+    serverCommand:
+      sanitizeDiagnosticMessage(session.serverCommand || undefined) || null,
     port: session.port,
     headless: session.headless ?? config.headless ?? true,
     viewport: summaryViewport,
@@ -521,8 +567,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   });
 
   const viewerPath = writeViewer(sessionDir, {
-    description: session.description,
-    serverCommand: session.serverCommand,
+    description: sanitizeDiagnosticMessage(session.description || undefined) || null,
+    serverCommand:
+      sanitizeDiagnosticMessage(session.serverCommand || undefined) || null,
     durationSec: canonicalDurationSec,
     videoFilename: fs.existsSync(session.videoPath) ? path.basename(session.videoPath) : null,
     viewport: recordedViewport ?? undefined,
@@ -693,8 +740,9 @@ function installStopSignalHandlers(): {
 function writeTextFileAtomically(filePath: string, contents: string): void {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporaryPath, contents);
+    fs.writeFileSync(temporaryPath, contents, { mode: 0o600 });
     fs.renameSync(temporaryPath, filePath);
+    fs.chmodSync(filePath, 0o600);
   } finally {
     if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
   }
@@ -786,7 +834,7 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
   } else {
     md += `${data.serverErrorCount} error(s) detected:\n\n\`\`\`\n${data.serverLog.slice(0, 5000)}\n\`\`\`\n\n`;
     if (data.serverLog.length > 5000) {
-      md += `_(truncated — see server.log for full output)_\n\n`;
+      md += `_(truncated — raw output is retained privately)_\n\n`;
     }
   }
 

@@ -1,5 +1,6 @@
 import { execFileSync } from 'child_process';
 import { getIsolatedAgentBrowserEnvironment } from '../browser/isolation.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 
 export class ProofShotError extends Error {
   constructor(
@@ -128,9 +129,11 @@ export function ab(
   } catch (error: unknown) {
     const command = commandArgs[0] || 'command';
     const stderr = readProcessOutput(error, 'stderr');
-    const message = stderr || readErrorMessage(error) || 'Unknown error';
+    const message = sanitizeDiagnosticMessage(
+      stderr || readErrorMessage(error) || 'Unknown error',
+    );
     throw new ProofShotError(
-      `Browser command failed: agent-browser ${command}\n${message}`,
+      `Browser command failed: agent-browser ${command}\n${message || 'Unknown error'}`,
       error,
     );
   }

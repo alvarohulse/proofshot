@@ -263,6 +263,38 @@ describe('startCommand', () => {
     expect(mocks.unregisterSession).toHaveBeenCalledWith('ps-2026-04-deadbeef1234');
   });
 
+  it('does not print credential-bearing URLs or commands on start failure', async () => {
+    const credential = 'private-start-credential';
+    const targetUrl =
+      `https://user:${credential}@example.test/token/private-path?signature=${credential}`;
+    mocks.openBrowser.mockImplementation(() => {
+      throw new Error(
+        `Authorization: Basic ${credential} failed while opening ${targetUrl}`,
+      );
+    });
+    mocks.ensureDevServer.mockResolvedValue({
+      alreadyRunning: false,
+      port: 3000,
+      process: {
+        pid: 5001,
+        processGroupId: 5001,
+        sessionId: 5001,
+        startTime: 'server-start',
+      },
+    });
+
+    const commandPromise = startCommand({
+      run: `npm run dev -- --token=${credential}`,
+      url: targetUrl,
+    }).catch((error) => error);
+    await expect(commandPromise).resolves.toMatchObject({ message: 'process.exit:1' });
+
+    const output = JSON.stringify(vi.mocked(console.error).mock.calls);
+    expect(output).not.toContain(credential);
+    expect(output).not.toContain('private-path');
+    expect(output).not.toContain('npm run dev');
+  });
+
   it('persists network cleanup state before starting HAR capture', async () => {
     mocks.startPrivateNetworkCapture.mockImplementation(() => {
       const persistedState = mocks.registerSession.mock.calls.at(-1)?.[0];

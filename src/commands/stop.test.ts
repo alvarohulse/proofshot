@@ -74,7 +74,8 @@ vi.mock('../environment/runtime.js', () => ({
 }));
 vi.mock('../artifacts/viewer.js', () => ({ writeViewer: mocks.writeViewer }));
 vi.mock('../utils/error-patterns.js', () => ({ extractServerErrors: mocks.extractServerErrors }));
-vi.mock('../session/action-log.js', () => ({
+vi.mock('../session/action-log.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../session/action-log.js')>()),
   loadSessionLog: mocks.loadSessionLog,
 }));
 vi.mock('../utils/token-usage.js', () => ({ estimateTokenUsage: mocks.estimateTokenUsage }));
@@ -99,7 +100,8 @@ beforeEach(() => {
   fs.mkdirSync(cache, { recursive: true });
   root = fs.mkdtempSync(path.join(cache, 'proofshot-stop-test-'));
   const sessionDir = path.join(root, 'custom-evidence', 'session');
-  fs.mkdirSync(sessionDir, { recursive: true });
+  const privateDirectory = path.join(sessionDir, 'private');
+  fs.mkdirSync(privateDirectory, { recursive: true });
   session = {
     startedAt: new Date(Date.now() - 1000).toISOString(),
     startDirectory: path.join(root, 'project'),
@@ -108,7 +110,7 @@ beforeEach(() => {
     sessionDir,
     sessionName: 'ps-retry-deadbeef1234',
     videoPath: path.join(sessionDir, 'session.webm'),
-    serverErrorLog: path.join(sessionDir, 'server.log'),
+    serverErrorLog: path.join(privateDirectory, 'server.log'),
     port: 3000,
     serverCommand: 'npm run dev',
     serverAlreadyRunning: false,
@@ -416,10 +418,10 @@ describe('stopCommand retryability', () => {
       consoleEvidenceAvailable: true,
       consoleErrorCount: 1,
     });
-    expect(fs.readFileSync(path.join(session.sessionDir, 'console-errors.log'), 'utf-8')).toBe(
+    expect(fs.readFileSync(path.join(session.sessionDir, 'private', 'browser', 'console-errors.log'), 'utf-8')).toBe(
       'synthetic console failure',
     );
-    expect(fs.readFileSync(path.join(session.sessionDir, 'console-output.log'), 'utf-8')).toBe(
+    expect(fs.readFileSync(path.join(session.sessionDir, 'private', 'browser', 'console-output.log'), 'utf-8')).toBe(
       'captured before cleanup',
     );
 
@@ -442,6 +444,74 @@ describe('stopCommand retryability', () => {
     const summary = fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8');
     expect(summary).toContain('1 error(s) detected');
     expect(summary).toContain('synthetic console failure');
+  });
+
+  it('keeps raw console and server secrets private while sanitizing derivatives', async () => {
+    const basicCredential = 'cHJpdmF0ZTpzZWNyZXQ=';
+    const bearerCredential = 'private-bearer-token';
+    const signedUrl =
+      'https://example.test/download/token/private-path?X-Amz-Signature=private-signature';
+    mocks.getConsoleErrors.mockReturnValue(
+      `Authorization: Basic ${basicCredential}`,
+    );
+    mocks.getConsoleOutput.mockReturnValue(signedUrl);
+    mocks.getConsoleOutputJson.mockReturnValue([
+      {
+        type: 'error',
+        text: `Authorization: Bearer ${bearerCredential}`,
+        timestamp: Date.now(),
+      },
+    ]);
+    fs.writeFileSync(
+      session.serverErrorLog,
+      `${Date.now()}\trequest failed at ${signedUrl}\n`,
+    );
+    mocks.extractServerErrors.mockImplementation((value: string) => [value]);
+    mocks.writeViewer.mockReturnValue(path.join(session.sessionDir, 'viewer.html'));
+
+    await stopCommand({});
+
+    const rawConsole = fs.readFileSync(
+      path.join(
+        session.sessionDir,
+        'private',
+        'browser',
+        'console-output.log',
+      ),
+      'utf-8',
+    );
+    const rawServer = fs.readFileSync(session.serverErrorLog, 'utf-8');
+    expect(rawConsole).toContain('private-signature');
+    expect(rawServer).toContain('private-path');
+
+    const viewerInput = JSON.stringify(mocks.writeViewer.mock.calls.at(-1)?.[1]);
+    const summary = fs.readFileSync(
+      path.join(session.sessionDir, 'SUMMARY.md'),
+      'utf-8',
+    );
+    const terminalOutput = JSON.stringify(
+      (console.log as ReturnType<typeof vi.fn>).mock.calls,
+    );
+    const canonicalEvidence = fs.readFileSync(
+      path.join(session.sessionDir, 'evidence.json'),
+      'utf-8',
+    );
+    const artifactManifest = fs.readFileSync(
+      path.join(session.sessionDir, 'artifact-manifest.json'),
+      'utf-8',
+    );
+    for (const derivative of [
+      viewerInput,
+      summary,
+      terminalOutput,
+      canonicalEvidence,
+      artifactManifest,
+    ]) {
+      expect(derivative).not.toContain(basicCredential);
+      expect(derivative).not.toContain(bearerCredential);
+      expect(derivative).not.toContain('private-signature');
+      expect(derivative).not.toContain('private-path');
+    }
   });
 
   it('withholds viewer dimensions when the session recorded no usable viewport', async () => {

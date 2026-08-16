@@ -8,7 +8,10 @@ import {
   preparePrivateNetworkEvidence,
   startPrivateNetworkCapture,
 } from '../browser/evidence.js';
-import { sanitizePageUrl } from '../browser/provenance.js';
+import {
+  sanitizeDiagnosticMessage,
+  sanitizePageUrl,
+} from '../browser/provenance.js';
 import {
   loadIsolatedAgentBrowserConfig,
   resolveAgentBrowserRuntime,
@@ -102,9 +105,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       } catch (error) {
         console.error(
           chalk.red('✗') +
-            ` Could not claim recovery for ${existingSession.sessionName}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            ` Could not claim recovery for ${existingSession.sessionName}: ${sanitizeErrorMessage(error)}`,
         );
         process.exit(1);
         return;
@@ -133,7 +134,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         registerSession(existingSession);
         console.error(
           chalk.red('✗') +
-            ` Could not recover ${existingSession.sessionName}: ${existingSession.cleanupError}`,
+            ` Could not recover ${existingSession.sessionName}: ${sanitizeDiagnosticMessage(existingSession.cleanupError) || 'cleanup failed'}`,
         );
         process.exit(1);
         return;
@@ -198,8 +199,11 @@ export async function startCommand(options: StartOptions): Promise<void> {
     if (!browserExecutable) {
       throw browserSetupError();
     }
-  } catch (error: any) {
-    console.error(chalk.red('✗') + ` Browser preflight failed: ${error.message}`);
+  } catch (error: unknown) {
+    console.error(
+      chalk.red('✗') +
+        ` Browser preflight failed: ${sanitizeErrorMessage(error)}`,
+    );
     process.exit(1);
     return;
   }
@@ -210,12 +214,21 @@ export async function startCommand(options: StartOptions): Promise<void> {
   ensureOutputDir(sessionDir);
 
   const videoPath = path.join(sessionDir, 'session.webm');
-  const serverErrorLog = path.join(sessionDir, 'server.log');
   const networkEvidence = preparePrivateNetworkEvidence(sessionDir);
+  const serverErrorLog = path.join(
+    path.dirname(networkEvidence.privateDirectory),
+    'server.log',
+  );
   const agentBrowserConfigPath = writeIsolatedAgentBrowserConfig(
     networkEvidence.privateDirectory,
     isolatedAgentBrowserConfig,
   );
+  const privateEnvironmentDirectory = path.join(
+    sessionDir,
+    'private',
+    'environment',
+  );
+  ensureOutputDir(privateEnvironmentDirectory);
   setAgentBrowserDefaults({
     allowedDomains: agentBrowserAllowedDomains,
     configPath: agentBrowserConfigPath,
@@ -230,7 +243,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
     ...provenance,
     repositoryRoot: process.cwd(),
     startedAt: new Date().toISOString(),
-    description: options.description || null,
+    description:
+      sanitizeDiagnosticMessage(options.description) || null,
   });
 
   const session: SessionState = {
@@ -293,7 +307,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       session.environment = await startOwnedEnvironment(
         config.environment,
         config.logs || {},
-        sessionDir,
+        privateEnvironmentDirectory,
         sessionName,
         new Date(session.startedAt).getTime(),
         (environmentState) => {
@@ -305,7 +319,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     }
     if (options.run) {
       failureContext = 'start dev server';
-      console.log(chalk.dim(`Starting: ${options.run}`));
+      console.log(chalk.dim('Starting dev server command...'));
       const server = await ensureDevServer(
         options.run,
         config.devServer.port,
@@ -380,7 +394,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         `Recording did not start after ${RECORDING_RETRIES} attempts: ${lastError?.message}`,
       );
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (signalHandlers.isHandling()) {
       return;
     }
@@ -392,7 +406,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
       clearOwnedSession(session);
       console.error(
         chalk.red('✗') +
-          ` Failed to ${failureContext}: ${error.message}\n` +
+          ` Failed to ${failureContext}: ${sanitizeErrorMessage(error)}\n` +
           chalk.dim('All processes started by this ProofShot attempt were cleaned up.'),
       );
     } catch (cleanupError) {
@@ -405,8 +419,10 @@ export async function startCommand(options: StartOptions): Promise<void> {
       }
       console.error(
         chalk.red('✗') +
-          ` Failed to ${failureContext}: ${error.message}\n` +
-          chalk.yellow(`Cleanup is incomplete: ${session.cleanupError}\n`) +
+          ` Failed to ${failureContext}: ${sanitizeErrorMessage(error)}\n` +
+          chalk.yellow(
+            `Cleanup is incomplete: ${sanitizeDiagnosticMessage(session.cleanupError) || 'cleanup failed'}\n`,
+          ) +
           chalk.dim(`Run "proofshot session clean --session ${session.sessionName}" to retry.`),
       );
     }
@@ -429,15 +445,17 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log('');
   console.log(chalk.green.bold('✅ ProofShot session started'));
   console.log('');
-  console.log(`Server:     ${options.run ? chalk.cyan(options.run) : chalk.dim('external')} on :${config.devServer.port}`);
+  console.log(`Server:     ${options.run ? chalk.cyan('ProofShot-owned') : chalk.dim('external')} on :${config.devServer.port}`);
   console.log(`Browser:    Chromium (${config.headless ? 'headless' : 'headed'})`);
   console.log(`Session:    ${chalk.dim(sessionName)}`);
-  console.log(`Target:     ${chalk.dim(openUrl)}`);
+  console.log(`Target:     ${chalk.dim(sanitizePageUrl(openUrl) || '[REDACTED_URL]')}`);
   console.log(`Recording:  ${chalk.dim(videoPath)}`);
   console.log(`Errors log: ${chalk.dim(serverErrorLog)}`);
 
   if (options.description) {
-    console.log(`Verifying:  ${chalk.white(options.description)}`);
+    console.log(
+      `Verifying:  ${chalk.white(sanitizeDiagnosticMessage(options.description) || '[REDACTED]')}`,
+    );
   }
 
   console.log('');
@@ -467,6 +485,11 @@ function persistOwnedSession(session: SessionState): void {
 
 function clearOwnedSession(session: SessionState): void {
   unregisterSession(session.sessionName);
+}
+
+function sanitizeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return sanitizeDiagnosticMessage(message) || 'operation failed';
 }
 
 function installStartSignalHandlers(

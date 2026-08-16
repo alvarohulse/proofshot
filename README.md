@@ -102,14 +102,12 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 | `SUMMARY.md` | Markdown report with errors, screenshots, and video |
 | `step-*.png` | Screenshots captured at key moments |
 | `session-log.json` | Action timeline with timestamps and element data |
-| `server.log` | Dev server stdout/stderr (when using `--run`) |
-| `console-output.log` | Browser console output |
 | `evidence.json` | Canonical browser/environment events, incidents, source integrity, and media timing |
 | `verdict.json` | Structured `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED` verdict |
 | `artifact-manifest.json` | Finalized repository/commit provenance and ordered artifact hashes |
 | `network-summary.json` | Sanitized request method/status/timing/error metadata |
 
-Raw agent-browser JSON and HAR evidence stays under the session's private directory with user-only permissions. It is excluded from manifests and publication; only curated media and sanitized summaries are reviewable artifacts.
+Raw agent-browser JSON, HAR, browser-console, and ProofShot-owned server evidence stays under the session's `private/` directory with user-only permissions. It is excluded from manifests and publication; only curated media and sanitized summaries are reviewable artifacts.
 
 <p align="center">
   <img src="brand-assets/screenshots/artifacts-folder.png" alt="ProofShot artifacts folder" width="480" />
