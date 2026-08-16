@@ -100,4 +100,59 @@ describe('ensureDevServer', () => {
     }
     expect(await isPortOpen(port)).toBe(false);
   });
+
+  it('rejects a same-port starter whose owned supervisor loses the bind race', async () => {
+    const root = createRoot();
+    const scriptPath = path.join(root, 'racing-server.mjs');
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "import fs from 'node:fs';",
+        "import http from 'node:http';",
+        'const [port, ownMarker, peerMarker] = process.argv.slice(2);',
+        "fs.writeFileSync(ownMarker, 'ready');",
+        'while (!fs.existsSync(peerMarker)) {',
+        '  await new Promise((resolve) => setTimeout(resolve, 10));',
+        '}',
+        "const server = http.createServer((_req, res) => res.end('ok'));",
+        "server.on('error', () => process.exit(98));",
+        "server.listen(Number(port), '127.0.0.1');",
+      ].join('\n'),
+    );
+
+    const probe = http.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const address = probe.address();
+    if (!address || typeof address === 'string') throw new Error('missing probe port');
+    const port = address.port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    const markers = [path.join(root, 'first.ready'), path.join(root, 'second.ready')];
+    const starts = markers.map((marker, index) =>
+      ensureDevServer(
+        [
+          shellQuote(process.execPath),
+          shellQuote(scriptPath),
+          String(port),
+          shellQuote(marker),
+          shellQuote(markers[1 - index]),
+        ].join(' '),
+        port,
+        3000,
+        path.join(root, `server-${index}.log`),
+        ({ process }) => ownedProcesses.push(process),
+      ),
+    );
+
+    const results = await Promise.allSettled(starts);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(
+      results.find((result) => result.status === 'rejected'),
+    ).toMatchObject({
+      reason: expect.objectContaining({
+        message: expect.stringMatching(/another listener/i),
+      }),
+    });
+  });
 });

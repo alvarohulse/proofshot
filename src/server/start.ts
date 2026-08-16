@@ -5,6 +5,7 @@ import {
   captureProcessIdentity,
   getShellExecutable,
   isDetachedProcessIdentity,
+  ownedProcessTreeIsAlive,
   terminateOwnedProcessTree,
   terminateProcessTree,
   type ProcessIdentity,
@@ -130,6 +131,14 @@ export async function ensureDevServer(
 
   // Small delay for stability
   await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  if (!ownedProcessTreeIsAlive(processIdentity)) {
+    await terminateOwnedProcessTree(processIdentity);
+    throw new Error(
+      `The configured dev server process exited after port ${port} became available.\n` +
+        'Another listener may have won a concurrent startup race; choose a different port and retry.',
+    );
+  }
 
   return result;
 }
