@@ -26,15 +26,45 @@ export interface VerificationResult {
  * Ensure the output directory exists.
  */
 export function ensureOutputDir(outputDir: string): void {
-  const createdDirectory = fs.mkdirSync(outputDir, {
+  const resolvedOutputDir = path.resolve(outputDir);
+  assertRealDirectoryPath(resolvedOutputDir);
+
+  const createdDirectory = fs.mkdirSync(resolvedOutputDir, {
     recursive: true,
     mode: 0o700,
   });
-  if (createdDirectory) {
-    fs.chmodSync(outputDir, 0o700);
-    return;
-  }
+  assertRealDirectoryPath(resolvedOutputDir);
 
+  assertOwnedDirectory(resolvedOutputDir);
+  if (createdDirectory !== undefined) {
+    fs.chmodSync(resolvedOutputDir, 0o700);
+  }
+  assertPrivateDirectory(resolvedOutputDir);
+}
+
+function assertRealDirectoryPath(directoryPath: string): void {
+  const root = path.parse(directoryPath).root;
+  const relativePath = path.relative(root, directoryPath);
+  const components = relativePath === '' ? [] : relativePath.split(path.sep);
+  let componentPath = root;
+
+  for (const component of components) {
+    componentPath = path.join(componentPath, component);
+    const componentStat = fs.lstatSync(componentPath, {
+      throwIfNoEntry: false,
+    });
+    if (componentStat === undefined) {
+      return;
+    }
+    if (!componentStat.isDirectory() || componentStat.isSymbolicLink()) {
+      throw new Error(
+        `ProofShot output path component must be a real directory: ${componentPath}`,
+      );
+    }
+  }
+}
+
+function assertOwnedDirectory(outputDir: string): fs.Stats {
   const directoryStat = fs.lstatSync(outputDir);
   if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
     throw new Error(`ProofShot output must be a real directory: ${outputDir}`);
@@ -43,7 +73,13 @@ export function ensureOutputDir(outputDir: string): void {
   if (uid !== undefined && directoryStat.uid !== uid) {
     throw new Error(`ProofShot output must be owned by the current user: ${outputDir}`);
   }
-  if (uid !== undefined && (directoryStat.mode & 0o077) !== 0) {
+  return directoryStat;
+}
+
+function assertPrivateDirectory(outputDir: string): void {
+  const directoryStat = assertOwnedDirectory(outputDir);
+  const uid = process.getuid?.();
+  if (uid !== undefined && (directoryStat.mode & 0o777) !== 0o700) {
     throw new Error(
       `ProofShot output must already be private; refusing to change permissions: ${outputDir}`,
     );
