@@ -68,7 +68,7 @@ Edit `src/utils/error-patterns.ts` — add a new entry to the `PATTERNS` array:
 | File | Created by | Contains |
 |---|---|---|
 | `metadata.json` | `start` | Git branch, commit SHA, timestamp (persists after stop) |
-| `session.mp4` | `start` / `stop` | H.264 recording captured directly; `stop` trims dead time when ffmpeg is available |
+| `session.mp4` | `start` / `stop` | H.264 recording captured directly; `stop` trims dead time |
 | `session-log.json` | `exec` (appended each call) | Action timeline with relative timestamps |
 | `private/server.log` | `start` (piped stdout+stderr) | Private raw dev server output |
 | `private/browser/console-output.log` | `stop` | Private raw browser console output |

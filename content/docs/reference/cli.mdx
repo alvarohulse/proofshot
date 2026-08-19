@@ -62,9 +62,11 @@ proofshot start --description "Verify checkout flow"        # Add description to
 proofshot start --headed                                    # Show the browser window
 ```
 
+Recording is supported on Linux and macOS only. It requires an executable `ffmpeg` so ProofShot can route agent-browser's recorder through a quiet wrapper; if that preflight cannot complete, `start` fails before creating a session. On Windows, `start` refuses recording rather than risk the pinned agent-browser 0.34.0 recorder hanging while it finalizes FFmpeg output. This restriction will be removed after the upstream recorder drains FFmpeg stderr.
+
 **What happens:**
 1. Starts either `--run` or the configured owned `environment` (the two are mutually exclusive), attaches every configured log source, and completes readiness checks
-2. Requires agent-browser 0.34.0, a local Chromium executable, a safe per-session config, and a target-domain allowlist
+2. Requires agent-browser 0.34.0, a local Chromium executable, executable ffmpeg, a safe per-session config, and a target-domain allowlist
 3. Creates a unique browser namespace/private evidence directory and registers an immutable session ID
 4. Navigates to `--url`, starts private HAR capture, and starts video recording
 5. Persists exact process identities and lifecycle operation ownership for cross-process recovery
@@ -89,7 +91,7 @@ proofshot stop [options]
 2. Atomically finalizes private HAR evidence and a sanitized network summary, then stops video recording
 3. Closes the exact owned browser session (unless `--no-close`)
 4. Stops only the tmux session/server, direct processes, capture helpers, and dev-server process identities created by this ProofShot start
-5. Trims dead time from the finalized H.264 `session.mp4` when ffmpeg is available: 5s buffer before first action, 3s after last
+5. Trims dead time from the finalized H.264 `session.mp4`: 5s buffer before first action, 3s after last
 6. Scans `server.log` for errors across 10+ languages
 7. Generates `SUMMARY.md`, canonical `evidence.json`, structured `verdict.json`, `viewer.html`, and a hashed provenance manifest
 8. Unregisters completed ownership, or retains the exact session after `--no-close` until a later plain `stop`
