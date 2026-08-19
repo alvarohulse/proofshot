@@ -185,7 +185,19 @@ export function loadSanitizedNetworkSummary(
   }
   try {
     const value = JSON.parse(fs.readFileSync(summaryPath, 'utf-8')) as unknown;
-    return isSanitizedNetworkSummary(value) ? value : null;
+    return isSanitizedNetworkSummary(value)
+      ? {
+          version: 1,
+          requestCount: value.requests.length,
+          requests: value.requests.map((request) => ({
+            endpoint: request.endpoint,
+            method: request.method,
+            status: request.status,
+            durationMs: request.durationMs,
+            error: request.error,
+          })),
+        }
+      : null;
   } catch {
     return null;
   }

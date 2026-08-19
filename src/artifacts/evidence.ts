@@ -333,7 +333,7 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
     }
   >();
   for (const event of events) {
-    const severity = classifyIncident(event.text);
+    const severity = classifyIncident(event.text, event.origin);
     if (!severity) {
       continue;
     }
@@ -371,7 +371,10 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
   }));
 }
 
-function classifyIncident(text: string): 'fatal' | 'error' | null {
+function classifyIncident(
+  text: string,
+  origin: EvidenceEvent['origin'],
+): 'fatal' | 'error' | null {
   if (
     /\bFATAL\b|\bpanic:|uncaught exception|unhandled rejection|capture worker exited before stop|malformed canonical evidence row|\[process exited with code (?!0\])/i.test(
       text,
@@ -379,7 +382,10 @@ function classifyIncident(text: string): 'fatal' | 'error' | null {
   ) {
     return 'fatal';
   }
-  if (/\bError:|ERR[_!]|Exception:|Traceback/i.test(text)) {
+  if (
+    origin === 'browser' &&
+    /\bError:|ERR[_!]|Exception:|Traceback/i.test(text)
+  ) {
     return 'error';
   }
   return null;
@@ -631,11 +637,6 @@ function buildVerdict(
   const nonfatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === 'error',
   ).length;
-  const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
-    (request) =>
-      request.error != null || request.status === 0 || request.status >= 400,
-  ).length;
-  const browserErrorCount = evidence.browserErrorCount ?? 0;
   const blockingReasons = options.consoleEvidenceAvailable
     ? []
     : ['Browser console evidence was unavailable.'];
@@ -645,6 +646,9 @@ function buildVerdict(
       : []),
     ...(expectedSelectorFailures.length > 0
       ? [`${expectedSelectorFailures.length} expected selector assertion(s) failed.`]
+      : []),
+    ...(nonfatalIncidentCount > 0
+      ? [`${nonfatalIncidentCount} browser incident(s) detected.`]
       : []),
   ];
   const incompleteReasons = [
@@ -659,15 +663,6 @@ function buildVerdict(
       : []),
     ...(duplicateScreenshotHashes.length > 0
       ? ['Duplicate key-frame screenshot hashes were detected.']
-      : []),
-    ...(nonfatalIncidentCount > 0
-      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
-      : []),
-    ...(failedNetworkRequestCount > 0
-      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
-      : []),
-    ...(browserErrorCount > 0
-      ? [`${browserErrorCount} uncaught browser error(s) detected.`]
       : []),
     ...(pendingActions.length > 0
       ? [

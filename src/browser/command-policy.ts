@@ -288,7 +288,7 @@ function requireArguments(args: string[], minimum: number, usage: string): void 
 
 function assertCookieArguments(args: string[]): void {
   if (args[1]?.toLowerCase() !== 'set') return;
-  const curlIndex = args.findIndex((argument) => argument === '--curl');
+  const curlIndex = args.findIndex((argument) => normalizeFlag(argument) === '--curl');
   if (curlIndex >= 0) {
     requireArguments(args.slice(curlIndex), 2, 'cookies set --curl <file>');
     return;

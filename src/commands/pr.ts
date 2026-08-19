@@ -459,7 +459,12 @@ function readUserTesting(
     (candidate) => candidate.kind === 'instructions',
   );
   if (!artifact) return null;
-  const contents = fs.readFileSync(path.join(selection.sessionDir, artifact.path));
+  let contents: Buffer;
+  try {
+    contents = fs.readFileSync(path.join(selection.sessionDir, artifact.path));
+  } catch {
+    return null;
+  }
   if (
     contents.length !== artifact.size ||
     createHash('sha256').update(contents).digest('hex') !== artifact.sha256
@@ -472,7 +477,7 @@ function readUserTesting(
     .map((line) => line.match(/^\d+\.\s+(.+)$/)?.[1])
     .filter((line): line is string => Boolean(line));
   if (instructions.length === 0) {
-    throw new Error('Finalized user-testing instructions were malformed.');
+    return null;
   }
   return {
     label: selection.manifest.sessionId,

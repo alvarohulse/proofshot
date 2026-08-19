@@ -1,4 +1,4 @@
-import { stopRecording } from '../browser/capture.js';
+import { finalizeRecording } from '../browser/capture.js';
 import { finalizePrivateNetworkCapture } from '../browser/evidence.js';
 import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
@@ -172,7 +172,7 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
   let recordingFinalizationFailed = false;
   if (canAddressOwnedBrowserSession(session)) {
     try {
-      stopRecording(session.sessionName);
+      await finalizeRecording(session.videoPath, session.sessionName);
     } catch (error) {
       cleanupError ||= error;
       recordingFinalizationFailed = true;
