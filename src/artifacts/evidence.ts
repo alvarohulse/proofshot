@@ -682,10 +682,10 @@ function buildVerdict(
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : incompleteReasons.length > 0
-        ? 'INCOMPLETE'
-        : failureReasons.length > 0
-          ? 'FAIL'
+      : failureReasons.length > 0
+        ? 'FAIL'
+        : incompleteReasons.length > 0
+          ? 'INCOMPLETE'
           : 'PASS';
   return {
     version: 1,
