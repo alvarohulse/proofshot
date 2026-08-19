@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   resolveSessionControlDir: vi.fn(),
   saveSession: vi.fn(),
   finalizeRecording: vi.fn(),
+  verifyFinalizedRecording: vi.fn(),
   getConsoleErrors: vi.fn(),
   getConsoleOutput: vi.fn(),
   getConsoleOutputJson: vi.fn(),
@@ -42,6 +43,7 @@ vi.mock('../session/state.js', () => ({
 }));
 vi.mock('../browser/capture.js', () => ({
   finalizeRecording: mocks.finalizeRecording,
+  verifyFinalizedRecording: mocks.verifyFinalizedRecording,
 }));
 vi.mock('../browser/evidence.js', () => ({
   finalizePrivateNetworkCapture: mocks.finalizePrivateNetworkCapture,
@@ -148,6 +150,7 @@ beforeEach(() => {
     requestCount: 0,
     requests: [],
   });
+  mocks.verifyFinalizedRecording.mockResolvedValue(undefined);
   mocks.execFileSync.mockReturnValue('');
   mocks.stopOwnedBrowser.mockResolvedValue(undefined);
   mocks.stopOwnedServer.mockResolvedValue(undefined);
@@ -195,6 +198,21 @@ describe('stopCommand retryability', () => {
     expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
     expect(mocks.stopOwnedServer).not.toHaveBeenCalled();
     expect(mocks.registerSession).toHaveBeenCalledWith(session);
+  });
+
+  it('retains recovery ownership when missing media cannot be verified', async () => {
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+    mocks.verifyFinalizedRecording.mockRejectedValueOnce(
+      new Error('recording is missing'),
+    );
+
+    await expect(stopCommand({})).rejects.toThrow('recording is missing');
+
+    expect(session.lifecycleStatus).toBe('recovery');
+    expect(session.cleanupError).toContain('could not be verified');
+    expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedServer).not.toHaveBeenCalled();
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
   });
 
   it('retains active network capture and browser ownership when live finalization fails', async () => {
@@ -472,6 +490,11 @@ describe('stopCommand retryability', () => {
     const summary = fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8');
     expect(summary).toContain('1 error(s) detected');
     expect(summary).toContain('synthetic console failure');
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(session.sessionDir, 'evidence.json'), 'utf-8'),
+      ).browserErrorCount,
+    ).toBe(1);
   });
 
   it('keeps raw console and server secrets private while sanitizing derivatives', async () => {

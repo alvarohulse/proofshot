@@ -60,6 +60,7 @@ export type CanonicalEvidence = {
   mediaDurationSec: number | null;
   mediaDivergenceSec: number | null;
   mediaTruncated: boolean;
+  browserErrorCount?: number;
   actions: SessionLogEntry[];
   events: EvidenceEvent[];
   sources: EvidenceSourceSummary[];
@@ -89,6 +90,7 @@ export type EvidenceBuildOptions = {
   videoPath: string;
   recordingWasActive: boolean;
   consoleEvidenceAvailable: boolean;
+  browserErrorCount?: number;
   actions: SessionLogEntry[];
   consoleEntries: TimestampedLogEntry[];
   serverEntries: TimestampedLogEntry[];
@@ -134,6 +136,7 @@ export function writeCanonicalEvidence(
     mediaDurationSec,
     mediaDivergenceSec,
     mediaTruncated,
+    browserErrorCount: options.browserErrorCount ?? 0,
     actions: sanitizedOptions.actions,
     events: sanitizedEvents,
     sources,
@@ -630,8 +633,9 @@ function buildVerdict(
   ).length;
   const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
     (request) =>
-      request.error != null || request.status >= 400,
+      request.error != null || request.status === 0 || request.status >= 400,
   ).length;
+  const browserErrorCount = evidence.browserErrorCount ?? 0;
   const blockingReasons = options.consoleEvidenceAvailable
     ? []
     : ['Browser console evidence was unavailable.'];
@@ -661,6 +665,9 @@ function buildVerdict(
       : []),
     ...(failedNetworkRequestCount > 0
       ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
+      : []),
+    ...(browserErrorCount > 0
+      ? [`${browserErrorCount} uncaught browser error(s) detected.`]
       : []),
     ...(pendingActions.length > 0
       ? [

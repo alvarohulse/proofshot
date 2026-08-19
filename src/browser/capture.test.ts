@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ ab: vi.fn() }));
 vi.mock('../utils/exec.js', () => ({ ab: mocks.ab }));
 
-import { finalizeRecording, stopRecording } from './capture.js';
+import {
+  finalizeRecording,
+  stopRecording,
+} from './capture.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -76,4 +79,25 @@ describe('recording finalization', () => {
       await rejection;
     },
   );
+
+  it('extends the quiet deadline while finalized media is still growing', async () => {
+    vi.useFakeTimers();
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-capture-'),
+    );
+    temporaryDirectories.push(directory);
+    const videoPath = path.join(directory, 'session.mp4');
+    fs.writeFileSync(videoPath, 'video');
+    mocks.ab.mockReturnValue('');
+    const growth = setInterval(() => fs.appendFileSync(videoPath, 'x'), 50);
+
+    const finalization = expect(
+      finalizeRecording(videoPath, 'ps-session'),
+    ).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_100);
+    clearInterval(growth);
+    await vi.advanceTimersByTimeAsync(300);
+
+    await finalization;
+  });
 });

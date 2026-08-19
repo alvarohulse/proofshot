@@ -6,7 +6,10 @@ import chalk from 'chalk';
 import { loadConfig, normalizeViewport } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
-import { finalizeRecording } from '../browser/capture.js';
+import {
+  finalizeRecording,
+  verifyFinalizedRecording,
+} from '../browser/capture.js';
 import {
   finalizePrivateNetworkCapture,
   loadSanitizedNetworkSummary,
@@ -367,6 +370,18 @@ export async function stopCommand(options: StopOptions): Promise<void> {
       persistOwnedSession(session);
       throw error;
     }
+  } else if (recordingWasActive) {
+    try {
+      await verifyFinalizedRecording(session.videoPath);
+    } catch (error) {
+      session.lifecycleStatus = 'recovery';
+      session.cleanupError =
+        `Recording finalization could not be verified: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      persistOwnedSession(session);
+      throw error;
+    }
   }
   session.recordingActive = false;
   session.cleanupError = null;
@@ -574,6 +589,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     videoPath: session.videoPath,
     recordingWasActive,
     consoleEvidenceAvailable,
+    browserErrorCount: consoleErrorCount,
     actions: viewerEntries,
     consoleEntries: viewerConsoleEntries,
     serverEntries: viewerServerEntries,

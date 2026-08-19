@@ -324,6 +324,56 @@ describe('canonical evidence and verdicts', () => {
     expect(verdict.reasons).toContain('1 failed network request(s) detected.');
   });
 
+  it('keeps uncaught page errors and status-zero requests from receiving PASS', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-browser-failures-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { evidence, verdict } = writeCanonicalEvidence({
+      sessionId: 'browser-failures',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      browserErrorCount: 1,
+      actions: [
+        {
+          action: 'is visible #ready',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+          expectedSelector: '#ready',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+      networkSummary: {
+        version: 1,
+        requestCount: 1,
+        requests: [
+          {
+            endpoint: 'http://localhost/api/aborted',
+            method: 'GET',
+            status: 0,
+            durationMs: 10,
+            error: null,
+          },
+        ],
+      },
+    });
+
+    expect(evidence.browserErrorCount).toBe(1);
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain(
+      '1 uncaught browser error(s) detected.',
+    );
+    expect(verdict.reasons).toContain(
+      '1 failed network request(s) detected.',
+    );
+  });
+
   it('marks decoded blank screenshots as incomplete evidence', () => {
     const sessionDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'proofshot-blank-screenshot-'),
