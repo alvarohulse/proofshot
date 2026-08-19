@@ -108,15 +108,6 @@ function isRegularFile(filePath: string): boolean {
   }
 }
 
-function hasPositiveRecording(filePath: string): boolean {
-  try {
-    const stat = fs.lstatSync(filePath);
-    return stat.isFile() && !stat.isSymbolicLink() && stat.size > 0;
-  } catch {
-    return false;
-  }
-}
-
 interface StopOptions {
   noClose?: boolean;
   session?: string;
@@ -379,13 +370,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         }`;
       session.recordingActive = true;
       persistOwnedSession(session);
-      if (hasPositiveRecording(session.videoPath)) {
-        throw error;
-      }
-      console.warn(
-        chalk.yellow('⚠') +
-          ' Recording produced no usable file; continuing cleanup with incomplete evidence.',
-      );
+      throw error;
     }
   } else if (recordingWasActive) {
     try {

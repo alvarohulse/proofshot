@@ -62,7 +62,7 @@ export function parseReplayCase(value: unknown): ReplayCase {
     );
     if (command.some((argument) => isEphemeralSelector(argument))) {
       throw new Error(
-        'Replay cases cannot use ephemeral or positional selectors.',
+        'Replay cases cannot use ephemeral snapshot references or positional selectors.',
       );
     }
     if (command[0] === 'assert-visible' && command.length < 2) {

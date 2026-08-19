@@ -1,4 +1,3 @@
-import * as fs from 'fs';
 import { finalizeRecording } from '../browser/capture.js';
 import { finalizePrivateNetworkCapture } from '../browser/evidence.js';
 import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
@@ -179,7 +178,7 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
       await finalizeRecording(session.videoPath, session.sessionName);
     } catch (error) {
       cleanupError ||= error;
-      recordingFinalizationFailed = hasPositiveRecording(session.videoPath);
+      recordingFinalizationFailed = true;
     }
   }
   if (
@@ -203,13 +202,4 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
     cleanupError ||= error;
   }
   if (cleanupError) throw cleanupError;
-}
-
-function hasPositiveRecording(filePath: string): boolean {
-  try {
-    const stat = fs.lstatSync(filePath);
-    return stat.isFile() && !stat.isSymbolicLink() && stat.size > 0;
-  } catch {
-    return false;
-  }
 }
