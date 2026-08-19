@@ -42,6 +42,7 @@ import {
 
 type ExecOptions = {
   session?: string;
+  throwOnFailure?: boolean;
 };
 
 /**
@@ -202,6 +203,7 @@ export async function execCommand(
       'Error: No active ProofShot session matches this worktree.\n' +
         'Run "proofshot start" first, or inspect recovery state with "proofshot session list".',
     );
+    if (options.throwOnFailure) throw new Error('No active ProofShot session matches this worktree.');
     process.exit(1);
     return;
   }
@@ -211,6 +213,7 @@ export async function execCommand(
       'Error: Session has no active recording. Video capture is required.\n' +
         'Run "proofshot stop" to end this session, then start a new one.',
     );
+    if (options.throwOnFailure) throw new Error('Session has no active recording.');
     process.exit(1);
   }
 
@@ -219,6 +222,9 @@ export async function execCommand(
       'Error: Browser ownership no longer matches this ProofShot session.\n' +
         'Refusing to address a possibly reused agent-browser session name.',
     );
+    if (options.throwOnFailure) {
+      throw new Error('Browser ownership no longer matches this ProofShot session.');
+    }
     process.exit(1);
     return;
   }

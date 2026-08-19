@@ -497,7 +497,17 @@ function isSanitizedNetworkSummary(
   return (
     summary.version === 1 &&
     typeof summary.requestCount === 'number' &&
-    Array.isArray(summary.requests)
+    Array.isArray(summary.requests) &&
+    summary.requests.every(
+      (request) =>
+        typeof request === 'object' &&
+        request !== null &&
+        typeof request.endpoint === 'string' &&
+        typeof request.method === 'string' &&
+        typeof request.status === 'number' &&
+        (typeof request.durationMs === 'number' || request.durationMs === null) &&
+        (typeof request.error === 'string' || request.error === null),
+    )
   );
 }
 

@@ -62,7 +62,7 @@ async function runReplayStep(
   const previousExitCode = process.exitCode;
   process.exitCode = undefined;
   try {
-    await execCommand(command, { session: sessionId });
+    await execCommand(command, { session: sessionId, throwOnFailure: true });
     if (process.exitCode && process.exitCode !== 0) {
       throw new Error(
         `Replay step failed (${process.exitCode}): ${command[0]}`,

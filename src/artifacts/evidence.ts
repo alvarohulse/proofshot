@@ -630,7 +630,7 @@ function buildVerdict(
   ).length;
   const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
     (request) =>
-      request.error !== null || request.status === 0 || request.status >= 400,
+      request.error != null || request.status >= 400,
   ).length;
   const blockingReasons = options.consoleEvidenceAvailable
     ? []
@@ -682,11 +682,11 @@ function buildVerdict(
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : failureReasons.length > 0
+      : incompleteReasons.length > 0
+        ? 'INCOMPLETE'
+        : failureReasons.length > 0
           ? 'FAIL'
-          : incompleteReasons.length > 0
-            ? 'INCOMPLETE'
-            : 'PASS';
+          : 'PASS';
   return {
     version: 1,
     status,

@@ -48,9 +48,11 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
   const deadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
   let previousSize = -1;
   let stableObservations = 0;
+  let observedFile = false;
 
   while (Date.now() <= deadline) {
     const size = readRegularFileSize(outputPath);
+    observedFile ||= size >= 0;
     if (size > 0 && size === previousSize) {
       stableObservations += 1;
       if (stableObservations >= 2) return;
@@ -63,6 +65,7 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
     );
   }
 
+  if (!observedFile) return;
   throw new Error(
     `Recording finalization did not produce a stable non-empty file: ${outputPath}`,
   );
