@@ -91,4 +91,19 @@ describe('quiet FFmpeg wrapper', () => {
       }).trim(),
     ).toBe('second');
   });
+
+  it('rejects a state path that cannot be represented as one PATH entry', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-ffmpeg-wrapper-'));
+    temporaryDirectories.push(root);
+    const fakeFfmpeg = path.join(root, 'ffmpeg');
+    fs.writeFileSync(fakeFfmpeg, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+
+    expect(
+      prepareQuietFfmpegWrapper({
+        ffmpegExecutable: fakeFfmpeg,
+        platform: 'linux',
+        stateRoot: `${root}${path.delimiter}state`,
+      }),
+    ).toBeNull();
+  });
 });

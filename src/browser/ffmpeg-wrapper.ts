@@ -52,6 +52,7 @@ export function prepareQuietFfmpegWrapper(
       'ffmpeg-bin',
       ffmpegPathHash,
     );
+    if (wrapperDirectory.includes(path.delimiter)) return null;
     fs.mkdirSync(wrapperDirectory, { recursive: true, mode: 0o700 });
     const directoryStat = fs.lstatSync(wrapperDirectory);
     if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) return null;

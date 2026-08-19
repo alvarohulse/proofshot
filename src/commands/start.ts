@@ -188,12 +188,15 @@ export async function startCommand(
   let agentBrowserVersion: string;
   let agentBrowserRuntime: ReturnType<typeof resolveAgentBrowserRuntime>;
   let isolatedAgentBrowserConfig: Record<string, unknown>;
+  let ffmpegWrapperDirectory: string;
 
   try {
     assertSafeAgentBrowserRecordingPlatform();
-    if (!prepareQuietFfmpegWrapper()) {
+    const preparedFfmpegWrapperDirectory = prepareQuietFfmpegWrapper();
+    if (!preparedFfmpegWrapperDirectory) {
       throw new Error('Could not prepare the quiet FFmpeg wrapper for recording.');
     }
+    ffmpegWrapperDirectory = preparedFfmpegWrapperDirectory;
     isolatedAgentBrowserConfig = loadIsolatedAgentBrowserConfig(
       config.browser.configPath,
     );
@@ -253,6 +256,7 @@ export async function startCommand(
     allowedDomains: agentBrowserAllowedDomains,
     configPath: agentBrowserConfigPath,
     executablePath: agentBrowserExecutablePath,
+    ffmpegWrapperDirectory,
     namespace: agentBrowserNamespace,
     socketDir: socketRoot,
   });

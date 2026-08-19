@@ -25,22 +25,22 @@ export interface AgentBrowserCommandOptions {
   timeoutMs?: number;
 }
 
+type AgentBrowserDefaults = Pick<
+  AgentBrowserCommandOptions,
+  'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
+> & {
+  ffmpegWrapperDirectory?: string;
+};
+
 export type AgentBrowserInvocation = {
   executablePath: string;
   args: string[];
 };
 
-let defaultAgentBrowserOptions: Pick<
-  AgentBrowserCommandOptions,
-  'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
-> = {};
-let preparedFfmpegWrapperDirectory: string | null | undefined;
+let defaultAgentBrowserOptions: AgentBrowserDefaults = {};
 
 export function setAgentBrowserDefaults(
-  options: Pick<
-    AgentBrowserCommandOptions,
-    'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
-  >,
+  options: AgentBrowserDefaults,
 ): void {
   defaultAgentBrowserOptions = { ...options };
 }
@@ -57,20 +57,12 @@ export function getAgentBrowserEnvironment(
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
   const namespace = options.namespace ?? defaultAgentBrowserOptions.namespace;
   const isolatedEnvironment = getIsolatedAgentBrowserEnvironment(process.env);
-  if (prepareFfmpegWrapper !== prepareQuietFfmpegWrapper) {
-    preparedFfmpegWrapperDirectory = prepareFfmpegWrapper();
-  } else if (preparedFfmpegWrapperDirectory === undefined) {
-    try {
-      preparedFfmpegWrapperDirectory = prepareQuietFfmpegWrapper();
-    } catch {
-      preparedFfmpegWrapperDirectory = null;
-    }
-  }
-  const ffmpegWrapperDirectory = preparedFfmpegWrapperDirectory;
-  if (ffmpegWrapperDirectory?.includes(path.delimiter)) {
-    console.warn('Skipping FFmpeg wrapper with an unsafe PATH delimiter');
-    preparedFfmpegWrapperDirectory = null;
-  }
+  const preparedFfmpegWrapperDirectory =
+    defaultAgentBrowserOptions.ffmpegWrapperDirectory ?? prepareFfmpegWrapper();
+  const ffmpegWrapperDirectory =
+    preparedFfmpegWrapperDirectory?.includes(path.delimiter)
+      ? null
+      : preparedFfmpegWrapperDirectory;
   const currentPath = isolatedEnvironment.PATH || '';
   return {
     ...isolatedEnvironment,
