@@ -64,6 +64,16 @@ export function parseReplayCase(value: unknown): ReplayCase {
         'Replay cases cannot use ephemeral snapshot references such as @e1.',
       );
     }
+    if (command[0] === 'assert-visible' && command.length < 2) {
+      throw new Error(
+        `steps[${index}].command requires a selector for assert-visible.`,
+      );
+    }
+    if (command[0] === 'screenshot' && command.length < 2) {
+      throw new Error(
+        `steps[${index}].command requires a filename for screenshot.`,
+      );
+    }
     return { command };
   });
   if (!steps.some(({ command }) => command[0] === 'assert-visible')) {
@@ -71,6 +81,12 @@ export function parseReplayCase(value: unknown): ReplayCase {
   }
   if (!steps.some(({ command }) => command[0] === 'screenshot')) {
     throw new Error('Replay case requires a reviewer screenshot step.');
+  }
+  const screenshotPaths = steps
+    .filter(({ command }) => command[0] === 'screenshot')
+    .map(({ command }) => path.basename(command[1]));
+  if (new Set(screenshotPaths).size !== screenshotPaths.length) {
+    throw new Error('Replay case cannot reuse screenshot filenames.');
   }
   if (!Array.isArray(replay.humanTesting) || replay.humanTesting.length === 0) {
     throw new Error('Replay case requires humanTesting instructions.');
@@ -105,7 +121,10 @@ function parseStart(value: unknown): ReplayCase['start'] {
   const output = optionalBoundedString(start.output, 'start.output', 4_000);
   const run = optionalBoundedString(start.run, 'start.run', 8_000);
   const url = optionalBoundedString(start.url, 'start.url', 4_000);
-  const port = start.port === undefined ? undefined : Number(start.port);
+  if (start.port !== undefined && typeof start.port !== 'number') {
+    throw new Error('start.port must be a number.');
+  }
+  const port = start.port;
   if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) {
     throw new Error('start.port must be an integer between 1 and 65535.');
   }

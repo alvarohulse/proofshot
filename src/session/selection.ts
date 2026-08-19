@@ -35,7 +35,8 @@ export function resolveLiveSession(
   }
 
   const registeredSessions = listSessionsForControlDir(options.controlDir).filter(
-    (session) => session.lifecycleStatus !== 'recovery',
+    (session) =>
+      options.operation === 'stop' || session.lifecycleStatus !== 'recovery',
   );
   const sessions = selectSessionsForOperation(
     registeredSessions,
@@ -82,7 +83,8 @@ function selectSessionsForOperation(
   }
   return sessions.filter(
     (session) =>
-      session.lifecycleStatus === 'stopping' && session.bundleComplete !== true,
+      (session.lifecycleStatus === 'stopping' && session.bundleComplete !== true) ||
+      session.lifecycleStatus === 'recovery',
   );
 }
 

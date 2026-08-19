@@ -25,8 +25,10 @@ export async function replayCommand(casePath: string): Promise<void> {
     await stopCommand({ session: receipt.sessionId });
     stopped = true;
     const verdict = readVerdict(receipt.sessionDir);
-    if (verdict !== 'PASS') {
-      throw new Error(`Replay finalized with verdict ${verdict}.`);
+    if (verdict.status !== 'PASS') {
+      const reasons =
+        verdict.reasons.length > 0 ? `: ${verdict.reasons.join(' ')}` : '';
+      throw new Error(`Replay finalized with verdict ${verdict.status}${reasons}`);
     }
     console.log(
       JSON.stringify({
@@ -85,10 +87,27 @@ function writeUserTesting(sessionDir: string, contents: string): void {
   }
 }
 
-function readVerdict(sessionDir: string): string {
+function readVerdict(sessionDir: string): {
+  status: string;
+  reasons: string[];
+} {
   const verdictPath = path.join(sessionDir, 'verdict.json');
-  const parsed = JSON.parse(fs.readFileSync(verdictPath, 'utf-8')) as {
+  let contents: string;
+  try {
+    contents = fs.readFileSync(verdictPath, 'utf-8');
+  } catch {
+    throw new Error('Replay did not produce a finalized verdict.');
+  }
+  const parsed = JSON.parse(contents) as {
     status?: unknown;
+    reasons?: unknown;
   };
-  return typeof parsed.status === 'string' ? parsed.status : 'UNKNOWN';
+  return {
+    status: typeof parsed.status === 'string' ? parsed.status : 'UNKNOWN',
+    reasons: Array.isArray(parsed.reasons)
+      ? parsed.reasons.filter(
+          (reason): reason is string => typeof reason === 'string',
+        )
+      : [],
+  };
 }

@@ -170,7 +170,11 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
   // Never address a session name unless its daemon still has the identity
   // captured by this start.
   if (canAddressOwnedBrowserSession(session)) {
-    stopRecording(session.sessionName);
+    try {
+      stopRecording(session.sessionName);
+    } catch (error) {
+      cleanupError ||= error;
+    }
   }
   if (session.browserProcess || !session.browserLaunchAttempted) {
     try {

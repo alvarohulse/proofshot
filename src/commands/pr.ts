@@ -14,6 +14,7 @@ import {
   postPRComment,
 } from '../utils/github.js';
 import { loadMetadata } from '../session/metadata.js';
+import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 import { formatPRComment, type PRCommentData } from '../artifacts/pr-format.js';
 import {
   captureGitProvenance,
@@ -470,10 +471,13 @@ function readUserTesting(
     .split('\n')
     .map((line) => line.match(/^\d+\.\s+(.+)$/)?.[1])
     .filter((line): line is string => Boolean(line));
-  if (instructions.length === 0) {
-    throw new Error('Finalized user-testing instructions were malformed.');
-  }
-  return { label: selection.manifest.sessionId, instructions };
+  if (instructions.length === 0) return null;
+  return {
+    label: selection.manifest.sessionId,
+    instructions: instructions.map(
+      (instruction) => sanitizeDiagnosticMessage(instruction) || '[REDACTED]',
+    ),
+  };
 }
 
 function selectLegacyPublication(options: {

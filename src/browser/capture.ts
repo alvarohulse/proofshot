@@ -45,7 +45,7 @@ export async function finalizeRecording(
 }
 
 async function waitForStableRecording(outputPath: string): Promise<void> {
-  const deadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
+  let deadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
   let previousSize = -1;
   let stableObservations = 0;
 
@@ -56,6 +56,9 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
       if (stableObservations >= 2) return;
     } else {
       stableObservations = 0;
+      if (size > previousSize) {
+        deadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
+      }
     }
     previousSize = size;
     await new Promise((resolve) =>
