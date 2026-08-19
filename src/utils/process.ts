@@ -87,6 +87,7 @@ export function parseLinuxProcStat(stat: string): ProcessIdentity | null {
 
   const pid = Number(stat.slice(0, stat.indexOf(' ')));
   const fields = stat.slice(closeParen + 2).trim().split(/\s+/);
+  if (fields[0] === 'Z') return null;
   const processGroupId = Number(fields[2]);
   const sessionId = Number(fields[3]);
   const startTime = fields[19];

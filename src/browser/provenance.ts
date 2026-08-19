@@ -277,7 +277,7 @@ function sanitizeDiagnosticTokens(value: string): string {
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, REDACTED)
     .replace(/(\b(?:password|passcode|secret|token)\b\s*(?:is|:|=|using)\s*)[^\s,.;]+/gi, `$1${REDACTED}`)
     .replace(
-      /(\b(?:log\s*in|sign\s*in|authenticate)\b[^\r\n]{0,40}?\b(?:using|with)\s+)[^\s,.;]*(?:\d|\/)[^\s,.;]*/gi,
+      /(\b(?:log\s*in|sign\s*in|authenticate)\b[^\r\n]{0,40}?\b(?:using|with)\s+)[^\s,.;]+/gi,
       `$1${REDACTED}`,
     );
 }

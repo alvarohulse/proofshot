@@ -3,8 +3,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ ab: vi.fn() }));
+const mocks = vi.hoisted(() => ({ ab: vi.fn(), execFileSync: vi.fn() }));
 vi.mock('../utils/exec.js', () => ({ ab: mocks.ab }));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return { ...actual, execFileSync: mocks.execFileSync };
+});
 
 import {
   finalizeRecording,
@@ -16,6 +20,7 @@ const temporaryDirectories: string[] = [];
 afterEach(() => {
   vi.useRealTimers();
   mocks.ab.mockReset();
+  mocks.execFileSync.mockReset();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -30,6 +35,11 @@ describe('recording finalization', () => {
     mocks.ab.mockImplementation(() => {
       fs.writeFileSync(videoPath, 'video');
       return '';
+    });
+    mocks.execFileSync.mockImplementation(() => {
+      const error = new Error('ffprobe unavailable') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
     });
 
     const finalization = expect(
@@ -95,6 +105,11 @@ describe('recording finalization', () => {
     const videoPath = path.join(directory, 'session.mp4');
     fs.writeFileSync(videoPath, 'video');
     mocks.ab.mockReturnValue('');
+    mocks.execFileSync.mockImplementation(() => {
+      const error = new Error('ffprobe unavailable') as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    });
     const growth = setInterval(() => fs.appendFileSync(videoPath, 'x'), 50);
 
     const finalization = expect(
@@ -102,6 +117,29 @@ describe('recording finalization', () => {
     ).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(5_100);
     clearInterval(growth);
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    await finalization;
+  });
+
+  it('rejects stable media when installed ffprobe cannot read it', async () => {
+    vi.useFakeTimers();
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-capture-'));
+    temporaryDirectories.push(directory);
+    const videoPath = path.join(directory, 'session.mp4');
+    mocks.ab.mockImplementation(() => {
+      fs.writeFileSync(videoPath, 'not a media container');
+      return '';
+    });
+    mocks.execFileSync.mockImplementation(() => {
+      const error = new Error('invalid media') as NodeJS.ErrnoException;
+      error.code = '1';
+      throw error;
+    });
+
+    const finalization = expect(
+      finalizeRecording(videoPath, 'ps-session'),
+    ).rejects.toThrow('Recording container is unreadable');
     await vi.advanceTimersByTimeAsync(5_100);
 
     await finalization;

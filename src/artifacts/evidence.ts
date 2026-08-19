@@ -639,7 +639,7 @@ function buildVerdict(
   ).length;
   const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
     (request) =>
-      request.error != null || request.status >= 400,
+      request.error != null || request.status === 0 || request.status >= 400,
   ).length;
   const browserErrorCount = evidence.browserErrorCount ?? 0;
   const blockingReasons = options.consoleEvidenceAvailable

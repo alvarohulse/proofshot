@@ -320,6 +320,10 @@ process.exit(0);
   fs.writeFileSync(browserPath, '#!/bin/sh\nexit 0\n');
   fs.chmodSync(browserPath, 0o700);
 
+  const ffprobePath = path.join(binDir, 'ffprobe');
+  fs.writeFileSync(ffprobePath, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(ffprobePath, 0o700);
+
   const serverScript = path.join(base, 'server.mjs');
   fs.writeFileSync(
     serverScript,

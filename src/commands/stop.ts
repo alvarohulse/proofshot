@@ -367,8 +367,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         `Recording finalization failed: ${
           error instanceof Error ? error.message : String(error)
         }`;
-      session.recordingActive = false;
+      session.recordingActive = true;
       persistOwnedSession(session);
+      throw error;
     }
   } else if (recordingWasActive) {
     try {
@@ -379,8 +380,9 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         `Recording finalization could not be verified: ${
           error instanceof Error ? error.message : String(error)
         }`;
-      session.recordingActive = false;
+      session.recordingActive = true;
       persistOwnedSession(session);
+      throw error;
     }
   }
   session.recordingActive = false;
