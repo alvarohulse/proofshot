@@ -271,12 +271,15 @@ export function sanitizeDiagnosticMessage(value: string | undefined): string | u
   if (!value) {
     return value;
   }
-  const sanitizedTokens = value
+  return redactDiagnosticAssignmentsOutsideUrls(value);
+}
+
+function sanitizeDiagnosticTokens(value: string): string {
+  return value
     .replace(/\b(?:Basic|Bearer)\s+[^\s"',;]+/gi, REDACTED)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, REDACTED)
     .replace(/\b(?:password|passcode|secret|token)\b(\s+(?:is|:|=|using)\s+)[^\s,.;]+/gi, `$1${REDACTED}`);
-  return redactDiagnosticAssignmentsOutsideUrls(sanitizedTokens);
 }
 
 function redactDiagnosticAssignmentsOutsideUrls(value: string): string {
@@ -290,7 +293,7 @@ function redactDiagnosticAssignmentsOutsideUrls(value: string): string {
     sanitizedUrls.push(sanitizeUrlValue(url));
     return marker;
   });
-  let sanitized = redactDiagnosticAssignments(masked);
+  let sanitized = redactDiagnosticAssignments(sanitizeDiagnosticTokens(masked));
   sanitizedUrls.forEach((url, index) => {
     sanitized = sanitized.replace(`${markerPrefix}${index}\0`, () => url);
   });

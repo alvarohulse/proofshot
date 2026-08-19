@@ -102,7 +102,7 @@ describe('buildExecInvocation', () => {
       ['future-command', 'value'],
     ]) {
       expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
-        /not permitted|cannot override ProofShot-owned browser state/,
+        /not permitted|cannot override browser state/,
       );
     }
     expect(() =>
@@ -160,8 +160,8 @@ describe('buildExecInvocation', () => {
       ),
     ).toEqual([
       'screenshot',
-      '--full',
       '/evidence/session/step (1).png',
+      '--full',
     ]);
 
     for (const args of [
