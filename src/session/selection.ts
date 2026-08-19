@@ -82,7 +82,7 @@ function selectSessionsForOperation(
   }
   return sessions.filter(
     (session) =>
-      (session.lifecycleStatus === 'stopping' && session.bundleComplete !== true) ||
+      session.lifecycleStatus === 'stopping' && session.bundleComplete !== true,
   );
 }
 

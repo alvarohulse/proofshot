@@ -50,6 +50,18 @@ describe('resolveLiveSession', () => {
     ).toBeNull();
   });
 
+  it('does not implicitly resume a recovery session', () => {
+    const recovery = buildSession('ps-recovery', {
+      lifecycleStatus: 'recovery',
+      recordingActive: false,
+    });
+    mocks.listRegisteredSessions.mockReturnValue([recovery]);
+
+    expect(
+      resolveLiveSession({ controlDir: '/project/output', operation: 'stop' }),
+    ).toBeNull();
+  });
+
   it('prefers one verified live stop target over stale active records', () => {
     const stale = buildSession('ps-stale');
     const live = buildSession('ps-live', {
