@@ -483,6 +483,7 @@ describe('startCommand', () => {
     );
     expect(mocks.registerSession).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        recordingAttempted: true,
         recordingStartedAt: expect.any(String),
         recordingActive: true,
       }),

@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   clearAgentBrowserSessionFiles: vi.fn(),
   waitForAgentBrowserProcessIdentity: vi.fn(),
   closeBrowser: vi.fn(),
-  stopRecording: vi.fn(),
+  finalizeRecording: vi.fn(),
   captureProcessIdentity: vi.fn(),
   ownedProcessTreeIsAlive: vi.fn(),
   processIdentitiesMatch: vi.fn(),
@@ -20,7 +20,9 @@ vi.mock('../browser/runtime.js', () => ({
   waitForAgentBrowserProcessIdentity: mocks.waitForAgentBrowserProcessIdentity,
 }));
 vi.mock('../browser/session.js', () => ({ closeBrowser: mocks.closeBrowser }));
-vi.mock('../browser/capture.js', () => ({ stopRecording: mocks.stopRecording }));
+vi.mock('../browser/capture.js', () => ({
+  finalizeRecording: mocks.finalizeRecording,
+}));
 vi.mock('../browser/evidence.js', () => ({
   finalizePrivateNetworkCapture: mocks.finalizePrivateNetworkCapture,
 }));
@@ -63,6 +65,7 @@ beforeEach(() => {
   mocks.ownedProcessTreeIsAlive.mockReturnValue(false);
   mocks.terminateOwnedProcessTree.mockResolvedValue(true);
   mocks.waitForAgentBrowserProcessIdentity.mockResolvedValue(null);
+  mocks.finalizeRecording.mockResolvedValue(undefined);
   mocks.finalizePrivateNetworkCapture.mockReturnValue({
     version: 1,
     requestCount: 0,
@@ -86,7 +89,7 @@ describe('owned browser lifecycle', () => {
 
     expect(mocks.captureAgentBrowserProcessIdentity).not.toHaveBeenCalled();
     expect(mocks.closeBrowser).not.toHaveBeenCalled();
-    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.finalizeRecording).not.toHaveBeenCalled();
     expect(mocks.terminateOwnedProcessTree).not.toHaveBeenCalledWith(persistedIdentity);
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
   });
@@ -123,6 +126,48 @@ describe('owned browser lifecycle', () => {
     expect(state.browserProcess).toEqual(persistedIdentity);
     expect(mocks.closeBrowser).toHaveBeenCalledWith('ps-owned-session');
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(persistedIdentity);
+  });
+
+  it('retains browser ownership when an attempted recording cannot finalize', async () => {
+    const state = {
+      ...session(),
+      recordingAttempted: true,
+      videoPath: '/evidence/session.mp4',
+    };
+    mocks.finalizeRecording.mockRejectedValueOnce(
+      new Error('recording did not stabilize'),
+    );
+
+    await expect(cleanupFailedStart(state)).rejects.toThrow(
+      'recording did not stabilize',
+    );
+
+    expect(mocks.finalizeRecording).toHaveBeenCalledWith(
+      state.videoPath,
+      state.sessionName,
+    );
+    expect(mocks.closeBrowser).not.toHaveBeenCalled();
+    expect(mocks.terminateOwnedProcessTree).not.toHaveBeenCalledWith(
+      persistedIdentity,
+    );
+  });
+
+  it('finalizes an attempted recording before browser cleanup', async () => {
+    const state = {
+      ...session(),
+      recordingAttempted: true,
+      videoPath: '/evidence/session.mp4',
+    };
+
+    await cleanupFailedStart(state);
+
+    expect(mocks.finalizeRecording).toHaveBeenCalledWith(
+      state.videoPath,
+      state.sessionName,
+    );
+    expect(
+      mocks.finalizeRecording.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.closeBrowser.mock.invocationCallOrder[0]);
   });
 
   it('retains failed network finalization for an exact cleanup retry', async () => {
@@ -174,7 +219,7 @@ describe('owned browser lifecycle', () => {
     expect(state.networkCaptureActive).toBe(true);
     expect(state.networkEvidenceAvailable).toBe(false);
     expect(state.networkCaptureError).toContain('pending HAR is not complete yet');
-    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.finalizeRecording).not.toHaveBeenCalled();
     expect(mocks.terminateOwnedProcessTree).toHaveBeenCalledWith(null);
   });
 
