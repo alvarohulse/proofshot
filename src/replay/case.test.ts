@@ -66,12 +66,68 @@ describe('replay case contract', () => {
           { command: ['screenshot', '--full', 'proof.png'] },
         ],
       }).steps[1].command,
-    ).toEqual(['screenshot', '--full', 'proof.png']);
+    ).toEqual(['screenshot', 'proof.png', '--full']);
     expect(() =>
       parseReplayCase({
         ...validCase,
         humanTesting: ['Open the page.\nSubmit the form.'],
       }),
     ).toThrow(/one line/);
+  });
+
+  it('uses the parsed screenshot filename for duplicate detection', () => {
+    expect(() =>
+      parseReplayCase({
+        ...validCase,
+        steps: [
+          { command: ['assert-visible', '#ready'] },
+          { command: ['screenshot', '--full', 'proof.png'] },
+          { command: ['screenshot', 'proof.png'] },
+        ],
+      }),
+    ).toThrow(/reuse screenshot filenames/);
+
+    expect(() =>
+      parseReplayCase({
+        ...validCase,
+        steps: [
+          { command: ['assert-visible', '#ready'] },
+          { command: ['screenshot', 'proof.PNG'] },
+        ],
+      }),
+    ).toThrow(/PNG filename directly inside/);
+  });
+
+  it.each([
+    ['is', 'visible'],
+    ['check'],
+    ['key'],
+    ['focus'],
+    ['upload', '#file'],
+  ])('rejects an incomplete command before replay startup: %j', (...command) => {
+    expect(() =>
+      parseReplayCase({
+        ...validCase,
+        steps: [
+          { command },
+          { command: ['assert-visible', '#ready'] },
+          { command: ['screenshot', 'proof.png'] },
+        ],
+      }),
+    ).toThrow(/requires/);
+  });
+
+  it('redacts labelled and contextual credentials from human instructions', () => {
+    const replay = parseReplayCase({
+      ...validCase,
+      humanTesting: [
+        'Enter password using hunter2.',
+        'Log in using private-token.',
+      ],
+    });
+
+    expect(renderUserTesting(replay)).toBe(
+      '# User Testing\n\n1. Enter password using [REDACTED].\n2. Log in using [REDACTED].\n',
+    );
   });
 });

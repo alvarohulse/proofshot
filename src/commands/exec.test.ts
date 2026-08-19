@@ -63,6 +63,27 @@ describe('buildExecInvocation', () => {
     });
   });
 
+  it('accepts legal zero-argument open and one-argument key presses', () => {
+    expect(() => assertControlledAgentBrowserCommand(['open'])).not.toThrow();
+    expect(() => assertControlledAgentBrowserCommand(['press', 'Enter'])).not.toThrow();
+  });
+
+  it.each([
+    ['is', 'visible'],
+    ['check'],
+    ['key'],
+    ['focus'],
+    ['upload', '#file'],
+    ['get', 'attr', '#field'],
+    ['mouse', 'move', '10'],
+    ['set', 'viewport', '1280'],
+    ['storage', 'local', 'set', 'theme'],
+  ])('rejects incomplete controlled commands before execution: %j', (...args) => {
+    expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
+      /requires/,
+    );
+  });
+
   it.each([
     ['snapshot', '--session=another-session'],
     ['open', 'https://example.com', '--allowed-domains=attacker.invalid'],
@@ -170,6 +191,7 @@ describe('buildExecInvocation', () => {
       ['screenshot', '../outside.png'],
       ['screenshot', '/tmp/outside.png'],
       ['screenshot', 'step.jpg'],
+      ['screenshot', 'step.PNG'],
       ['screenshot', '--screenshot-dir', '/tmp'],
     ]) {
       expect(() =>

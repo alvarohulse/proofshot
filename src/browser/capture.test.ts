@@ -5,9 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ ab: vi.fn() }));
 vi.mock('../utils/exec.js', () => ({ ab: mocks.ab }));
-vi.mock('child_process', () => ({
-  execFileSync: vi.fn(() => Buffer.from('video')),
-}));
 
 import {
   finalizeRecording,

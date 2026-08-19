@@ -332,6 +332,15 @@ describe('browser interaction provenance', () => {
     expect(message).toBe('authorization=[REDACTED]');
   });
 
+  it('preserves credential labels while redacting credential values', () => {
+    expect(sanitizeDiagnosticMessage('password is hunter2')).toBe(
+      'password is [REDACTED]',
+    );
+    expect(sanitizeDiagnosticMessage('Log in using hunter2')).toBe(
+      'Log in using [REDACTED]',
+    );
+  });
+
   it('fails closed for compound, free-form, and multiline sensitive fields', () => {
     const message = [
       'HTTP_AUTHORIZATION=Token private-env-auth',

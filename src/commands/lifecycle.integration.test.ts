@@ -54,15 +54,7 @@ async function freePort(): Promise<number> {
 }
 
 function processIsAlive(pid: number): boolean {
-  if (captureProcessIdentity(pid) === null) return false;
-  if (process.platform !== 'linux') return true;
-  try {
-    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8');
-    const closeParen = stat.lastIndexOf(')');
-    return closeParen < 0 || stat[closeParen + 2] !== 'Z';
-  } catch {
-    return false;
-  }
+  return captureProcessIdentity(pid) !== null;
 }
 
 async function waitForProcessExit(pid: number, timeoutMs = 5000): Promise<void> {
@@ -105,19 +97,6 @@ function writeFixtureTools(base: string): {
 } {
   const binDir = path.join(base, 'bin');
   fs.mkdirSync(binDir, { recursive: true });
-  const recordingFixture = path.join(base, 'recording.mp4');
-  const recordingFixtureResult = spawnSync('ffmpeg', [
-    '-f', 'lavfi',
-    '-i', 'color=c=black:s=2x2:d=0.04',
-    '-c:v', 'libx264',
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart',
-    '-y',
-    recordingFixture,
-  ], { stdio: 'ignore' });
-  if (recordingFixtureResult.status !== 0) {
-    throw new Error('failed to create valid recording fixture');
-  }
   const browserLog = path.join(base, 'agent-browser.jsonl');
   const fakeAgentBrowser = path.join(binDir, 'agent-browser');
   fs.writeFileSync(
@@ -282,7 +261,7 @@ if (command === 'record' && detail[0] === 'stop') {
     process.stderr.write('No recording in progress\\n');
     process.exit(1);
   }
-  fs.copyFileSync(${JSON.stringify(recordingFixture)}, state.recordingPath);
+  fs.writeFileSync(state.recordingPath, 'fake-video');
   process.exit(0);
 }
 if (

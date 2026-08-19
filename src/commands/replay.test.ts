@@ -6,14 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   startCommand: vi.fn(),
   execCommand: vi.fn(),
-  validateProofShotExecCommand: vi.fn(),
   stopCommand: vi.fn(),
 }));
 
 vi.mock('./start.js', () => ({ startCommand: mocks.startCommand }));
-vi.mock('./exec.js', () => ({
+vi.mock('./exec.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./exec.js')>()),
   execCommand: mocks.execCommand,
-  validateProofShotExecCommand: mocks.validateProofShotExecCommand,
 }));
 vi.mock('./stop.js', () => ({ stopCommand: mocks.stopCommand }));
 
@@ -90,18 +89,16 @@ describe('replayCommand', () => {
     expect(mocks.stopCommand).toHaveBeenCalledWith({
       session: 'ps-replay-123',
     });
+    expect(fs.readFileSync(path.join(sessionDir, 'USER_TESTING.md'), 'utf-8'))
+      .toBe('# User Testing\n\n1. Create a task.\n2. Confirm it appears.\n');
   });
 
   it('rejects a forbidden later command before starting a session', async () => {
     const replay = JSON.parse(fs.readFileSync(casePath, 'utf-8'));
     replay.steps.splice(1, 0, { command: ['record', 'stop'] });
     fs.writeFileSync(casePath, JSON.stringify(replay));
-    mocks.validateProofShotExecCommand.mockImplementation((command) => {
-      if (command[0] === 'record') throw new Error('record is ProofShot-owned');
-    });
-
     await expect(replayCommand(casePath)).rejects.toThrow(
-      'record is ProofShot-owned',
+      /record is ProofShot-owned/,
     );
     expect(mocks.startCommand).not.toHaveBeenCalled();
     expect(mocks.execCommand).not.toHaveBeenCalled();
