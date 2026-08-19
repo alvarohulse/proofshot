@@ -1766,8 +1766,9 @@ describe('isolated CLI lifecycle', () => {
       .find((call) => call.command === 'daemon' && call.session === failedOpen.session);
     const failedSessionCalls = calls.filter((call) => call.session === failedOpen.session);
     expect(failedSessionCalls.map((call) => call.command)).toEqual(
-      expect.arrayContaining(['open', 'record', 'close']),
+      expect.arrayContaining(['open', 'close']),
     );
+    expect(failedSessionCalls.map((call) => call.command)).not.toContain('record');
     await waitForProcessExit(failedDaemon.daemonPid);
     const failedBrowserPidPath = path.join(
       failedOpen.socketDir,
