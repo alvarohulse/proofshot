@@ -50,6 +50,10 @@ export interface TerminateProcessTreeOptions {
   pollIntervalMs?: number;
 }
 
+export interface CaptureProcessIdentityOptions {
+  includeZombie?: boolean;
+}
+
 export interface WindowsProcessRecord {
   parentPid: number;
   startTime: string;
@@ -81,13 +85,16 @@ export function spawnShellCommand(
 }
 
 /** Parse the ownership fields from Linux `/proc/<pid>/stat`. */
-export function parseLinuxProcStat(stat: string): ProcessIdentity | null {
+export function parseLinuxProcStat(
+  stat: string,
+  options: CaptureProcessIdentityOptions = {},
+): ProcessIdentity | null {
   const closeParen = stat.lastIndexOf(')');
   if (closeParen < 0) return null;
 
   const pid = Number(stat.slice(0, stat.indexOf(' ')));
   const fields = stat.slice(closeParen + 2).trim().split(/\s+/);
-  if (fields[0] === 'Z') return null;
+  if (fields[0] === 'Z' && options.includeZombie !== true) return null;
   const processGroupId = Number(fields[2]);
   const sessionId = Number(fields[3]);
   const startTime = fields[19];
@@ -145,13 +152,22 @@ export function isDetachedProcessIdentity(
 /**
  * Capture the current immutable identity for a process.
  * Returns null when the process is already gone or cannot be inspected.
+ * A just-exited Linux launcher may opt into zombie identity capture so its
+ * immutable ownership can be persisted before Node reaps it; liveness scans
+ * still exclude zombies.
  */
-export function captureProcessIdentity(pid: number): ProcessIdentity | null {
+export function captureProcessIdentity(
+  pid: number,
+  options: CaptureProcessIdentityOptions = {},
+): ProcessIdentity | null {
   if (!Number.isInteger(pid) || pid <= 0) return null;
 
   if (process.platform === 'linux') {
     try {
-      const identity = parseLinuxProcStat(fs.readFileSync(`/proc/${pid}/stat`, 'utf-8'));
+      const identity = parseLinuxProcStat(
+        fs.readFileSync(`/proc/${pid}/stat`, 'utf-8'),
+        options,
+      );
       const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim();
       if (!identity || !bootId) return null;
       return { ...identity, bootId };

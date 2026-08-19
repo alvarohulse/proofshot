@@ -846,7 +846,9 @@ async function runCommand(
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const identity = child.pid ? captureProcessIdentity(child.pid) : null;
+  const identity = child.pid
+    ? captureProcessIdentity(child.pid, { includeZombie: true })
+    : null;
   if (!identity) {
     throw new Error('ProofShot could not capture the external launcher identity.');
   }
