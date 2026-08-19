@@ -54,6 +54,11 @@ const PROOFSHOT_OWNED_COMMANDS = new Set([
   'state',
 ]);
 const RESERVED_AGENT_BROWSER_FLAGS = new Set([
+  '--restore',
+  '--restore-save',
+  '--restore-check-url',
+  '--restore-check-text',
+  '--restore-check-fn',
   '--action-policy',
   '--allow-file-access',
   '--allowed-domains',

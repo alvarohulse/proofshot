@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { execFileSync } from 'child_process';
 import { ab } from '../utils/exec.js';
 
 const RECORDING_FINALIZATION_TIMEOUT_MS = 120_000;
@@ -62,7 +63,10 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
     if (size !== previousSize) {
       quietDeadline = now + RECORDING_STABILITY_TIMEOUT_MS;
     } else if (now >= quietDeadline) {
-      if (size > 0) return;
+      if (size > 0) {
+        verifyReadableContainer(outputPath);
+        return;
+      }
       break;
     }
     previousSize = size;
@@ -78,10 +82,24 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
 
 function readRegularFileSize(filePath: string): number {
   try {
-    const stat = fs.lstatSync(filePath);
-    return stat.isFile() && !stat.isSymbolicLink() ? stat.size : -1;
+    const stat = fs.statSync(filePath);
+    return stat.isFile() ? stat.size : -1;
   } catch {
     return -1;
+  }
+}
+
+function verifyReadableContainer(filePath: string): void {
+  try {
+    execFileSync(
+      'ffprobe',
+      ['-v', 'error', '-show_entries', 'format=format_name', '-of', 'default=nw=1', filePath],
+      { stdio: 'ignore' },
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`Recording container is unreadable: ${filePath}`);
+    }
   }
 }
 

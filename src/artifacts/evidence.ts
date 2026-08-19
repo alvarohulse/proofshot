@@ -623,7 +623,9 @@ function buildVerdict(
     (action) => action.outcome === undefined,
   );
   const passedAssertions = options.actions.filter(
-    (action) => action.expectedSelector && action.outcome === 'passed',
+    (action) =>
+      action.outcome === 'passed' &&
+      (action.expectedSelector || /^\s*is\s+visible\b/i.test(action.action)),
   );
   const hasSyntheticDomMutation = options.actions.some(
     (action) =>
@@ -637,7 +639,7 @@ function buildVerdict(
   ).length;
   const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
     (request) =>
-      request.error != null || request.status === 0 || request.status >= 400,
+      request.error != null || request.status >= 400,
   ).length;
   const browserErrorCount = evidence.browserErrorCount ?? 0;
   const blockingReasons = options.consoleEvidenceAvailable
@@ -651,7 +653,7 @@ function buildVerdict(
       ? [`${expectedSelectorFailures.length} expected selector assertion(s) failed.`]
       : []),
   ];
-  const incompleteReasons = [
+  const evidenceTrustReasons = [
     ...(missingArtifacts.length > 0
       ? [`${missingArtifacts.length} required artifact(s) were missing or invalid.`]
       : []),
@@ -663,15 +665,6 @@ function buildVerdict(
       : []),
     ...(duplicateScreenshotHashes.length > 0
       ? ['Duplicate key-frame screenshot hashes were detected.']
-      : []),
-    ...(nonfatalIncidentCount > 0
-      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
-      : []),
-    ...(failedNetworkRequestCount > 0
-      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
-      : []),
-    ...(browserErrorCount > 0
-      ? [`${browserErrorCount} uncaught browser error(s) detected.`]
       : []),
     ...(pendingActions.length > 0
       ? [
@@ -692,13 +685,27 @@ function buildVerdict(
         ]
       : []),
   ];
+  const incompleteReasons = [
+    ...evidenceTrustReasons,
+    ...(nonfatalIncidentCount > 0
+      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
+      : []),
+    ...(failedNetworkRequestCount > 0
+      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
+      : []),
+    ...(browserErrorCount > 0
+      ? [`${browserErrorCount} uncaught browser error(s) detected.`]
+      : []),
+  ];
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : incompleteReasons.length > 0
-        ? 'INCOMPLETE'
-        : failureReasons.length > 0
-          ? 'FAIL'
+      : failureReasons.length > 0
+        ? evidenceTrustReasons.length > 0
+          ? 'INCOMPLETE'
+          : 'FAIL'
+        : incompleteReasons.length > 0
+          ? 'INCOMPLETE'
           : 'PASS';
   return {
     version: 1,

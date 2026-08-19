@@ -34,10 +34,7 @@ export function resolveLiveSession(
     return session;
   }
 
-  const registeredSessions = listSessionsForControlDir(options.controlDir).filter(
-    (session) =>
-      options.operation === 'stop' || session.lifecycleStatus !== 'recovery',
-  );
+  const registeredSessions = listSessionsForControlDir(options.controlDir);
   const sessions = selectSessionsForOperation(
     registeredSessions,
     options.operation,
@@ -75,8 +72,9 @@ function selectSessionsForOperation(
 
   const liveSessions = sessions.filter(
     (session) =>
-      sessionHasVerifiedLiveOwnership(session) ||
-      canAddressOwnedBrowserSession(session),
+      session.lifecycleStatus !== 'recovery' &&
+      (sessionHasVerifiedLiveOwnership(session) ||
+        canAddressOwnedBrowserSession(session)),
   );
   if (liveSessions.length > 0) {
     return liveSessions;

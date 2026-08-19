@@ -169,16 +169,14 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
   // Recording may have started even when its CLI call returned an error.
   // Never address a session name unless its daemon still has the identity
   // captured by this start.
-  let recordingFinalizationFailed = false;
   if (canAddressOwnedBrowserSession(session)) {
     try {
       stopRecording(session.sessionName);
     } catch (error) {
       cleanupError ||= error;
-      recordingFinalizationFailed = true;
     }
   }
-  if (!recordingFinalizationFailed && (session.browserProcess || !session.browserLaunchAttempted)) {
+  if (session.browserProcess || !session.browserLaunchAttempted) {
     try {
       await stopOwnedBrowser(session);
     } catch (error) {

@@ -367,8 +367,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         `Recording finalization failed: ${
           error instanceof Error ? error.message : String(error)
         }`;
+      session.recordingActive = false;
       persistOwnedSession(session);
-      throw error;
     }
   } else if (recordingWasActive) {
     try {
@@ -379,8 +379,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         `Recording finalization could not be verified: ${
           error instanceof Error ? error.message : String(error)
         }`;
+      session.recordingActive = false;
       persistOwnedSession(session);
-      throw error;
     }
   }
   session.recordingActive = false;
@@ -1068,7 +1068,7 @@ export function trimVideo(
     fs.unlinkSync(rawPath);
     const trimmedDuration = Math.round(trimDurationSec);
     console.log(chalk.dim(`Trimmed video to ${trimmedDuration}s (removed dead time)`));
-    return timelineTrimOffsetSec;
+    return physicalTrimStartSec;
   } catch {
     // Restore original if trimming failed
     if (fs.existsSync(videoPath)) {

@@ -219,11 +219,10 @@ describe('owned environment capture', () => {
       ),
     ).rejects.toThrow(/timed out/);
 
-    expect(pendingState).toMatchObject({ kind: 'launcher' });
-    const launcherState = pendingState as Extract<EnvironmentState, { kind: 'launcher' }> | null;
-    if (!launcherState) {
+    if (pendingState?.kind !== 'launcher') {
       throw new Error('expected persisted launcher state');
     }
+    const launcherState = pendingState;
     expect(processIdentityMatches(launcherState.launcher.process)).toBe(false);
   }, 15000);
 

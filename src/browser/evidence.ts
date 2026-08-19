@@ -185,10 +185,11 @@ export function loadSanitizedNetworkSummary(
   }
   try {
     const value = JSON.parse(fs.readFileSync(summaryPath, 'utf-8')) as unknown;
-    return isSanitizedNetworkSummary(value)
+    return isSanitizedNetworkSummary(value) &&
+      value.requestCount === value.requests.length
       ? {
           version: 1,
-          requestCount: value.requests.length,
+          requestCount: value.requestCount,
           requests: value.requests.map((request) => ({
             endpoint: request.endpoint,
             method: request.method,

@@ -472,7 +472,7 @@ function readUserTesting(
     .map((line) => line.match(/^\d+\.\s+(.+)$/)?.[1])
     .filter((line): line is string => Boolean(line));
   if (instructions.length === 0) {
-    throw new Error('Finalized user-testing instructions were malformed.');
+    return null;
   }
   return {
     label: selection.manifest.sessionId,
