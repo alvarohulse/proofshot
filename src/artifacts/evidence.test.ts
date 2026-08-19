@@ -145,7 +145,7 @@ describe('canonical evidence and verdicts', () => {
         group: 'browser',
       }),
     );
-    expect(verdict.status).toBe('FAIL');
+    expect(verdict.status).toBe('INCOMPLETE');
     expect(verdict.duplicateScreenshotHashes).toEqual([
       ['first.png', 'second.png'],
     ]);
@@ -239,6 +239,41 @@ describe('canonical evidence and verdicts', () => {
 
     expect(verdict.status).toBe('INCOMPLETE');
     expect(verdict.reasons).toContain(
+      'No explicit behavioral assertion passed.',
+    );
+  });
+
+  it('reports a failed explicit assertion as FAIL when evidence is complete', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-failed-assertion-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'failed-assertion',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'is visible #ready',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'failed',
+          expectedSelector: '#ready',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('FAIL');
+    expect(verdict.reasons).toContain(
+      '1 expected selector assertion(s) failed.',
+    );
+    expect(verdict.reasons).not.toContain(
       'No explicit behavioral assertion passed.',
     );
   });

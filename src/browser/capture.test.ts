@@ -11,6 +11,7 @@ import { finalizeRecording, stopRecording } from './capture.js';
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
   mocks.ab.mockReset();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -49,4 +50,30 @@ describe('recording finalization', () => {
 
     expect(() => stopRecording('ps-session')).toThrow('recorder flush failed');
   });
+
+  it.each([
+    ['missing', false],
+    ['empty', true],
+  ])(
+    'retains recovery ownership when finalized media is %s',
+    async (_label, createEmptyFile) => {
+      vi.useFakeTimers();
+      const directory = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'proofshot-capture-'),
+      );
+      temporaryDirectories.push(directory);
+      const videoPath = path.join(directory, 'session.mp4');
+      if (createEmptyFile) fs.writeFileSync(videoPath, '');
+      mocks.ab.mockReturnValue('');
+
+      const rejection = expect(
+        finalizeRecording(videoPath, 'ps-session'),
+      ).rejects.toThrow(
+        'Recording finalization did not produce a stable non-empty file',
+      );
+      await vi.advanceTimersByTimeAsync(5_100);
+
+      await rejection;
+    },
+  );
 });

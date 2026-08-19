@@ -661,7 +661,9 @@ function buildVerdict(
           `${pendingActions.length} browser action(s) had no recorded outcome.`,
         ]
       : []),
-    ...(passedAssertions.length === 0
+    ...(passedAssertions.length === 0 &&
+    expectedSelectorFailures.length === 0 &&
+    fatalIncidentCount === 0
       ? ['No explicit behavioral assertion passed.']
       : []),
     ...(nonfatalIncidentCount > 0
@@ -682,10 +684,10 @@ function buildVerdict(
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : failureReasons.length > 0
-        ? 'FAIL'
-        : incompleteReasons.length > 0
-          ? 'INCOMPLETE'
+      : incompleteReasons.length > 0
+        ? 'INCOMPLETE'
+        : failureReasons.length > 0
+          ? 'FAIL'
           : 'PASS';
   return {
     version: 1,
