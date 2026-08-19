@@ -247,12 +247,22 @@ if (command === 'network' && detail[0] === 'har' && detail[1] === 'stop') {
   }
   process.exit(0);
 }
-if (
-  command === 'record' &&
-  detail[0] === 'stop' &&
-  process.env.FAKE_AGENT_BROWSER_DELAY_RECORD_STOP === '1'
-) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+if (command === 'record' && detail[0] === 'start') {
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  state.recordingPath = detail[1];
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  process.exit(0);
+}
+if (command === 'record' && detail[0] === 'stop') {
+  if (process.env.FAKE_AGENT_BROWSER_DELAY_RECORD_STOP === '1') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+  }
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  if (!state.recordingPath) {
+    process.stderr.write('No recording in progress\\n');
+    process.exit(1);
+  }
+  fs.writeFileSync(state.recordingPath, 'fake-video');
   process.exit(0);
 }
 if (

@@ -1,4 +1,9 @@
+import * as fs from 'fs';
 import { ab } from '../utils/exec.js';
+
+const RECORDING_FINALIZATION_TIMEOUT_MS = 120_000;
+const RECORDING_STABILITY_TIMEOUT_MS = 5_000;
+const RECORDING_STABILITY_POLL_MS = 100;
 
 /**
  * Start video recording to the given file path.
@@ -12,9 +17,63 @@ export function startRecording(outputPath: string, sessionName?: string): void {
  */
 export function stopRecording(sessionName?: string): void {
   try {
-    ab(['record', 'stop'], { timeoutMs: 15000, session: sessionName });
+    ab(['record', 'stop'], {
+      timeoutMs: RECORDING_FINALIZATION_TIMEOUT_MS,
+      session: sessionName,
+    });
+  } catch (error) {
+    if (/no recording in progress/i.test(
+      error instanceof Error ? error.message : String(error),
+    )) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Flush the recorder and prove that it produced a stable, non-empty file.
+ * Browser cleanup must not run until this completes, otherwise killing the
+ * daemon can destroy the only copy of an in-flight recording.
+ */
+export async function finalizeRecording(
+  outputPath: string,
+  sessionName?: string,
+): Promise<void> {
+  stopRecording(sessionName);
+  await waitForStableRecording(outputPath);
+}
+
+async function waitForStableRecording(outputPath: string): Promise<void> {
+  const deadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
+  let previousSize = -1;
+  let stableObservations = 0;
+
+  while (Date.now() <= deadline) {
+    const size = readRegularFileSize(outputPath);
+    if (size > 0 && size === previousSize) {
+      stableObservations += 1;
+      if (stableObservations >= 2) return;
+    } else {
+      stableObservations = 0;
+    }
+    previousSize = size;
+    await new Promise((resolve) =>
+      setTimeout(resolve, RECORDING_STABILITY_POLL_MS),
+    );
+  }
+
+  throw new Error(
+    `Recording finalization did not produce a stable non-empty file: ${outputPath}`,
+  );
+}
+
+function readRegularFileSize(filePath: string): number {
+  try {
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink() ? stat.size : -1;
   } catch {
-    // Recording may not have started — that's fine
+    return -1;
   }
 }
 
