@@ -73,6 +73,11 @@ export function translateProofShotExecArgs(args: string[]): {
   return { agentBrowserArgs: args };
 }
 
+export function validateProofShotExecCommand(args: string[]): void {
+  const translated = translateProofShotExecArgs(args);
+  assertControlledAgentBrowserCommand(translated.agentBrowserArgs);
+}
+
 /**
  * Parse an element ref (@eN) from command args.
  */
@@ -186,7 +191,7 @@ export async function execCommand(
   const intent = buildSanitizedCommandIntent(args);
   const action = intent.summary;
   const translated = translateProofShotExecArgs(args);
-  assertControlledAgentBrowserCommand(translated.agentBrowserArgs);
+  validateProofShotExecCommand(args);
   let loggedEntry: SessionLogEntry | null = null;
   let sessionLogPath: string | null = null;
 

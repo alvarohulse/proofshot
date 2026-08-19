@@ -84,7 +84,7 @@ export function parseReplayCase(value: unknown): ReplayCase {
   }
   const screenshotPaths = steps
     .filter(({ command }) => command[0] === 'screenshot')
-    .map(({ command }) => path.basename(command[1]));
+    .map(({ command }) => path.basename(command.at(-1)!));
   if (new Set(screenshotPaths).size !== screenshotPaths.length) {
     throw new Error('Replay case cannot reuse screenshot filenames.');
   }
@@ -97,6 +97,9 @@ export function parseReplayCase(value: unknown): ReplayCase {
   const humanTesting = replay.humanTesting.map((instruction, index) =>
     requireBoundedString(instruction, `humanTesting[${index}]`, 1_000),
   );
+  if (humanTesting.some((instruction) => /[\r\n]/.test(instruction))) {
+    throw new Error('humanTesting instructions must each fit on one line.');
+  }
 
   return {
     version: 1,

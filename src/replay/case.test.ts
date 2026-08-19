@@ -56,4 +56,22 @@ describe('replay case contract', () => {
       parseReplayCase({ ...validCase, humanTesting: [] }),
     ).toThrow(/humanTesting/);
   });
+
+  it('uses the final screenshot filename and rejects multiline instructions', () => {
+    expect(
+      parseReplayCase({
+        ...validCase,
+        steps: [
+          { command: ['assert-visible', '#ready'] },
+          { command: ['screenshot', '--full', 'proof.png'] },
+        ],
+      }).steps[1].command,
+    ).toEqual(['screenshot', '--full', 'proof.png']);
+    expect(() =>
+      parseReplayCase({
+        ...validCase,
+        humanTesting: ['Open the page.\nSubmit the form.'],
+      }),
+    ).toThrow(/one line/);
+  });
 });

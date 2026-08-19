@@ -1,12 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { startCommand } from './start.js';
-import { execCommand } from './exec.js';
+import {
+  execCommand,
+  validateProofShotExecCommand,
+} from './exec.js';
 import { stopCommand } from './stop.js';
 import { loadReplayCase, renderUserTesting } from '../replay/case.js';
 
 export async function replayCommand(casePath: string): Promise<void> {
   const replay = loadReplayCase(casePath);
+  for (const step of replay.steps) {
+    validateProofShotExecCommand(step.command);
+  }
   const receipt = await startCommand({
     description: replay.description,
     ...replay.start,
