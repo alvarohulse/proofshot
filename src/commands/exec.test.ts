@@ -78,6 +78,8 @@ describe('buildExecInvocation', () => {
     ['mouse', 'move', '10'],
     ['set', 'viewport', '1280'],
     ['storage', 'local', 'set', 'theme'],
+    ['cookies', 'set', '--curl'],
+    ['cookies', 'set', '--curl='],
   ])('rejects incomplete controlled commands before execution: %j', (...args) => {
     expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
       /requires/,
@@ -224,6 +226,19 @@ describe('buildExecInvocation', () => {
     ).not.toThrow();
     expect(() =>
       assertControlledAgentBrowserCommand(['network', 'requests']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand(['mouse', 'wheel']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand(['find', 'text', 'Submit']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'cookies',
+        'set',
+        '--curl=/tmp/request.txt',
+      ]),
     ).not.toThrow();
     expect(() =>
       assertControlledAgentBrowserCommand(['keyboard', 'type', 'hello']),

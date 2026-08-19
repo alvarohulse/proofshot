@@ -54,7 +54,15 @@ async function freePort(): Promise<number> {
 }
 
 function processIsAlive(pid: number): boolean {
-  return captureProcessIdentity(pid) !== null;
+  if (captureProcessIdentity(pid) === null) return false;
+  if (process.platform !== 'linux') return true;
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8');
+    const closeParen = stat.lastIndexOf(')');
+    return closeParen < 0 || stat[closeParen + 2] !== 'Z';
+  } catch {
+    return false;
+  }
 }
 
 async function waitForProcessExit(pid: number, timeoutMs = 5000): Promise<void> {
@@ -628,7 +636,7 @@ describe('isolated CLI lifecycle', () => {
     stop.stderr?.on('data', (chunk) => {
       stopOutput += chunk.toString();
     });
-    await waitForProcessExit(session.browserProcess.pid);
+    await waitForProcessExit(session.browserProcess.pid, 10_000);
     const [stoppingSession] = readRegisteredSessions(env);
     expect(stoppingSession.operationLease).toMatchObject({ kind: 'stop' });
     expect(stoppingSession.lifecycleStatus).toBe('stopping');

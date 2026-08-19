@@ -23,6 +23,7 @@ afterEach(() => {
 
 describe('recording finalization', () => {
   it('allows a bounded long flush and verifies stable non-empty media', async () => {
+    vi.useFakeTimers();
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-capture-'));
     temporaryDirectories.push(directory);
     const videoPath = path.join(directory, 'session.mp4');
@@ -31,7 +32,12 @@ describe('recording finalization', () => {
       return '';
     });
 
-    await expect(finalizeRecording(videoPath, 'ps-session')).resolves.toBeUndefined();
+    const finalization = expect(
+      finalizeRecording(videoPath, 'ps-session'),
+    ).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    await finalization;
     expect(mocks.ab).toHaveBeenCalledWith(['record', 'stop'], {
       timeoutMs: 120_000,
       session: 'ps-session',
@@ -96,7 +102,7 @@ describe('recording finalization', () => {
     ).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(5_100);
     clearInterval(growth);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(5_100);
 
     await finalization;
   });

@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PNG } from 'pngjs';
 import type { EnvironmentState, EvidenceEvent } from '../environment/types.js';
+
+const mocks = vi.hoisted(() => ({ execFileSync: vi.fn() }));
 
 vi.mock('child_process', async () => {
   const actual = await vi.importActual<typeof import('child_process')>(
@@ -11,14 +13,7 @@ vi.mock('child_process', async () => {
   );
   return {
     ...actual,
-    execFileSync: vi.fn(() =>
-      JSON.stringify({
-        format: {
-          start_time: '0',
-          duration: '284.9',
-        },
-      }),
-    ),
+    execFileSync: mocks.execFileSync,
   };
 });
 
@@ -29,7 +24,19 @@ const TEST_IMAGE = new PNG({ width: 2, height: 1 });
 TEST_IMAGE.data.set([0, 0, 0, 255, 255, 255, 255, 255]);
 const VALID_PNG = PNG.sync.write(TEST_IMAGE);
 
+beforeEach(() => {
+  mocks.execFileSync.mockReturnValue(
+    JSON.stringify({
+      format: {
+        start_time: '0',
+        duration: '284.9',
+      },
+    }),
+  );
+});
+
 afterEach(() => {
+  mocks.execFileSync.mockReset();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -217,6 +224,77 @@ describe('canonical evidence and verdicts', () => {
       7,
     ]);
     expect(verdict.status).toBe('PASS');
+  });
+
+  it('uses stable non-empty media when ffprobe is unavailable', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-no-ffprobe-'),
+    );
+    temporaryDirectories.push(sessionDir);
+    const videoPath = path.join(sessionDir, 'recording.mp4');
+    fs.writeFileSync(videoPath, 'stable media');
+    mocks.execFileSync.mockImplementation(() => {
+      throw Object.assign(new Error('spawn ffprobe ENOENT'), { code: 'ENOENT' });
+    });
+
+    const { evidence, verdict } = writeCanonicalEvidence({
+      sessionId: 'proofshot-no-ffprobe',
+      sessionDir,
+      durationSec: 1,
+      videoPath,
+      recordingWasActive: true,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'is visible #ready',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+          expectedSelector: '#ready',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(evidence.mediaDurationSec).toBeNull();
+    expect(verdict.status).toBe('PASS');
+    expect(verdict.missingArtifacts).toEqual([]);
+  });
+
+  it('rejects media that ffprobe reports as invalid', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-invalid-media-'),
+    );
+    temporaryDirectories.push(sessionDir);
+    const videoPath = path.join(sessionDir, 'recording.mp4');
+    fs.writeFileSync(videoPath, 'invalid media');
+    mocks.execFileSync.mockImplementation(() => {
+      throw Object.assign(new Error('ffprobe exited 1'), { status: 1 });
+    });
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'proofshot-invalid-media',
+      sessionDir,
+      durationSec: 1,
+      videoPath,
+      recordingWasActive: true,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'is visible #ready',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+          expectedSelector: '#ready',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.missingArtifacts).toContain('recording.mp4');
   });
 
   it('requires a passed explicit assertion for a PASS verdict', () => {
