@@ -665,6 +665,36 @@ describe('stop artifacts', () => {
     expect(summary).not.toContain('Token Usage');
   });
 
+  it('sanitizes environment source titles before writing the summary', async () => {
+    session.recordingActive = false;
+    session.serverCommand = null;
+    session.serverAlreadyRunning = true;
+    session.environment = {
+      kind: 'processes',
+      evidencePath: path.join(session.sessionDir, 'environment.ndjson'),
+      sources: [
+        {
+          id: 'private-source',
+          title: 'password is hunter2',
+          group: 'frontend',
+          kind: 'process',
+          stream: 'stdout',
+          logPath: path.join(session.sessionDir, 'source.log'),
+        },
+      ],
+      processes: [],
+    };
+
+    await stopCommand({});
+
+    const summary = fs.readFileSync(
+      path.join(session.sessionDir, 'SUMMARY.md'),
+      'utf-8',
+    );
+    expect(summary).not.toContain('hunter2');
+    expect(summary).toContain('password is [REDACTED]');
+  });
+
   it('converts the finalized WebM recording to H.264 MP4', () => {
     const videoPath = path.join(root, 'session.webm');
     const mp4Path = path.join(root, 'session.mp4');

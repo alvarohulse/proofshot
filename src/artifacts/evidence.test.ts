@@ -262,6 +262,42 @@ describe('canonical evidence and verdicts', () => {
     expect(verdict.missingArtifacts).toEqual([]);
   });
 
+  it('uses stable non-empty media when ffprobe reports no duration', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-no-media-duration-'),
+    );
+    temporaryDirectories.push(sessionDir);
+    const videoPath = path.join(sessionDir, 'recording.mp4');
+    fs.writeFileSync(videoPath, 'stable media');
+    mocks.execFileSync.mockReturnValue(
+      JSON.stringify({ format: { start_time: '0' } }),
+    );
+
+    const { evidence, verdict } = writeCanonicalEvidence({
+      sessionId: 'proofshot-no-media-duration',
+      sessionDir,
+      durationSec: 1,
+      videoPath,
+      recordingWasActive: true,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'is visible #ready',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+          expectedSelector: '#ready',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(evidence.mediaDurationSec).toBeNull();
+    expect(verdict.status).toBe('PASS');
+    expect(verdict.missingArtifacts).toEqual([]);
+  });
+
   it('rejects media that ffprobe reports as invalid', () => {
     const sessionDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'proofshot-invalid-media-'),
@@ -321,6 +357,37 @@ describe('canonical evidence and verdicts', () => {
     );
   });
 
+  it('does not treat a raw is-visible observation as a passed assertion', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-observation-only-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'observation-only',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'is visible #missing',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain(
+      'No explicit behavioral assertion passed.',
+    );
+  });
+
   it('reports a failed explicit assertion as FAIL when evidence is complete', () => {
     const sessionDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'proofshot-failed-assertion-'),
@@ -354,6 +421,42 @@ describe('canonical evidence and verdicts', () => {
     expect(verdict.reasons).not.toContain(
       'No explicit behavioral assertion passed.',
     );
+  });
+
+  it('keeps a failed screenshot from masking an assertion failure', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-failed-screenshot-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'failed-screenshot',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'screenshot missing.png',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'failed',
+        },
+        {
+          action: 'is visible #ready',
+          relativeTimeSec: 0.5,
+          timestamp: '2026-08-09T00:00:00.500Z',
+          outcome: 'failed',
+          expectedSelector: '#ready',
+        },
+      ],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('FAIL');
+    expect(verdict.missingArtifacts).not.toContain('missing.png');
   });
 
   it('keeps nonfatal console and network failures from receiving PASS', () => {

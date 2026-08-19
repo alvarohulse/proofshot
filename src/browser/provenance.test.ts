@@ -88,6 +88,13 @@ describe('browser interaction provenance', () => {
 
   it('redacts typed values, credentials, scripts, and sensitive URL parameters', () => {
     expect(
+      buildSanitizedCommandIntent([
+        'screenshot',
+        '--annotate',
+        'review step.png',
+      ]).summary,
+    ).toBe('screenshot review step.png');
+    expect(
       buildSanitizedCommandIntent(['fill', '@e2', 'private-value']).summary,
     ).toBe('fill @e2 [REDACTED]');
     expect(
@@ -338,6 +345,12 @@ describe('browser interaction provenance', () => {
     );
     expect(sanitizeDiagnosticMessage('Log in using hunter2')).toBe(
       'Log in using [REDACTED]',
+    );
+    expect(sanitizeDiagnosticMessage('Type hunter2 in the password box.')).toBe(
+      'Type [REDACTED] in the password box.',
+    );
+    expect(sanitizeDiagnosticMessage('Log in with Google, then continue.')).toBe(
+      'Log in with Google, then continue.',
     );
   });
 
