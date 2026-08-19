@@ -150,10 +150,7 @@ export function captureProcessIdentity(pid: number): ProcessIdentity | null {
 
   if (process.platform === 'linux') {
     try {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8');
-      const closeParen = stat.lastIndexOf(')');
-      if (closeParen >= 0 && stat[closeParen + 2] === 'Z') return null;
-      const identity = parseLinuxProcStat(stat);
+      const identity = parseLinuxProcStat(fs.readFileSync(`/proc/${pid}/stat`, 'utf-8'));
       const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf-8').trim();
       if (!identity || !bootId) return null;
       return { ...identity, bootId };
@@ -370,10 +367,9 @@ function listProcessGroupsInSession(sessionId: number): number[] {
     for (const entry of entries) {
       if (!/^\d+$/.test(entry)) continue;
       try {
-        const stat = fs.readFileSync(`/proc/${entry}/stat`, 'utf-8');
-        const closeParen = stat.lastIndexOf(')');
-        if (closeParen >= 0 && stat[closeParen + 2] === 'Z') continue;
-        const identity = parseLinuxProcStat(stat);
+        const identity = parseLinuxProcStat(
+          fs.readFileSync(`/proc/${entry}/stat`, 'utf-8'),
+        );
         if (identity?.sessionId === sessionId) {
           groups.add(identity.processGroupId);
         }

@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import { execFileSync } from 'child_process';
 import { ab } from '../utils/exec.js';
 
 const RECORDING_FINALIZATION_TIMEOUT_MS = 120_000;
@@ -62,7 +61,7 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
     const size = readRegularFileSize(outputPath);
     if (size > 0 && size === previousSize) {
       stableObservations += 1;
-      if (stableObservations >= 2 && isPlayableRecording(outputPath)) return;
+      if (stableObservations >= 2) return;
     } else {
       stableObservations = 0;
       if (size > previousSize) {
@@ -78,18 +77,6 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
   throw new Error(
     `Recording finalization did not produce a stable non-empty file: ${outputPath}`,
   );
-}
-
-function isPlayableRecording(outputPath: string): boolean {
-  try {
-    execFileSync('ffprobe', [
-      '-v', 'error', '-select_streams', 'v:0',
-      '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', outputPath,
-    ], { stdio: 'ignore', timeout: 10_000 });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function readRegularFileSize(filePath: string): number {
