@@ -278,14 +278,18 @@ function sanitizeDiagnosticTokens(value: string): string {
   return value
     .replace(/\b(?:Basic|Bearer)\s+[^\s"',;]+/gi, REDACTED)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
-    .replace(/(\b(?:password|passcode|secret|token)\b\s*(?:is|:|=|using)\s*)[^\s,;]+/gi, `$1${REDACTED}`)
+    .replace(
+      /(\b(?:password|passcode|secret|token)\b\s*(?:is|:|=|using)\s*)([^\s,;]+?)([.,;]?)(?=\s|$)/gi,
+      `$1${REDACTED}$3`,
+    )
     .replace(
       /(\b(?:type|enter|input)\s+)[^\s,;]+(\s+in(?:to)?\s+(?:the\s+)?(?:password|passcode)\b)/gi,
       `$1${REDACTED}$2`,
     )
     .replace(
-      /(\b(?:log\s*in|sign\s*in|authenticate)\b[^\r\n]{0,40}?\b(?:using|with)\s+)(?=[^\s,;]*(?:\d|[-_/@:=]))[^\s,;]+(?:\s*\/\s*[^\s,;]+)?/gi,
-      `$1${REDACTED}`,
+      /(\b(?:log\s*in|sign\s*in|authenticate)\b[^\r\n]{0,40}?\b(?:using|with)\s+)(?=[^\s,;]*(?:\d|[-_/@:=]))([^\s,;]+(?:\s*\/\s*[^\s,;]+)?)/gi,
+      (_match, prefix: string, value: string) =>
+        `${prefix}${REDACTED}${/[.;]$/.test(value) ? value.at(-1) : ''}`,
     )
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, REDACTED);
 }
