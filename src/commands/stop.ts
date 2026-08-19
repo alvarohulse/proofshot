@@ -1070,7 +1070,7 @@ export function trimVideo(
     fs.unlinkSync(rawPath);
     const trimmedDuration = Math.round(trimDurationSec);
     console.log(chalk.dim(`Trimmed video to ${trimmedDuration}s (removed dead time)`));
-    return physicalTrimStartSec;
+    return timelineTrimOffsetSec;
   } catch {
     // Restore original if trimming failed
     if (fs.existsSync(videoPath)) {
