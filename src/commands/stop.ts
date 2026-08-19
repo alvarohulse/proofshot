@@ -101,8 +101,7 @@ function sanitizeEvidenceText(value: string): string {
 
 function isRegularFile(filePath: string): boolean {
   try {
-    const stat = fs.lstatSync(filePath);
-    return stat.isFile() && !stat.isSymbolicLink();
+    return fs.lstatSync(filePath).isFile();
   } catch {
     return false;
   }
@@ -567,8 +566,6 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   // Write adjusted log back to disk so timestamps match the trimmed video
   if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
     const logPath = path.join(sessionDir, 'session-log.json');
-    session.sessionLogAdjusted = true;
-    persistOwnedSession(session);
     writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + '\n');
   }
   if (!session.sessionLogAdjusted) {

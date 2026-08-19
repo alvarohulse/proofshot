@@ -60,9 +60,9 @@ export function parseReplayCase(value: unknown): ReplayCase {
         4_000,
       ),
     );
-    if (command.some((argument) => isEphemeralSelector(argument))) {
+    if (command.some((argument) => /@e\d+\b/i.test(argument))) {
       throw new Error(
-        'Replay cases cannot use ephemeral snapshot references or positional selectors.',
+        'Replay cases cannot use ephemeral snapshot references such as @e1.',
       );
     }
     if (command[0] === 'assert-visible' && command.length < 2) {
@@ -118,15 +118,6 @@ export function parseReplayCase(value: unknown): ReplayCase {
     steps,
     humanTesting,
   };
-}
-
-function isEphemeralSelector(argument: string): boolean {
-  return (
-    /@e\d+\b/i.test(argument) ||
-    /:nth-(?:child|of-type)\s*\(/i.test(argument) ||
-    argument.toLowerCase() === 'nth' ||
-    /#(?:radix-|ember\d|cdk-overlay-)/i.test(argument)
-  );
 }
 
 export function renderUserTesting(replay: ReplayCase): string {

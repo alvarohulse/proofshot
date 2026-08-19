@@ -279,10 +279,6 @@ function sanitizeDiagnosticTokens(value: string): string {
     .replace(
       /(\b(?:log\s*in|sign\s*in|authenticate)\b[^\r\n]{0,40}?\b(?:using|with)\s+)[^\s,.;]+/gi,
       `$1${REDACTED}`,
-    )
-    .replace(
-      /(\b(?:type|enter|input)\s+)[^\s,.;]+(\s+in(?:to)?\s+(?:the\s+)?(?:password|passcode)\b)/gi,
-      `$1${REDACTED}$2`,
     );
 }
 

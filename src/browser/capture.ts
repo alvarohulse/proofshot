@@ -55,7 +55,7 @@ export async function verifyFinalizedRecording(
 async function waitForStableRecording(outputPath: string): Promise<void> {
   const absoluteDeadline = Date.now() + RECORDING_STABILITY_MAX_WAIT_MS;
   let quietDeadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
-  let previousSize = Number.NaN;
+  let previousSize = -1;
 
   while (Date.now() <= absoluteDeadline) {
     const now = Date.now();
@@ -82,8 +82,8 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
 
 function readRegularFileSize(filePath: string): number {
   try {
-    const stat = fs.lstatSync(filePath);
-    return stat.isFile() && !stat.isSymbolicLink() ? stat.size : -1;
+    const stat = fs.statSync(filePath);
+    return stat.isFile() ? stat.size : -1;
   } catch {
     return -1;
   }
