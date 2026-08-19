@@ -279,7 +279,8 @@ function sanitizeDiagnosticTokens(value: string): string {
     .replace(/\b(?:Basic|Bearer)\s+[^\s"',;]+/gi, REDACTED)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, REDACTED)
-    .replace(/\b(?:password|passcode|secret|token)\b(\s+(?:is|:|=|using)\s+)[^\s,.;]+/gi, `$1${REDACTED}`);
+    .replace(/(\b(?:password|passcode|secret|token)\b\s*(?:is|:|=|using)\s*)[^\s,.;]+/gi, `$1${REDACTED}`)
+    .replace(/(\b(?:log\s*in|sign\s*in|authenticate)\b[^\r\n]{0,40}\b(?:using|with)\s+)[^\s,.;]+/gi, `$1${REDACTED}`);
 }
 
 function redactDiagnosticAssignmentsOutsideUrls(value: string): string {
@@ -293,7 +294,7 @@ function redactDiagnosticAssignmentsOutsideUrls(value: string): string {
     sanitizedUrls.push(sanitizeUrlValue(url));
     return marker;
   });
-  let sanitized = redactDiagnosticAssignments(sanitizeDiagnosticTokens(masked));
+  let sanitized = sanitizeDiagnosticTokens(redactDiagnosticAssignments(masked));
   sanitizedUrls.forEach((url, index) => {
     sanitized = sanitized.replace(`${markerPrefix}${index}\0`, () => url);
   });

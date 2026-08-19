@@ -81,7 +81,7 @@ export function parseReplayCase(value: unknown): ReplayCase {
     assertControlledAgentBrowserCommand(translated);
     if (command[0]?.toLowerCase() === 'screenshot') {
       const { filename, flags } = parseScreenshotCommand(command);
-      return { command: ['screenshot', ...flags, filename] };
+      return { command: ['screenshot', filename, ...flags] };
     }
     return { command };
   });
@@ -93,7 +93,7 @@ export function parseReplayCase(value: unknown): ReplayCase {
   }
   const screenshotPaths = steps
     .filter(({ command }) => command[0] === 'screenshot')
-    .map(({ command }) => path.basename(command.at(-1)!));
+    .map(({ command }) => path.basename(parseScreenshotCommand(command).filename));
   if (new Set(screenshotPaths).size !== screenshotPaths.length) {
     throw new Error('Replay case cannot reuse screenshot filenames.');
   }

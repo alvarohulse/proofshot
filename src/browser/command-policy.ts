@@ -113,6 +113,32 @@ const ALLOWED_STORAGE_TYPES = new Set(['local', 'session']);
 const ALLOWED_STORAGE_OPERATIONS = new Set(['clear', 'get', 'set']);
 const SCREENSHOT_FLAGS = new Set(['--annotate', '--full', '-f']);
 const MAX_BATCH_DEPTH = 8;
+const MINIMUM_COMMAND_ARGUMENTS: Record<string, number> = {
+  check: 2,
+  click: 2,
+  dblclick: 2,
+  drag: 3,
+  eval: 2,
+  fill: 3,
+  find: 3,
+  focus: 2,
+  goto: 2,
+  hover: 2,
+  is: 3,
+  key: 2,
+  keyboard: 3,
+  keydown: 2,
+  keyup: 2,
+  navigate: 2,
+  press: 2,
+  scrollinto: 2,
+  scrollintoview: 2,
+  select: 3,
+  type: 3,
+  uncheck: 2,
+  upload: 3,
+  wait: 2,
+};
 
 export function assertControlledAgentBrowserCommand(args: string[]): void {
   assertControlledAgentBrowserCommandAtDepth(args, 0);
@@ -180,6 +206,8 @@ function assertControlledAgentBrowserCommandAtDepth(
     );
   }
 
+  assertMinimumArguments(command, args);
+
   switch (command) {
     case 'batch':
       assertBatchCommands(args, batchDepth);
@@ -198,9 +226,11 @@ function assertControlledAgentBrowserCommandAtDepth(
         args[1],
         ALLOWED_COOKIE_OPERATIONS,
       );
+      assertCookieArguments(args);
       return;
     case 'get':
       assertAllowedSubcommand(command, args[1], ALLOWED_GET_SUBCOMMANDS);
+      assertGetArguments(args);
       return;
     case 'is':
       assertAllowedSubcommand(command, args[1], ALLOWED_IS_SUBCOMMANDS);
@@ -210,6 +240,9 @@ function assertControlledAgentBrowserCommandAtDepth(
       return;
     case 'mouse':
       assertAllowedSubcommand(command, args[1], ALLOWED_MOUSE_SUBCOMMANDS);
+      if (args[1]?.toLowerCase() === 'move') {
+        requireArguments(args, 4, 'mouse move <x> <y>');
+      }
       return;
     case 'network':
       assertNetworkCommand(args);
@@ -219,6 +252,7 @@ function assertControlledAgentBrowserCommandAtDepth(
       return;
     case 'set':
       assertAllowedSubcommand(command, args[1], ALLOWED_SET_SUBCOMMANDS);
+      assertSetArguments(args);
       return;
     case 'storage':
       assertAllowedSubcommand(command, args[1], ALLOWED_STORAGE_TYPES);
@@ -227,6 +261,70 @@ function assertControlledAgentBrowserCommandAtDepth(
         args[2],
         ALLOWED_STORAGE_OPERATIONS,
       );
+      if (args[2]?.toLowerCase() === 'set') {
+        requireArguments(args, 5, 'storage <local|session> set <key> <value>');
+      }
+      return;
+    default:
+      if (command === 'find' && args[1]?.toLowerCase() === 'nth') {
+        requireArguments(args, 4, 'find nth <index> <selector>');
+      }
+      return;
+  }
+}
+
+function assertMinimumArguments(command: string, args: string[]): void {
+  const minimum = MINIMUM_COMMAND_ARGUMENTS[command];
+  if (minimum !== undefined) {
+    requireArguments(args, minimum, `${command} requires more arguments`);
+  }
+}
+
+function requireArguments(args: string[], minimum: number, usage: string): void {
+  if (args.length < minimum) {
+    throw new Error(`agent-browser command requires: ${usage}.`);
+  }
+}
+
+function assertCookieArguments(args: string[]): void {
+  if (args[1]?.toLowerCase() !== 'set') return;
+  const curlIndex = args.findIndex((argument) => argument === '--curl');
+  if (curlIndex >= 0) {
+    requireArguments(args.slice(curlIndex), 2, 'cookies set --curl <file>');
+    return;
+  }
+  requireArguments(args, 4, 'cookies set <name> <value>');
+}
+
+function assertGetArguments(args: string[]): void {
+  const subcommand = args[1]?.toLowerCase();
+  if (subcommand === 'url' || subcommand === 'title') return;
+  requireArguments(
+    args,
+    subcommand === 'attr' ? 4 : 3,
+    subcommand === 'attr'
+      ? 'get attr <selector> <attribute>'
+      : `get ${subcommand} <selector>`,
+  );
+}
+
+function assertSetArguments(args: string[]): void {
+  const subcommand = args[1]?.toLowerCase();
+  switch (subcommand) {
+    case 'viewport':
+      requireArguments(args, 4, 'set viewport <width> <height>');
+      return;
+    case 'geo':
+      requireArguments(args, 4, 'set geo <latitude> <longitude>');
+      return;
+    case 'credentials':
+      requireArguments(args, 4, 'set credentials <username> <password>');
+      return;
+    case 'device':
+      requireArguments(args, 3, 'set device <name>');
+      return;
+    case 'headers':
+      requireArguments(args, 3, 'set headers <json>');
       return;
     default:
       return;
@@ -298,7 +396,7 @@ function assertScreenshotFilename(
     filename.startsWith('-') ||
     path.isAbsolute(filename) ||
     path.basename(filename) !== filename ||
-    path.extname(filename).toLowerCase() !== '.png' ||
+    path.extname(filename) !== '.png' ||
     flags.some((flag) => !SCREENSHOT_FLAGS.has(normalizeFlag(flag)))
   ) {
     throw new Error(

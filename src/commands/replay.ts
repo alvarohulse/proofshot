@@ -24,10 +24,10 @@ export async function replayCommand(casePath: string): Promise<void> {
   let stopped = false;
   let primaryError: unknown;
   try {
+    writeUserTesting(receipt.sessionDir, renderUserTesting(replay));
     for (const step of replay.steps) {
       await runReplayStep(step.command, receipt.sessionId);
     }
-    writeUserTesting(receipt.sessionDir, renderUserTesting(replay));
     await stopCommand({ session: receipt.sessionId });
     stopped = true;
     const verdict = readVerdict(receipt.sessionDir);
