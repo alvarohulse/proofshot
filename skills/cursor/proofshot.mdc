@@ -1,5 +1,5 @@
 ---
-description: Explore UI behavior, refine user flows, then record fresh isolated ProofShot evidence
+description: Explore UI behavior, refine user flows, then replay fresh isolated ProofShot evidence
 globs: ["**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.html"]
 ---
 

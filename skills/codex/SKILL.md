@@ -1,6 +1,6 @@
 ---
 name: proofshot
-description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then record one fresh isolated ProofShot session per reviewable use case and retain local evidence.
+description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then replay each stabilized use case in a fresh isolated ProofShot session and retain local evidence.
 ---
 
 # ProofShot visual verification
@@ -49,7 +49,7 @@ If cleanup is interrupted, use `proofshot session list` and `proofshot session c
 
 ## 5. Publish curated proof
 
-Copy only exercised final flows into PR User Testing instructions. Publish explicit ordered sessions and curated screenshots:
+Publish only replay-generated User Testing instructions, exercised final flows, and curated screenshots:
 
 ```bash
 proofshot pr 42 --session SESSION_ID --screenshot step-result.png --dry-run

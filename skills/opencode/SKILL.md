@@ -1,6 +1,6 @@
 ---
 name: proofshot
-description: Explore UI behavior, refine user flows, then record one fresh isolated ProofShot session per reviewable use case.
+description: Explore UI behavior and refine user flows, then replay each stabilized use case in a fresh isolated ProofShot session.
 compatibility: opencode
 ---
 

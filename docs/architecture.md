@@ -28,7 +28,7 @@ The choice of agent-browser as the browser automation layer is the most importan
 
 **Persistent daemon.** agent-browser runs a Node.js daemon that maintains browser state across CLI calls. This means `proofshot exec click @e3` and the next `proofshot exec screenshot step.png` operate on the same browser tab and page state. Without this, each command would need to reconnect to the browser.
 
-**Stable element references.** The `@eN` ref system (`@e1`, `@e2`, etc.) provides stable handles to interactive elements. An agent takes a snapshot, sees `@e3: Submit button`, and can target it reliably. This is far more robust than CSS selectors or XPath for AI-driven interaction.
+**Snapshot element references.** The `@eN` ref system (`@e1`, `@e2`, etc.) provides handles within an exploratory browser session. An agent takes a snapshot, sees `@e3: Submit button`, and can target it during that session; finalized replay cases instead use stable selectors because snapshot references are ephemeral.
 
 **Lightweight context.** agent-browser's snapshot output is ~93% smaller than Playwright MCP's equivalent. This matters because AI agents have context limits — smaller snapshots mean more room for reasoning.
 

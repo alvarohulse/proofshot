@@ -22,7 +22,7 @@ No. ffmpeg is optional. Without it, ProofShot keeps the full untrimmed H.264 MP4
 ## Usage
 
 **How does the agent know the ProofShot workflow?**
-The skill file installed by `proofshot install` teaches your agent the three-step workflow, all browser commands, and when to take screenshots. You just prompt naturally — "verify this feature with proofshot" — and the agent handles the rest.
+The skill file installed by `proofshot install` teaches your agent to explore with agent-browser, then run a stable-selector replay with an assertion, screenshot, and human-testing instructions. You just prompt naturally — "verify this feature with proofshot" — and the agent handles the rest.
 
 **What are `@eN` references?**
 Stable handles to interactive elements on a page. When your agent runs `proofshot exec snapshot -i`, it gets a list like `@e1: button "Submit"`, `@e2: input "Email"`. These references persist across commands within a session, so the agent can target elements reliably without CSS selectors.

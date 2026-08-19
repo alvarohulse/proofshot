@@ -7,7 +7,7 @@ import { Callout, Steps } from 'nextra/components'
 
 # How to install agent skills
 
-ProofShot teaches your AI coding agent the verification workflow through a skill file. Once installed, your agent knows how to run `proofshot start`, drive the browser, capture screenshots, and run `proofshot stop` — all from a simple prompt like "verify this with proofshot."
+ProofShot teaches your AI coding agent the verification workflow through a skill file. Once installed, your agent can explore with `agent-browser`, then run a stable-selector `proofshot replay` case that captures a screenshot and assertion in a fresh isolated session — all from a simple prompt like "verify this with proofshot."
 
 <Callout type="info">
 **Prerequisites:** ProofShot installed globally (`npm install -g proofshot`).
@@ -62,11 +62,9 @@ Tools using the **append** strategy wrap ProofShot's content in `<!-- proofshot:
 
 The skill file gives your agent:
 
-- The three-step workflow (`start` → test → `stop`)
-- All `agent-browser` commands for browser interaction
-- When to take screenshots for maximum coverage
-- How to read element snapshots and use `@eN` references
-- Error awareness (what to check in the proof report)
+- An exploration workflow using agent-browser, including temporary `@eN` snapshot references
+- A finalized replay workflow using stable selectors, an assertion, a screenshot, and high-level human testing instructions
+- Error awareness and local evidence-retention guidance
 
 You don't need to explain ProofShot to your agent. Just prompt it naturally:
 
