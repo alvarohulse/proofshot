@@ -76,6 +76,24 @@ export function translateProofShotExecArgs(args: string[]): {
 export function validateProofShotExecCommand(args: string[]): void {
   const translated = translateProofShotExecArgs(args);
   assertControlledAgentBrowserCommand(translated.agentBrowserArgs);
+  const command = translated.agentBrowserArgs[0]?.toLowerCase();
+  const minimumArgs: Record<string, number> = {
+    click: 2,
+    dblclick: 2,
+    fill: 3,
+    type: 3,
+    goto: 2,
+    navigate: 2,
+    open: 2,
+    hover: 2,
+    press: 3,
+    select: 3,
+    uncheck: 2,
+  };
+  if (command && minimumArgs[command] !== undefined &&
+      translated.agentBrowserArgs.length < minimumArgs[command]) {
+    throw new Error(`agent-browser ${command} requires its selector and arguments.`);
+  }
 }
 
 /**

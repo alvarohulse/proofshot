@@ -127,9 +127,24 @@ export function prepareControlledAgentBrowserCommand(
     return args;
   }
 
-  const filename = args.at(-1);
+  const { filename, flags } = parseScreenshotCommand(args);
+  return ['screenshot', path.join(sessionDir, filename), ...flags];
+}
+
+export function parseScreenshotCommand(args: string[]): {
+  filename: string;
+  flags: string[];
+} {
+  if (args[0]?.toLowerCase() !== 'screenshot') {
+    throw new Error('Expected an agent-browser screenshot command.');
+  }
+  const filename = args.slice(1).find((argument) => !argument.startsWith('-'));
+  const flags = args.slice(1).filter((argument) => argument.startsWith('-'));
   assertScreenshotFilename(filename, args);
-  return [...args.slice(0, -1), path.join(sessionDir, filename)];
+  if (args.slice(1).filter((argument) => !argument.startsWith('-')).length !== 1) {
+    throw new Error('ProofShot screenshots require one PNG filename directly inside the active session.');
+  }
+  return { filename, flags };
 }
 
 function assertControlledAgentBrowserCommandAtDepth(
@@ -200,7 +215,7 @@ function assertControlledAgentBrowserCommandAtDepth(
       assertNetworkCommand(args);
       return;
     case 'screenshot':
-      assertScreenshotFilename(args.at(-1), args);
+      parseScreenshotCommand(args);
       return;
     case 'set':
       assertAllowedSubcommand(command, args[1], ALLOWED_SET_SUBCOMMANDS);
@@ -277,9 +292,7 @@ function assertScreenshotFilename(
   filename: string | undefined,
   args: string[],
 ): asserts filename is string {
-  const flags = args
-    .slice(1, -1)
-    .filter((argument) => argument.startsWith('-'));
+  const flags = args.slice(1).filter((argument) => argument.startsWith('-'));
   if (
     !filename ||
     filename.startsWith('-') ||

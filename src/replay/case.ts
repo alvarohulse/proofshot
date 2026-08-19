@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
+import { assertControlledAgentBrowserCommand, parseScreenshotCommand } from '../browser/command-policy.js';
 
 export type ReplayCase = {
   version: 1;
@@ -73,6 +74,14 @@ export function parseReplayCase(value: unknown): ReplayCase {
       throw new Error(
         `steps[${index}].command requires a filename for screenshot.`,
       );
+    }
+    const translated = command[0] === 'assert-visible'
+      ? ['is', 'visible', ...command.slice(1)]
+      : command;
+    assertControlledAgentBrowserCommand(translated);
+    if (command[0]?.toLowerCase() === 'screenshot') {
+      const { filename, flags } = parseScreenshotCommand(command);
+      return { command: ['screenshot', filename, ...flags] };
     }
     return { command };
   });
