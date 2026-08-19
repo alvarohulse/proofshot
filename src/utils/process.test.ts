@@ -295,6 +295,14 @@ describe('process ownership', () => {
     const zombieStat = `${stat.slice(0, closeParen + 2)}Z${stat.slice(closeParen + 3)}`;
 
     expect(parseLinuxProcStat(zombieStat)).toBeNull();
+    expect(
+      parseLinuxProcStat(zombieStat, { includeZombie: true }),
+    ).toMatchObject({
+      pid: process.pid,
+      processGroupId: expect.any(Number),
+      sessionId: expect.any(Number),
+      startTime: expect.stringMatching(/^\d+$/),
+    });
   });
 
   it('parses macOS process ownership fields', () => {
