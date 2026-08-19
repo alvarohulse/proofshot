@@ -26,52 +26,59 @@ export function prepareQuietFfmpegWrapper(
   const platform = options.platform ?? process.platform;
   if (platform === 'win32') return null;
 
-  const discoveredFfmpeg =
-    options.ffmpegExecutable ?? findExecutablePath('ffmpeg', platform);
-  if (!discoveredFfmpeg) return null;
+  try {
+    const discoveredFfmpeg =
+      options.ffmpegExecutable ?? findExecutablePath('ffmpeg', platform);
+    if (!discoveredFfmpeg) return null;
 
-  const ffmpegExecutable = fs.realpathSync(discoveredFfmpeg);
-  const executableStat = fs.statSync(ffmpegExecutable);
-  if (!executableStat.isFile()) {
-    throw new Error(`FFmpeg executable is not a regular file: ${ffmpegExecutable}`);
+    const ffmpegExecutable = fs.realpathSync(discoveredFfmpeg);
+    const executableStat = fs.statSync(ffmpegExecutable);
+    if (!executableStat.isFile()) return null;
+    fs.accessSync(ffmpegExecutable, fs.constants.X_OK);
+
+    const stateRoot =
+      options.stateRoot ??
+      path.join(
+        process.env.XDG_STATE_HOME || path.join(os.userInfo().homedir, '.local', 'state'),
+        'proofshot',
+      );
+    const ffmpegPathHash = createHash('sha256')
+      .update(ffmpegExecutable)
+      .digest('hex')
+      .slice(0, 16);
+    const wrapperDirectory = path.join(
+      stateRoot,
+      'runtime',
+      'ffmpeg-bin',
+      ffmpegPathHash,
+    );
+    fs.mkdirSync(wrapperDirectory, { recursive: true, mode: 0o700 });
+    const directoryStat = fs.lstatSync(wrapperDirectory);
+    if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) return null;
+    if (typeof process.getuid === 'function' && directoryStat.uid !== process.getuid()) {
+      return null;
+    }
+    fs.chmodSync(wrapperDirectory, 0o700);
+
+    const wrapperPath = path.join(wrapperDirectory, 'ffmpeg');
+    const contents =
+      `#!/bin/sh\n` +
+      `exec ${shellSingleQuote(ffmpegExecutable)} -nostats -loglevel error "$@"\n`;
+    if (readFileIfPresent(wrapperPath) !== contents) {
+      writeAtomicExecutable(wrapperPath, contents);
+    } else {
+      fs.chmodSync(wrapperPath, 0o700);
+    }
+    return wrapperDirectory;
+  } catch {
+    return null;
   }
-  fs.accessSync(ffmpegExecutable, fs.constants.R_OK | fs.constants.X_OK);
-
-  const stateRoot =
-    options.stateRoot ??
-    path.join(os.homedir(), '.local', 'state', 'proofshot');
-  const ffmpegPathHash = createHash('sha256')
-    .update(ffmpegExecutable)
-    .digest('hex')
-    .slice(0, 16);
-  const wrapperDirectory = path.join(
-    stateRoot,
-    'runtime',
-    'ffmpeg-bin',
-    ffmpegPathHash,
-  );
-  fs.mkdirSync(wrapperDirectory, { recursive: true, mode: 0o700 });
-  fs.chmodSync(wrapperDirectory, 0o700);
-
-  // agent-browser 0.34 pipes FFmpeg stderr without draining progress output.
-  // Suppress periodic stats so longer recordings cannot fill that pipe and
-  // block recorder finalization.
-  const wrapperPath = path.join(wrapperDirectory, 'ffmpeg');
-  const contents =
-    `#!/bin/sh\n` +
-    `exec ${shellSingleQuote(ffmpegExecutable)} -nostats -loglevel error "$@"\n`;
-  if (readFileIfPresent(wrapperPath) !== contents) {
-    writeAtomicExecutable(wrapperPath, contents);
-  } else {
-    fs.chmodSync(wrapperPath, 0o700);
-  }
-  return wrapperDirectory;
 }
 
 function readFileIfPresent(filePath: string): string | null {
   try {
     const stat = fs.lstatSync(filePath);
-    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    if (!stat.isFile()) return null;
     return fs.readFileSync(filePath, 'utf-8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;

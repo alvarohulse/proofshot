@@ -34,6 +34,7 @@ let defaultAgentBrowserOptions: Pick<
   AgentBrowserCommandOptions,
   'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
 > = {};
+let preparedFfmpegWrapperDirectory: string | null | undefined;
 
 export function setAgentBrowserDefaults(
   options: Pick<
@@ -56,7 +57,20 @@ export function getAgentBrowserEnvironment(
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
   const namespace = options.namespace ?? defaultAgentBrowserOptions.namespace;
   const isolatedEnvironment = getIsolatedAgentBrowserEnvironment(process.env);
-  const ffmpegWrapperDirectory = prepareFfmpegWrapper();
+  if (prepareFfmpegWrapper !== prepareQuietFfmpegWrapper) {
+    preparedFfmpegWrapperDirectory = prepareFfmpegWrapper();
+  } else if (preparedFfmpegWrapperDirectory === undefined) {
+    try {
+      preparedFfmpegWrapperDirectory = prepareQuietFfmpegWrapper();
+    } catch {
+      preparedFfmpegWrapperDirectory = null;
+    }
+  }
+  const ffmpegWrapperDirectory = preparedFfmpegWrapperDirectory;
+  if (ffmpegWrapperDirectory?.includes(path.delimiter)) {
+    console.warn('Skipping FFmpeg wrapper with an unsafe PATH delimiter');
+    preparedFfmpegWrapperDirectory = null;
+  }
   const currentPath = isolatedEnvironment.PATH || '';
   return {
     ...isolatedEnvironment,

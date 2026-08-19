@@ -18,7 +18,10 @@ import {
   writeIsolatedAgentBrowserConfig,
 } from '../browser/isolation.js';
 import { startRecording } from '../browser/capture.js';
-import { assertSafeAgentBrowserRecordingPlatform } from '../browser/ffmpeg-wrapper.js';
+import {
+  assertSafeAgentBrowserRecordingPlatform,
+  prepareQuietFfmpegWrapper,
+} from '../browser/ffmpeg-wrapper.js';
 import { discoverBrowserExecutable, browserSetupError } from '../browser/discovery.js';
 import {
   captureAgentBrowserProcessIdentity,
@@ -188,6 +191,9 @@ export async function startCommand(
 
   try {
     assertSafeAgentBrowserRecordingPlatform();
+    if (!prepareQuietFfmpegWrapper()) {
+      throw new Error('Could not prepare the quiet FFmpeg wrapper for recording.');
+    }
     isolatedAgentBrowserConfig = loadIsolatedAgentBrowserConfig(
       config.browser.configPath,
     );
