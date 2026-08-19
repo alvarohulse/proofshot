@@ -1236,7 +1236,7 @@ describe('isolated CLI lifecycle', () => {
     expect(readRegisteredSessions(env)).toEqual([]);
   }, 30000);
 
-  it('adopts pending HAR evidence after the owned browser is lost', async () => {
+  it('adopts pending HAR evidence and retains recovery when media is lost', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);
     const env = isolatedEnvironment(audit, tools);
@@ -1285,7 +1285,7 @@ describe('isolated CLI lifecycle', () => {
       session.sessionName,
     ]);
 
-    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(1);
     expect(fs.existsSync(`${session.networkHarPath}.pending`)).toBe(false);
     expect(fs.existsSync(session.networkHarPath)).toBe(true);
     expect(fs.readFileSync(tools.browserLog, 'utf-8')).toBe(browserLogBeforeStop);
@@ -1302,6 +1302,23 @@ describe('isolated CLI lifecycle', () => {
         },
       ],
     });
+    expect(readRegisteredSessions(env)).toEqual([
+      expect.objectContaining({
+        sessionName: session.sessionName,
+        lifecycleStatus: 'recovery',
+        cleanupError: expect.stringContaining(
+          'Recording finalization could not be verified',
+        ),
+      }),
+    ]);
+
+    const cleanup = runCli(audit, env, [
+      'session',
+      'clean',
+      '--session',
+      session.sessionName,
+    ]);
+    expect(cleanup.status, `${cleanup.stdout}\n${cleanup.stderr}`).toBe(0);
     expect(readRegisteredSessions(env)).toEqual([]);
   }, 30000);
 
