@@ -1,4 +1,4 @@
-import { stopRecording } from '../browser/capture.js';
+import { finalizeRecording } from '../browser/capture.js';
 import { finalizePrivateNetworkCapture } from '../browser/evidence.js';
 import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 import { stopOwnedEnvironment } from '../environment/runtime.js';
@@ -169,14 +169,22 @@ export async function cleanupFailedStart(session: SessionState): Promise<void> {
   // Recording may have started even when its CLI call returned an error.
   // Never address a session name unless its daemon still has the identity
   // captured by this start.
-  if (canAddressOwnedBrowserSession(session)) {
+  let recordingFinalizationFailed = false;
+  if (
+    session.recordingAttempted === true &&
+    canAddressOwnedBrowserSession(session)
+  ) {
     try {
-      stopRecording(session.sessionName);
+      await finalizeRecording(session.videoPath, session.sessionName);
     } catch (error) {
       cleanupError ||= error;
+      recordingFinalizationFailed = true;
     }
   }
-  if (session.browserProcess || !session.browserLaunchAttempted) {
+  if (
+    !recordingFinalizationFailed &&
+    (session.browserProcess || !session.browserLaunchAttempted)
+  ) {
     try {
       await stopOwnedBrowser(session);
     } catch (error) {

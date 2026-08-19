@@ -277,6 +277,7 @@ export async function startCommand(
     port: config.devServer.port,
     serverCommand: options.run || null,
     serverAlreadyRunning: !options.run,
+    recordingAttempted: false,
     recordingActive: false,
     browserLaunchAttempted: false,
     bundleComplete: false,
@@ -385,6 +386,8 @@ export async function startCommand(
     const RETRY_DELAY_MS = 2000;
     let recordingStarted = false;
     let lastError: any;
+    session.recordingAttempted = true;
+    persistOwnedSession(session);
 
     for (let attempt = 1; attempt <= RECORDING_RETRIES; attempt++) {
       try {

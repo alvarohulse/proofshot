@@ -333,6 +333,7 @@ function isSessionState(value: unknown): value is SessionState {
     typeof session.port === 'number' &&
     (typeof session.serverCommand === 'string' || session.serverCommand === null) &&
     typeof session.serverAlreadyRunning === 'boolean' &&
+    isOptionalBoolean(session.recordingAttempted) &&
     typeof session.recordingActive === 'boolean' &&
     isOptionalString(session.agentBrowserSocketDir) &&
     isOptionalString(session.agentBrowserSocketRoot) &&
