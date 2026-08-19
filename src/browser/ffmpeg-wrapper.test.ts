@@ -3,7 +3,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { prepareQuietFfmpegWrapper } from './ffmpeg-wrapper.js';
+import {
+  assertSafeAgentBrowserRecordingPlatform,
+  prepareQuietFfmpegWrapper,
+} from './ffmpeg-wrapper.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -14,6 +17,14 @@ afterEach(() => {
 });
 
 describe('quiet FFmpeg wrapper', () => {
+  it('refuses Windows recording instead of silently using the deadlock-prone path', () => {
+    expect(() => assertSafeAgentBrowserRecordingPlatform('win32')).toThrow(
+      /temporarily unsupported on Windows.*deadlock/i,
+    );
+    expect(() => assertSafeAgentBrowserRecordingPlatform('linux')).not.toThrow();
+    expect(() => assertSafeAgentBrowserRecordingPlatform('darwin')).not.toThrow();
+  });
+
   it('suppresses progress output before forwarding recorder arguments', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-ffmpeg-wrapper-'));
     temporaryDirectories.push(root);

@@ -18,6 +18,7 @@ import {
   writeIsolatedAgentBrowserConfig,
 } from '../browser/isolation.js';
 import { startRecording } from '../browser/capture.js';
+import { assertSafeAgentBrowserRecordingPlatform } from '../browser/ffmpeg-wrapper.js';
 import { discoverBrowserExecutable, browserSetupError } from '../browser/discovery.js';
 import {
   captureAgentBrowserProcessIdentity,
@@ -186,6 +187,7 @@ export async function startCommand(
   let isolatedAgentBrowserConfig: Record<string, unknown>;
 
   try {
+    assertSafeAgentBrowserRecordingPlatform();
     isolatedAgentBrowserConfig = loadIsolatedAgentBrowserConfig(
       config.browser.configPath,
     );

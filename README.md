@@ -71,6 +71,8 @@ The first command installs the CLI and the exact agent-browser 0.34.0 package. a
 
 Starting a dev server with `--run` also requires `lsof` on Linux/macOS; Windows uses PowerShell's `Get-NetTCPConnection`. Run `proofshot doctor` to verify the listener-inspection prerequisite.
 
+Recording is temporarily supported only on Linux and macOS. The pinned agent-browser 0.34.0 recorder can deadlock on Windows because it does not drain FFmpeg stderr; ProofShot fails recording preflight there instead of risking a hung session. This restriction can be removed after the upstream recorder fix ships.
+
 ## How It Works
 
 Three-step workflow: **start**, **test**, **stop**.

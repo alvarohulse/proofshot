@@ -10,6 +10,16 @@ type QuietFfmpegWrapperOptions = {
   stateRoot?: string;
 };
 
+export function assertSafeAgentBrowserRecordingPlatform(
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== 'win32') return;
+
+  throw new Error(
+    'ProofShot recording is temporarily unsupported on Windows because agent-browser 0.34.0 can deadlock while finalizing FFmpeg output. Use Linux or macOS until the upstream recorder drains FFmpeg stderr.',
+  );
+}
+
 export function prepareQuietFfmpegWrapper(
   options: QuietFfmpegWrapperOptions = {},
 ): string | null {
