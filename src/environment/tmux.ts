@@ -100,7 +100,8 @@ export async function startTmuxEnvironment(
     if (state) {
       await stopTmuxEnvironment(state).catch(() => {});
     } else if (pendingLauncher) {
-      await terminateOwnedProcessTree(pendingLauncher.launcher.process).catch(() => {});
+      const launcherState = pendingLauncher as LauncherEnvironmentState;
+      await terminateOwnedProcessTree(launcherState.launcher.process).catch(() => {});
     }
     throw error;
   }
