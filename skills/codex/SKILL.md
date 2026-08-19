@@ -1,6 +1,6 @@
 ---
 name: proofshot
-description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then record one fresh isolated ProofShot session per reviewable use case and retain local evidence.
+description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then replay each stabilized use case in a fresh isolated ProofShot session and retain local evidence.
 ---
 
 # ProofShot visual verification
@@ -29,20 +29,17 @@ Exercise each User Flow with `agent-browser`. Append feedback and revise until t
 
 ## 3. Record fresh proof
 
-For each finalized Use Case, start a fresh ProofShot session and rerun only its optimized flow:
+For each finalized Use Case, write a version 1 replay case with stable selectors, ordered agent-browser command arrays, an `assert-visible` step, a screenshot, and high-level `humanTesting` instructions. Ephemeral `@eN` references are exploration-only. Then run:
 
 ```bash
-proofshot start --run "your-dev-command" --port PORT --description "UC-ID: behavior"
-proofshot exec snapshot -i
-proofshot exec click @e3
-proofshot exec assert-visible "#expected-result"
-proofshot exec screenshot step-result.png
-proofshot stop
+proofshot replay ./proofshot.UC-ID.json
 ```
 
-Omit `--run` only when the server is explicitly owned elsewhere. Record one short session per Use Case. When several sessions match the worktree, pass the printed ID with `proofshot exec --session ID ...` and `proofshot stop --session ID`.
+ProofShot creates one fresh exact session, attempts exact cleanup after failure, writes `USER_TESTING.md`, and requires a canonical `PASS`. Record one short session per Use Case.
 
 Completion requires an explicit assertion, a fresh-session replay, and a retained session ID/evidence pointer in the brief.
+
+If the approved plan chooses executable E2E coverage instead, hand the stabilized scenario to the target repository's E2E workflow and its repeated flake proof. ProofShot does not own product expectations or E2E policy.
 
 ## 4. Inspect and retain
 
@@ -52,7 +49,7 @@ If cleanup is interrupted, use `proofshot session list` and `proofshot session c
 
 ## 5. Publish curated proof
 
-Copy only exercised final flows into PR User Testing instructions. Publish explicit ordered sessions and curated screenshots:
+Publish only replay-generated User Testing instructions, exercised final flows, and curated screenshots:
 
 ```bash
 proofshot pr 42 --session SESSION_ID --screenshot step-result.png --dry-run

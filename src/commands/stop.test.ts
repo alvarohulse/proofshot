@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
   clearSession: vi.fn(),
   resolveSessionControlDir: vi.fn(),
   saveSession: vi.fn(),
-  stopRecording: vi.fn(),
+  finalizeRecording: vi.fn(),
+  verifyFinalizedRecording: vi.fn(),
   getConsoleErrors: vi.fn(),
   getConsoleOutput: vi.fn(),
   getConsoleOutputJson: vi.fn(),
@@ -24,7 +25,6 @@ const mocks = vi.hoisted(() => ({
   writeViewer: vi.fn(),
   extractServerErrors: vi.fn(),
   loadSessionLog: vi.fn(),
-  estimateTokenUsage: vi.fn(),
   execFileSync: vi.fn(),
   finalizePrivateNetworkCapture: vi.fn(),
   loadSanitizedNetworkSummary: vi.fn(),
@@ -41,7 +41,10 @@ vi.mock('../session/state.js', () => ({
   resolveSessionControlDir: mocks.resolveSessionControlDir,
   saveSession: mocks.saveSession,
 }));
-vi.mock('../browser/capture.js', () => ({ stopRecording: mocks.stopRecording }));
+vi.mock('../browser/capture.js', () => ({
+  finalizeRecording: mocks.finalizeRecording,
+  verifyFinalizedRecording: mocks.verifyFinalizedRecording,
+}));
 vi.mock('../browser/evidence.js', () => ({
   finalizePrivateNetworkCapture: mocks.finalizePrivateNetworkCapture,
   loadSanitizedNetworkSummary: mocks.loadSanitizedNetworkSummary,
@@ -78,7 +81,6 @@ vi.mock('../session/action-log.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../session/action-log.js')>()),
   loadSessionLog: mocks.loadSessionLog,
 }));
-vi.mock('../utils/token-usage.js', () => ({ estimateTokenUsage: mocks.estimateTokenUsage }));
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return { ...actual, execFileSync: mocks.execFileSync };
@@ -142,13 +144,13 @@ beforeEach(() => {
   mocks.getConsoleOutputJson.mockReturnValue([]);
   mocks.extractServerErrors.mockReturnValue([]);
   mocks.loadSessionLog.mockReturnValue([]);
-  mocks.estimateTokenUsage.mockReturnValue(null);
   mocks.loadSanitizedNetworkSummary.mockReturnValue(null);
   mocks.finalizePrivateNetworkCapture.mockReturnValue({
     version: 1,
     requestCount: 0,
     requests: [],
   });
+  mocks.verifyFinalizedRecording.mockResolvedValue(undefined);
   mocks.execFileSync.mockReturnValue('');
   mocks.stopOwnedBrowser.mockResolvedValue(undefined);
   mocks.stopOwnedServer.mockResolvedValue(undefined);
@@ -183,6 +185,36 @@ afterEach(() => {
 });
 
 describe('stopCommand retryability', () => {
+  it('retains browser ownership when recording finalization fails', async () => {
+    mocks.finalizeRecording.mockRejectedValueOnce(
+      new Error('recorder flush timed out'),
+    );
+
+    await expect(stopCommand({})).rejects.toThrow('recorder flush timed out');
+
+    expect(session.recordingActive).toBe(true);
+    expect(session.lifecycleStatus).toBe('recovery');
+    expect(session.cleanupError).toContain('recorder flush timed out');
+    expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedServer).not.toHaveBeenCalled();
+    expect(mocks.registerSession).toHaveBeenCalledWith(session);
+  });
+
+  it('retains recovery ownership when missing media cannot be verified', async () => {
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(false);
+    mocks.verifyFinalizedRecording.mockRejectedValueOnce(
+      new Error('recording is missing'),
+    );
+
+    await expect(stopCommand({})).rejects.toThrow('recording is missing');
+
+    expect(session.lifecycleStatus).toBe('recovery');
+    expect(session.cleanupError).toContain('could not be verified');
+    expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
+    expect(mocks.stopOwnedServer).not.toHaveBeenCalled();
+    expect(mocks.unregisterSession).not.toHaveBeenCalled();
+  });
+
   it('retains active network capture and browser ownership when live finalization fails', async () => {
     session.privateEvidenceDir = path.join(session.sessionDir, 'private', 'agent-browser');
     session.networkHarPath = path.join(session.privateEvidenceDir, 'network.har');
@@ -200,7 +232,7 @@ describe('stopCommand retryability', () => {
     expect(session.stoppedAt).toBeUndefined();
     expect(session.networkEvidenceAvailable).toBe(false);
     expect(session.networkCaptureError).toContain('HAR finalization failed');
-    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.finalizeRecording).not.toHaveBeenCalled();
     expect(mocks.stopOwnedBrowser).not.toHaveBeenCalled();
     expect(mocks.stopOwnedServer).not.toHaveBeenCalled();
     expect(mocks.registerSession).toHaveBeenCalledWith(session);
@@ -216,7 +248,7 @@ describe('stopCommand retryability', () => {
     expect(session.networkCaptureActive).toBe(false);
     expect(session.networkEvidenceAvailable).toBe(true);
     expect(session.networkCaptureError).toBeNull();
-    expect(mocks.stopRecording).toHaveBeenCalledTimes(1);
+    expect(mocks.finalizeRecording).toHaveBeenCalledTimes(1);
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
   });
 
@@ -243,7 +275,7 @@ describe('stopCommand retryability', () => {
     );
     expect(session.networkCaptureActive).toBe(false);
     expect(session.networkEvidenceAvailable).toBe(true);
-    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.finalizeRecording).not.toHaveBeenCalled();
   });
 
   it('finishes an incomplete bundle when browser ownership is lost during HAR finalization', async () => {
@@ -303,7 +335,7 @@ describe('stopCommand retryability', () => {
     );
     expect(session.networkEvidenceAvailable).toBe(false);
     expect(session.networkCaptureActive).toBe(false);
-    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.finalizeRecording).not.toHaveBeenCalled();
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
     expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
     expect(
@@ -458,6 +490,11 @@ describe('stopCommand retryability', () => {
     const summary = fs.readFileSync(path.join(session.sessionDir, 'SUMMARY.md'), 'utf-8');
     expect(summary).toContain('1 error(s) detected');
     expect(summary).toContain('synthetic console failure');
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(session.sessionDir, 'evidence.json'), 'utf-8'),
+      ).browserErrorCount,
+    ).toBe(1);
   });
 
   it('keeps raw console and server secrets private while sanitizing derivatives', async () => {
@@ -550,7 +587,7 @@ describe('stopCommand retryability', () => {
     expect(mocks.getConsoleErrors).not.toHaveBeenCalled();
     expect(mocks.getConsoleOutput).not.toHaveBeenCalled();
     expect(mocks.getConsoleOutputJson).not.toHaveBeenCalled();
-    expect(mocks.stopRecording).not.toHaveBeenCalled();
+    expect(mocks.finalizeRecording).not.toHaveBeenCalled();
     expect(mocks.stopOwnedBrowser).toHaveBeenCalledWith(session);
     expect(mocks.stopOwnedServer).toHaveBeenCalledWith(session);
     expect(mocks.unregisterSession).toHaveBeenCalledWith(session.sessionName);
@@ -611,6 +648,51 @@ describe('stop artifacts', () => {
     expect(summary).toContain('[session.mp4](./session.mp4)');
     expect(summary).toContain('- Browser: Chromium (headed)');
     expect(summary).toContain('- Viewport: 2560x1440');
+  });
+
+  it('describes owned environments and replay instructions without token estimates', () => {
+    const summary = generateProofSummary({
+      ...buildSummaryData(),
+      serverCommand: null,
+      environmentSources: ['Board', 'Chat'],
+      userTesting: ['Create a task.', 'Confirm it appears.'],
+    });
+
+    expect(summary).toContain(
+      '**Dev Server:** ProofShot-owned environment (Board, Chat)',
+    );
+    expect(summary).toContain('## User Testing\n\n1. Create a task.');
+    expect(summary).not.toContain('Token Usage');
+  });
+
+  it('sanitizes environment source titles before writing the summary', async () => {
+    session.recordingActive = false;
+    session.serverCommand = null;
+    session.serverAlreadyRunning = true;
+    session.environment = {
+      kind: 'processes',
+      evidencePath: path.join(session.sessionDir, 'environment.ndjson'),
+      sources: [
+        {
+          id: 'private-source',
+          title: 'password is hunter2',
+          group: 'frontend',
+          kind: 'process',
+          stream: 'stdout',
+          logPath: path.join(session.sessionDir, 'source.log'),
+        },
+      ],
+      processes: [],
+    };
+
+    await stopCommand({});
+
+    const summary = fs.readFileSync(
+      path.join(session.sessionDir, 'SUMMARY.md'),
+      'utf-8',
+    );
+    expect(summary).not.toContain('hunter2');
+    expect(summary).toContain('password is [REDACTED]');
   });
 
   it('converts the finalized WebM recording to H.264 MP4', () => {
@@ -711,6 +793,43 @@ describe('stop artifacts', () => {
     expect(fs.existsSync(path.join(root, 'session-raw.webm'))).toBe(false);
   });
 
+  it('keeps directly captured MP4 recordings on the x264 path when trimming', () => {
+    const videoPath = path.join(root, 'session.mp4');
+    fs.writeFileSync(videoPath, 'original-video');
+    let trimArgs: string[] = [];
+
+    mocks.execFileSync.mockImplementation((_command: string, args: string[]) => {
+      if (_command === 'ffprobe') {
+        return JSON.stringify({
+          format: { start_time: '0', duration: '30' },
+        });
+      }
+      if (args[0] === '-version' || args[0] === '-v') return '';
+      trimArgs = args;
+      fs.writeFileSync(videoPath, 'trimmed-video');
+      return '';
+    });
+
+    expect(
+      trimVideo(videoPath, [], root, 0, [
+        {
+          action: 'open',
+          relativeTimeSec: 10,
+          timestamp: '2026-07-16T18:00:10.000Z',
+        },
+        {
+          action: 'click',
+          relativeTimeSec: 20,
+          timestamp: '2026-07-16T18:00:20.000Z',
+        },
+      ]),
+    ).toBe(5);
+    expect(trimArgs).toEqual(
+      expect.arrayContaining(['-c:v', 'libx264', '-preset', 'ultrafast']),
+    );
+    expect(trimArgs).not.toContain('libvpx-vp9');
+  });
+
   it('restores the original video when FFmpeg exits successfully with empty output', () => {
     const videoPath = path.join(root, 'session.webm');
     fs.writeFileSync(videoPath, 'original-video');
@@ -798,7 +917,8 @@ function buildSummaryData(): SummaryData {
     consoleEvidenceAvailable: true,
     serverLog: '',
     serverErrorCount: 0,
-    tokenUsage: null,
+    environmentSources: [],
+    userTesting: [],
     durationSec: 30,
     outputDir: root,
   };

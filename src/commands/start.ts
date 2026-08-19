@@ -65,7 +65,14 @@ interface StartOptions {
   force?: boolean;
 }
 
-export async function startCommand(options: StartOptions): Promise<void> {
+export type StartReceipt = {
+  sessionId: string;
+  sessionDir: string;
+};
+
+export async function startCommand(
+  options: StartOptions,
+): Promise<StartReceipt | undefined> {
   const config = loadConfig();
   const controlDir = resolveSessionControlDir(config.output);
 
@@ -218,7 +225,10 @@ export async function startCommand(options: StartOptions): Promise<void> {
     path.join(outputDir, `${sessionDirName}_${sessionName}`),
   );
 
-  const videoPath = path.join(sessionDir, 'session.webm');
+  // agent-browser's WebM path uses single-threaded VP8 encoding and can fall
+  // far behind during ordinary model pauses. MP4 uses its real-time x264 path
+  // and remains bounded at stop time.
+  const videoPath = path.join(sessionDir, 'session.mp4');
   const networkEvidence = preparePrivateNetworkEvidence(sessionDir);
   const serverErrorLog = path.join(
     path.dirname(networkEvidence.privateDirectory),
@@ -267,6 +277,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
     port: config.devServer.port,
     serverCommand: options.run || null,
     serverAlreadyRunning: !options.run,
+    recordingAttempted: false,
     recordingActive: false,
     browserLaunchAttempted: false,
     bundleComplete: false,
@@ -375,6 +386,8 @@ export async function startCommand(options: StartOptions): Promise<void> {
     const RETRY_DELAY_MS = 2000;
     let recordingStarted = false;
     let lastError: any;
+    session.recordingAttempted = true;
+    persistOwnedSession(session);
 
     for (let attempt = 1; attempt <= RECORDING_RETRIES; attempt++) {
       try {
@@ -472,6 +485,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
   console.log(chalk.dim('  proofshot exec screenshot step.png    # Capture a moment'));
   console.log('');
   console.log(`When done, run: ${chalk.white('proofshot stop')}`);
+  return { sessionId: sessionName, sessionDir };
 }
 
 export function resolveAgentBrowserAllowedDomains(

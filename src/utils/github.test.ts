@@ -99,6 +99,12 @@ describe('formatPRComment', () => {
       errorCount: 0,
       verdict: 'FAIL',
       verdictReasons: ['Expected checkout button was missing.'],
+      userTesting: [
+        {
+          label: 'checkout',
+          instructions: ['Open checkout.', 'Submit the order.'],
+        },
+      ],
       branch: 'feature/test',
       commitSha: 'abcdef123456',
     });
@@ -106,6 +112,7 @@ describe('formatPRComment', () => {
     expect(body).toContain('[Session recording](https://example.com/session.mp4)');
     expect(body).toContain('❌ Verification failed');
     expect(body).toContain('Expected checkout button was missing.');
+    expect(body).toContain('### User testing\n\n1. Open checkout.');
     expect(body).not.toContain('\nhttps://example.com/session.mp4\n');
   });
 

@@ -95,6 +95,7 @@ describe('finalized artifact manifests', () => {
       ['session.webm', 'video'],
       ['evidence.json', '{}'],
       ['verdict.json', '{"status":"PASS"}'],
+      ['USER_TESTING.md', '# User Testing\n\n1. Verify the flow.\n'],
       ['logs/frontend.log', 'vite'],
     ]) {
       fs.writeFileSync(path.join(sessionDir, file), contents);
@@ -173,6 +174,11 @@ describe('finalized artifact manifests', () => {
         (artifact) => artifact.path === 'logs/frontend.log',
       ),
     ).toBeUndefined();
+    expect(
+      manifest.artifacts.find(
+        (artifact) => artifact.path === 'USER_TESTING.md',
+      )?.kind,
+    ).toBe('instructions');
     expect(loadArtifactManifest(sessionDir)).toEqual(manifest);
     expect(JSON.stringify(manifest)).not.toContain('private-manifest-secret');
     expect(

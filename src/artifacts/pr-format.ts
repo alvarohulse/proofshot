@@ -74,6 +74,7 @@ export interface PRCommentData {
   errorCount: number;
   verdict: 'PASS' | 'FAIL' | 'INCOMPLETE' | 'BLOCKED';
   verdictReasons: string[];
+  userTesting?: Array<{ label: string; instructions: string[] }>;
   branch: string;
   commitSha: string;
 }
@@ -114,6 +115,19 @@ export function formatPRComment(data: PRCommentData): string {
   if (data.verdictReasons.length > 0) {
     md += data.verdictReasons.map((reason) => `- ${reason}`).join('\n');
     md += '\n\n';
+  }
+
+  if (data.userTesting && data.userTesting.length > 0) {
+    md += `### User testing\n\n`;
+    for (const item of data.userTesting) {
+      if (data.userTesting.length > 1) {
+        md += `**${item.label}**\n\n`;
+      }
+      md += item.instructions
+        .map((instruction, index) => `${index + 1}. ${instruction}`)
+        .join('\n');
+      md += '\n\n';
+    }
   }
 
   const recordings: Array<{

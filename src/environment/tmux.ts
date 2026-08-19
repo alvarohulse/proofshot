@@ -100,7 +100,8 @@ export async function startTmuxEnvironment(
     if (state) {
       await stopTmuxEnvironment(state).catch(() => {});
     } else if (pendingLauncher) {
-      await terminateOwnedProcessTree(pendingLauncher.launcher.process).catch(() => {});
+      const launcherState = pendingLauncher as LauncherEnvironmentState;
+      await terminateOwnedProcessTree(launcherState.launcher.process).catch(() => {});
     }
     throw error;
   }
@@ -845,7 +846,9 @@ async function runCommand(
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const identity = child.pid ? captureProcessIdentity(child.pid) : null;
+  const identity = child.pid
+    ? captureProcessIdentity(child.pid, { includeZombie: true })
+    : null;
   if (!identity) {
     throw new Error('ProofShot could not capture the external launcher identity.');
   }

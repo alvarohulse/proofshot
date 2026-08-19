@@ -6,7 +6,10 @@ import chalk from 'chalk';
 import { loadConfig, normalizeViewport } from '../utils/config.js';
 import { setAgentBrowserDefaults } from '../utils/exec.js';
 import { getConsoleErrors, getConsoleOutput, getConsoleOutputJson } from '../browser/session.js';
-import { stopRecording } from '../browser/capture.js';
+import {
+  finalizeRecording,
+  verifyFinalizedRecording,
+} from '../browser/capture.js';
 import {
   finalizePrivateNetworkCapture,
   loadSanitizedNetworkSummary,
@@ -45,7 +48,6 @@ import {
   loadSessionLog,
   type SessionLogEntry,
 } from '../session/action-log.js';
-import { estimateTokenUsage, formatTokenUsage, type TokenUsage } from '../utils/token-usage.js';
 
 /**
  * Parse server.log lines with "epochMs\ttext" format.
@@ -357,9 +359,34 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   // Step 2: Stop recording
   console.log(chalk.dim('Stopping recording...'));
   if (browserSessionAvailable) {
-    stopRecording(session.sessionName);
+    try {
+      await finalizeRecording(session.videoPath, session.sessionName);
+    } catch (error) {
+      session.lifecycleStatus = 'recovery';
+      session.cleanupError =
+        `Recording finalization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      session.recordingActive = true;
+      persistOwnedSession(session);
+      throw error;
+    }
+  } else if (recordingWasActive) {
+    try {
+      await verifyFinalizedRecording(session.videoPath);
+    } catch (error) {
+      session.lifecycleStatus = 'recovery';
+      session.cleanupError =
+        `Recording finalization could not be verified: ${
+          error instanceof Error ? error.message : String(error)
+        }`;
+      session.recordingActive = true;
+      persistOwnedSession(session);
+      throw error;
+    }
   }
   session.recordingActive = false;
+  session.cleanupError = null;
   persistOwnedSession(session);
 
   // Step 3: Close browser (unless --no-close)
@@ -494,9 +521,6 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   const serverErrorLines = extractServerErrors(serverLog);
   const serverErrorCount = serverErrorLines.length;
 
-  // Step 6.5: Estimate token usage
-  const tokenUsage = estimateTokenUsage(session.sessionDir, startTime, Date.now());
-
   // Step 7: Generate SUMMARY.md
   const recordedViewport = normalizeViewport(session.viewport);
   const summaryViewport =
@@ -518,7 +542,10 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     consoleEvidenceAvailable,
     serverLog,
     serverErrorCount,
-    tokenUsage,
+    environmentSources: (finalizedEnvironment?.sources || []).map(
+      (source) => sanitizeDiagnosticMessage(source.title) || '[REDACTED]',
+    ),
+    userTesting: readUserTestingInstructions(sessionDir),
     durationSec,
     outputDir: sessionDir,
   });
@@ -564,6 +591,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     videoPath: session.videoPath,
     recordingWasActive,
     consoleEvidenceAvailable,
+    browserErrorCount: consoleErrorCount,
     actions: viewerEntries,
     consoleEntries: viewerConsoleEntries,
     serverEntries: viewerServerEntries,
@@ -588,7 +616,6 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     consoleEntries: viewerConsoleEntries.length > 0 ? viewerConsoleEntries : undefined,
     serverEntries: viewerServerEntries.length > 0 ? viewerServerEntries : undefined,
     entries: viewerEntries.length > 0 ? viewerEntries : undefined,
-    tokenUsage,
     evidence,
     verdict,
   });
@@ -778,7 +805,8 @@ export interface SummaryData {
   consoleEvidenceAvailable: boolean;
   serverLog: string;
   serverErrorCount: number;
-  tokenUsage?: TokenUsage | null;
+  environmentSources: string[];
+  userTesting: string[];
   durationSec: number;
   outputDir: string;
 }
@@ -791,7 +819,13 @@ export function generateProofSummary(data: SummaryData): string {
 
 **Date:** ${date}
 **Project:** ${projectName}
-**Dev Server:** ${data.serverCommand ? data.serverCommand : 'external'} on localhost:${data.port}
+**Dev Server:** ${
+    data.serverCommand
+      ? data.serverCommand
+      : data.environmentSources.length > 0
+        ? `ProofShot-owned environment (${data.environmentSources.join(', ')})`
+        : 'external'
+  } on localhost:${data.port}
 
 `;
 
@@ -801,6 +835,14 @@ export function generateProofSummary(data: SummaryData): string {
 ${data.description}
 
 `;
+  }
+
+  if (data.userTesting.length > 0) {
+    md += `## User Testing\n\n`;
+    md += data.userTesting
+      .map((instruction, index) => `${index + 1}. ${instruction}`)
+      .join('\n');
+    md += '\n\n';
   }
 
   // Video
@@ -846,12 +888,6 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
     }
   }
 
-  if (data.tokenUsage) {
-    md += `## Token Usage (Estimated)\n\n`;
-    md += formatTokenUsage(data.tokenUsage);
-    md += '\n';
-  }
-
   // Environment
   md += `## Environment
 - Browser: Chromium (${data.headless ? 'headless' : 'headed'})
@@ -860,6 +896,24 @@ Full session recording: [${relativeVideo}](./${relativeVideo}) (${data.durationS
 `;
 
   return md;
+}
+
+function readUserTestingInstructions(sessionDir: string): string[] {
+  const filePath = path.join(sessionDir, 'USER_TESTING.md');
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 20_000) {
+      return [];
+    }
+    return fs
+      .readFileSync(filePath, 'utf-8')
+      .split('\n')
+      .map((line) => line.match(/^\d+\.\s+(.+)$/)?.[1])
+      .filter((line): line is string => Boolean(line))
+      .map((line) => sanitizeDiagnosticMessage(line) || '[REDACTED]');
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -962,6 +1016,32 @@ export function trimVideo(
     // Rename original to -raw
     fs.renameSync(videoPath, rawPath);
 
+    const encodingArgs =
+      ext.toLowerCase() === '.mp4'
+        ? [
+            '-c:v',
+            'libx264',
+            '-preset',
+            'ultrafast',
+            '-crf',
+            '23',
+            '-pix_fmt',
+            'yuv420p',
+            '-movflags',
+            '+faststart',
+          ]
+        : [
+            '-c:v',
+            'libvpx-vp9',
+            '-deadline',
+            'realtime',
+            '-cpu-used',
+            '8',
+            '-crf',
+            '30',
+            '-b:v',
+            '0',
+          ];
     execFileSync(
       'ffmpeg',
       [
@@ -974,16 +1054,7 @@ export function trimVideo(
         trimDurationSec.toFixed(2),
         '-map',
         '0:v:0',
-        '-c:v',
-        'libvpx-vp9',
-        '-deadline',
-        'realtime',
-        '-cpu-used',
-        '8',
-        '-crf',
-        '30',
-        '-b:v',
-        '0',
+        ...encodingArgs,
         '-an',
         '-avoid_negative_ts',
         'make_zero',

@@ -34,9 +34,7 @@ export function resolveLiveSession(
     return session;
   }
 
-  const registeredSessions = listSessionsForControlDir(options.controlDir).filter(
-    (session) => session.lifecycleStatus !== 'recovery',
-  );
+  const registeredSessions = listSessionsForControlDir(options.controlDir);
   const sessions = selectSessionsForOperation(
     registeredSessions,
     options.operation,
@@ -68,21 +66,25 @@ function selectSessionsForOperation(
   if (operation === 'exec') {
     return sessions.filter(
       (session) =>
-        session.recordingActive && canAddressOwnedBrowserSession(session),
+        session.lifecycleStatus !== 'recovery' &&
+        session.recordingActive &&
+        canAddressOwnedBrowserSession(session),
     );
   }
 
   const liveSessions = sessions.filter(
     (session) =>
-      sessionHasVerifiedLiveOwnership(session) ||
-      canAddressOwnedBrowserSession(session),
+      session.lifecycleStatus !== 'recovery' &&
+      (sessionHasVerifiedLiveOwnership(session) ||
+        canAddressOwnedBrowserSession(session)),
   );
   if (liveSessions.length > 0) {
     return liveSessions;
   }
   return sessions.filter(
     (session) =>
-      session.lifecycleStatus === 'stopping' && session.bundleComplete !== true,
+      (session.lifecycleStatus === 'stopping' && session.bundleComplete !== true) ||
+      session.lifecycleStatus === 'recovery',
   );
 }
 

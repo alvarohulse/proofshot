@@ -1,6 +1,6 @@
 ---
 name: proofshot
-description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then record one fresh isolated ProofShot session per reviewable use case and retain local evidence.
+description: Visual verification of UI features. Explore and refine real user flows with agent-browser, then replay each stabilized use case in a fresh isolated ProofShot session and retain local evidence.
 allowed-tools: Bash(proofshot:*), Bash(agent-browser:*)
 ---
 
@@ -21,15 +21,12 @@ Exercise each flow repeatedly until it is correct, stable, and concise. Prefer p
 ## 3. Record one fresh session per Use Case
 
 ```bash
-proofshot start --run "your-dev-command" --port PORT --description "UC-ID: behavior"
-proofshot exec snapshot -i
-proofshot exec click @e3
-proofshot exec assert-visible "#expected-result"
-proofshot exec screenshot step-result.png
-proofshot stop
+proofshot replay ./proofshot.UC-ID.json
 ```
 
-Omit `--run` only for an explicitly external server. With multiple sessions, use the printed ID in `proofshot exec --session ID ...` and `proofshot stop --session ID`. Record the final session ID and local evidence pointer in the brief.
+The version 1 case uses stable selectors—not exploratory `@eN` references—and contains ordered command arrays, an `assert-visible` step, a screenshot, and high-level `humanTesting` instructions. ProofShot creates one exact fresh session, attempts exact cleanup after failure, writes `USER_TESTING.md`, and succeeds only on canonical `PASS`. Record the final session ID and local evidence pointer in the brief.
+
+When the approved plan chooses an executable E2E instead, hand the stabilized scenario to the target repository's E2E workflow and flake proof. ProofShot is not the product-behavior authority.
 
 ## 4. Inspect and retain
 
@@ -39,7 +36,7 @@ Recover interrupted cleanup with `proofshot session list` and `proofshot session
 
 ## 5. Publish curated proof
 
-Copy the exercised final flows into PR User Testing instructions. Dry-run explicit ordered publication, repeating `--session` in review order:
+Publish the replay-generated User Testing instructions with the exercised final flow. Dry-run explicit ordered publication, repeating `--session` in review order:
 
 ```bash
 proofshot pr 42 --session SESSION_ID --screenshot step-result.png --dry-run

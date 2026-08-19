@@ -288,6 +288,23 @@ describe('process ownership', () => {
     expect(identity?.startTime).toMatch(/^\d+$/);
   });
 
+  it('does not treat a Linux zombie as owned and addressable', () => {
+    if (process.platform !== 'linux') return;
+    const stat = fs.readFileSync(`/proc/${process.pid}/stat`, 'utf-8');
+    const closeParen = stat.lastIndexOf(')');
+    const zombieStat = `${stat.slice(0, closeParen + 2)}Z${stat.slice(closeParen + 3)}`;
+
+    expect(parseLinuxProcStat(zombieStat)).toBeNull();
+    expect(
+      parseLinuxProcStat(zombieStat, { includeZombie: true }),
+    ).toMatchObject({
+      pid: process.pid,
+      processGroupId: expect.any(Number),
+      sessionId: expect.any(Number),
+      startTime: expect.stringMatching(/^\d+$/),
+    });
+  });
+
   it('parses macOS process ownership fields', () => {
     expect(
       parseUnixProcessIdentity(

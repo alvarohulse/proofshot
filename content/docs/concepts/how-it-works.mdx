@@ -30,11 +30,11 @@ The choice of [agent-browser](https://github.com/vercel-labs/agent-browser) as t
 
 **Persistent daemon.** agent-browser runs a Node.js daemon that maintains browser state across CLI calls. Sequential `proofshot exec` commands operate on the same browser tab and page state.
 
-**Stable element references.** The `@eN` ref system provides stable handles to interactive elements. An agent takes a snapshot, sees `@e3: Submit button`, and can target it reliably — far more robust than CSS selectors for AI-driven interaction.
+**Snapshot element references.** The `@eN` ref system provides handles while exploring one browser session. Final replay cases use stable selectors instead, because snapshot references are ephemeral.
 
 **Lightweight context.** Snapshot output is significantly smaller than alternatives, leaving more room in the agent's context window for reasoning.
 
-**Built-in recording.** Playwright's screencast API is exposed directly, so video recording works without ffmpeg during capture.
+**Built-in recording.** Playwright's screencast API is exposed directly, and ProofShot selects agent-browser's real-time H.264 MP4 encoding path during capture.
 
 ## Session lifecycle
 
@@ -71,13 +71,13 @@ Each `proofshot exec` call:
 1. Claims a stop lease and collects console evidence
 2. Atomically finalizes private HAR evidence and writes a metadata-only network summary
 3. Stops video recording and closes only the exact owned browser/environment/server processes
-4. Trims video dead time using ffmpeg, converts to H.264 `session.mp4`, and adjusts action timestamps
+4. Trims dead time from the H.264 `session.mp4` using ffmpeg and adjusts action timestamps
 5. Generates canonical evidence, verdict, summary, viewer, and provenance manifest
 6. Unregisters completed ownership, or retains the exact browser record after `--no-close`
 
 ## Design principles
 
-**Graceful degradation.** Missing ffmpeg? Video trimming and MP4 conversion are skipped, preserving the original `session.webm`. Element data capture fails? Overlays are skipped. Browser already closed? Silent catch. Non-critical failures never abort a session.
+**Graceful degradation.** Missing ffmpeg? Video trimming is skipped, preserving the original `session.mp4`. Element data capture fails? Overlays are skipped. Browser already closed? The evidence is marked incomplete rather than overstated.
 
 **Pinned browser contract.** ProofShot pins agent-browser 0.34.0 and fails before launch on older versions. Managed launchers keep its Node 24 runtime separate from project runtimes.
 

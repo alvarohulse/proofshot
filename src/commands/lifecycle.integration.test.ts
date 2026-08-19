@@ -22,7 +22,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const cliPath = path.join(repoRoot, 'dist', 'bin', 'proofshot.js');
 const createdRoots: string[] = [];
 const cleanupProcesses: ProcessIdentity[] = [];
-
 function cacheRoot(): string {
   const cache = path.join(os.userInfo().homedir, '.cache');
   fs.mkdirSync(cache, { recursive: true });
@@ -55,7 +54,15 @@ async function freePort(): Promise<number> {
 }
 
 function processIsAlive(pid: number): boolean {
-  return captureProcessIdentity(pid) !== null;
+  if (captureProcessIdentity(pid) === null) return false;
+  if (process.platform !== 'linux') return true;
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8');
+    const closeParen = stat.lastIndexOf(')');
+    return closeParen < 0 || stat[closeParen + 2] !== 'Z';
+  } catch {
+    return false;
+  }
 }
 
 async function waitForProcessExit(pid: number, timeoutMs = 5000): Promise<void> {
@@ -247,12 +254,22 @@ if (command === 'network' && detail[0] === 'har' && detail[1] === 'stop') {
   }
   process.exit(0);
 }
-if (
-  command === 'record' &&
-  detail[0] === 'stop' &&
-  process.env.FAKE_AGENT_BROWSER_DELAY_RECORD_STOP === '1'
-) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+if (command === 'record' && detail[0] === 'start') {
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  state.recordingPath = detail[1];
+  fs.writeFileSync(statePath, JSON.stringify(state));
+  process.exit(0);
+}
+if (command === 'record' && detail[0] === 'stop') {
+  if (process.env.FAKE_AGENT_BROWSER_DELAY_RECORD_STOP === '1') {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+  }
+  const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+  if (!state.recordingPath) {
+    process.stderr.write('No recording in progress\\n');
+    process.exit(1);
+  }
+  fs.writeFileSync(state.recordingPath, 'fake-video');
   process.exit(0);
 }
 if (
@@ -302,6 +319,10 @@ process.exit(0);
   const browserPath = path.join(binDir, 'fake-chrome');
   fs.writeFileSync(browserPath, '#!/bin/sh\nexit 0\n');
   fs.chmodSync(browserPath, 0o700);
+
+  const ffprobePath = path.join(binDir, 'ffprobe');
+  fs.writeFileSync(ffprobePath, '#!/bin/sh\nexit 0\n');
+  fs.chmodSync(ffprobePath, 0o700);
 
   const serverScript = path.join(base, 'server.mjs');
   fs.writeFileSync(
@@ -619,7 +640,7 @@ describe('isolated CLI lifecycle', () => {
     stop.stderr?.on('data', (chunk) => {
       stopOutput += chunk.toString();
     });
-    await waitForProcessExit(session.browserProcess.pid);
+    await waitForProcessExit(session.browserProcess.pid, 10_000);
     const [stoppingSession] = readRegisteredSessions(env);
     expect(stoppingSession.operationLease).toMatchObject({ kind: 'stop' });
     expect(stoppingSession.lifecycleStatus).toBe('stopping');
@@ -1226,7 +1247,7 @@ describe('isolated CLI lifecycle', () => {
     expect(readRegisteredSessions(env)).toEqual([]);
   }, 30000);
 
-  it('adopts pending HAR evidence after the owned browser is lost', async () => {
+  it('adopts pending HAR evidence and retains recovery when media is lost', async () => {
     const { base, audit } = createAuditRoot();
     const tools = writeFixtureTools(base);
     const env = isolatedEnvironment(audit, tools);
@@ -1275,7 +1296,7 @@ describe('isolated CLI lifecycle', () => {
       session.sessionName,
     ]);
 
-    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(0);
+    expect(stop.status, `${stop.stdout}\n${stop.stderr}`).toBe(1);
     expect(fs.existsSync(`${session.networkHarPath}.pending`)).toBe(false);
     expect(fs.existsSync(session.networkHarPath)).toBe(true);
     expect(fs.readFileSync(tools.browserLog, 'utf-8')).toBe(browserLogBeforeStop);
@@ -1292,6 +1313,23 @@ describe('isolated CLI lifecycle', () => {
         },
       ],
     });
+    expect(readRegisteredSessions(env)).toEqual([
+      expect.objectContaining({
+        sessionName: session.sessionName,
+        lifecycleStatus: 'recovery',
+        cleanupError: expect.stringContaining(
+          'Recording finalization could not be verified',
+        ),
+      }),
+    ]);
+
+    const cleanup = runCli(audit, env, [
+      'session',
+      'clean',
+      '--session',
+      session.sessionName,
+    ]);
+    expect(cleanup.status, `${cleanup.stdout}\n${cleanup.stderr}`).toBe(0);
     expect(readRegisteredSessions(env)).toEqual([]);
   }, 30000);
 
@@ -1728,8 +1766,9 @@ describe('isolated CLI lifecycle', () => {
       .find((call) => call.command === 'daemon' && call.session === failedOpen.session);
     const failedSessionCalls = calls.filter((call) => call.session === failedOpen.session);
     expect(failedSessionCalls.map((call) => call.command)).toEqual(
-      expect.arrayContaining(['open', 'record', 'close']),
+      expect.arrayContaining(['open', 'close']),
     );
+    expect(failedSessionCalls.map((call) => call.command)).not.toContain('record');
     await waitForProcessExit(failedDaemon.daemonPid);
     const failedBrowserPidPath = path.join(
       failedOpen.socketDir,

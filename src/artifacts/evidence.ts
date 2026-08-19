@@ -60,6 +60,7 @@ export type CanonicalEvidence = {
   mediaDurationSec: number | null;
   mediaDivergenceSec: number | null;
   mediaTruncated: boolean;
+  browserErrorCount?: number;
   actions: SessionLogEntry[];
   events: EvidenceEvent[];
   sources: EvidenceSourceSummary[];
@@ -89,6 +90,7 @@ export type EvidenceBuildOptions = {
   videoPath: string;
   recordingWasActive: boolean;
   consoleEvidenceAvailable: boolean;
+  browserErrorCount?: number;
   actions: SessionLogEntry[];
   consoleEntries: TimestampedLogEntry[];
   serverEntries: TimestampedLogEntry[];
@@ -113,7 +115,8 @@ export function writeCanonicalEvidence(
     sanitizedOptions.sessionDir,
     sanitizedOptions.actions,
   );
-  const mediaDurationSec = probeMediaDuration(options.videoPath);
+  const mediaProbe = probeMedia(options.videoPath);
+  const mediaDurationSec = mediaProbe.durationSec;
   const actionDuration = sanitizedOptions.actions
     .map((entry) => entry.relativeTimeSec)
     .filter(Number.isFinite)
@@ -134,6 +137,7 @@ export function writeCanonicalEvidence(
     mediaDurationSec,
     mediaDivergenceSec,
     mediaTruncated,
+    browserErrorCount: options.browserErrorCount ?? 0,
     actions: sanitizedOptions.actions,
     events: sanitizedEvents,
     sources,
@@ -142,7 +146,7 @@ export function writeCanonicalEvidence(
     network: options.networkSummary,
     ...(options.runtime ? { runtime: options.runtime } : {}),
   };
-  const verdict = buildVerdict(sanitizedOptions, evidence);
+  const verdict = buildVerdict(sanitizedOptions, evidence, mediaProbe.status);
   writeJsonAtomically(
     path.join(options.sessionDir, 'evidence.json'),
     evidence,
@@ -556,16 +560,19 @@ function inspectPng(contents: Buffer): {
 function buildVerdict(
   options: EvidenceBuildOptions,
   evidence: CanonicalEvidence,
+  mediaProbeStatus: MediaProbeStatus,
 ): Verdict {
   const missingArtifacts: string[] = [];
   if (options.networkEvidenceRequired && !options.networkSummary) {
     missingArtifacts.push('network-summary.json');
   }
-  if (options.recordingWasActive && !fs.existsSync(options.videoPath)) {
-    missingArtifacts.push(path.basename(options.videoPath));
-  } else if (
+  const videoSize = readRegularFileSize(options.videoPath);
+  if (
     options.recordingWasActive &&
-    (evidence.mediaDurationSec === null || evidence.mediaDurationSec <= 0)
+    (videoSize <= 0 ||
+      mediaProbeStatus === 'invalid' ||
+      (mediaProbeStatus === 'available' &&
+        (evidence.mediaDurationSec === null || evidence.mediaDurationSec <= 0)))
   ) {
     missingArtifacts.push(path.basename(options.videoPath));
   }
@@ -581,7 +588,11 @@ function buildVerdict(
     successfulScreenshotPaths.length - new Set(successfulScreenshotPaths).size;
   for (const action of options.actions) {
     const match = action.action.match(/^screenshot\s+(.+)$/);
-    if (match && !screenshotFiles.has(path.basename(match[1]))) {
+    if (
+      match &&
+      action.outcome === 'passed' &&
+      !screenshotFiles.has(path.basename(match[1]))
+    ) {
       missingArtifacts.push(path.basename(match[1]));
     }
   }
@@ -615,6 +626,11 @@ function buildVerdict(
   const pendingActions = options.actions.filter(
     (action) => action.outcome === undefined,
   );
+  const passedAssertions = options.actions.filter(
+    (action) =>
+      action.outcome === 'passed' &&
+      Boolean(action.expectedSelector),
+  );
   const hasSyntheticDomMutation = options.actions.some(
     (action) =>
       action.category === 'synthetic-dom' || /^eval\b/i.test(action.action),
@@ -622,6 +638,14 @@ function buildVerdict(
   const fatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === 'fatal',
   ).length;
+  const nonfatalIncidentCount = evidence.incidents.filter(
+    (incident) => incident.severity === 'error',
+  ).length;
+  const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
+    (request) =>
+      request.error != null || request.status === 0 || request.status >= 400,
+  ).length;
+  const browserErrorCount = evidence.browserErrorCount ?? 0;
   const blockingReasons = options.consoleEvidenceAvailable
     ? []
     : ['Browser console evidence was unavailable.'];
@@ -632,13 +656,11 @@ function buildVerdict(
     ...(expectedSelectorFailures.length > 0
       ? [`${expectedSelectorFailures.length} expected selector assertion(s) failed.`]
       : []),
-    ...(duplicateScreenshotHashes.length > 0
-      ? ['Duplicate key-frame screenshot hashes were detected.']
-      : []),
   ];
-  const incompleteReasons = [
-    ...(missingArtifacts.length > 0
-      ? [`${missingArtifacts.length} required artifact(s) were missing or invalid.`]
+  const uniqueMissingArtifacts = [...new Set(missingArtifacts)];
+  const evidenceTrustReasons = [
+    ...(uniqueMissingArtifacts.length > 0
+      ? [`${uniqueMissingArtifacts.length} required artifact(s) were missing or invalid.`]
       : []),
     ...(evidence.mediaTruncated
       ? ['Recorded media ends before the canonical action timeline.']
@@ -646,10 +668,18 @@ function buildVerdict(
     ...(evidence.sources.some((source) => source.truncationCount > 0)
       ? ['One or more evidence sources were truncated.']
       : []),
+    ...(duplicateScreenshotHashes.length > 0
+      ? ['Duplicate key-frame screenshot hashes were detected.']
+      : []),
     ...(pendingActions.length > 0
       ? [
           `${pendingActions.length} browser action(s) had no recorded outcome.`,
         ]
+      : []),
+    ...(passedAssertions.length === 0 &&
+    expectedSelectorFailures.length === 0 &&
+    fatalIncidentCount === 0
+      ? ['No explicit behavioral assertion passed.']
       : []),
     ...(reusedScreenshotPaths > 0
       ? ['One or more screenshot paths were reused by multiple actions.']
@@ -660,29 +690,48 @@ function buildVerdict(
         ]
       : []),
   ];
+  const incompleteReasons = [
+    ...evidenceTrustReasons,
+    ...(nonfatalIncidentCount > 0
+      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
+      : []),
+    ...(failedNetworkRequestCount > 0
+      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
+      : []),
+    ...(browserErrorCount > 0
+      ? [`${browserErrorCount} uncaught browser error(s) detected.`]
+      : []),
+  ];
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : incompleteReasons.length > 0
-        ? 'INCOMPLETE'
-        : failureReasons.length > 0
-          ? 'FAIL'
+      : failureReasons.length > 0
+        ? evidenceTrustReasons.length > 0
+          ? 'INCOMPLETE'
+          : 'FAIL'
+        : incompleteReasons.length > 0
+          ? 'INCOMPLETE'
           : 'PASS';
   return {
     version: 1,
     status,
     reasons: [...blockingReasons, ...failureReasons, ...incompleteReasons],
     fatalIncidentCount,
-    missingArtifacts: [...new Set(missingArtifacts)],
+    missingArtifacts: uniqueMissingArtifacts,
     duplicateScreenshotHashes,
     expectedSelectorFailures,
     mediaTruncated: evidence.mediaTruncated,
   };
 }
 
-export function probeMediaDuration(videoPath: string): number | null {
-  if (!fs.existsSync(videoPath)) {
-    return null;
+type MediaProbeStatus = 'available' | 'unavailable' | 'invalid' | 'missing';
+
+function probeMedia(videoPath: string): {
+  durationSec: number | null;
+  status: MediaProbeStatus;
+} {
+  if (readRegularFileSize(videoPath) <= 0) {
+    return { durationSec: null, status: 'missing' };
   }
   try {
     const output = execFileSync(
@@ -706,11 +755,38 @@ export function probeMediaDuration(videoPath: string): number | null {
     };
     const startTime = Number(parsed.format?.start_time || 0);
     const duration = Number(parsed.format?.duration);
+    if (!Number.isFinite(duration)) {
+      return { durationSec: null, status: 'unavailable' };
+    }
     const playableDuration = duration - startTime;
     return Number.isFinite(playableDuration) && playableDuration >= 0
-      ? playableDuration
-      : null;
+      ? { durationSec: playableDuration, status: 'available' }
+      : { durationSec: null, status: 'invalid' };
+  } catch (error) {
+    return isExecutableUnavailable(error)
+      ? { durationSec: null, status: 'unavailable' }
+      : { durationSec: null, status: 'invalid' };
+  }
+}
+
+export function probeMediaDuration(videoPath: string): number | null {
+  return probeMedia(videoPath).durationSec;
+}
+
+function isExecutableUnavailable(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    ['EACCES', 'ENOENT', 'ETIMEDOUT'].includes(String(error.code))
+  );
+}
+
+function readRegularFileSize(filePath: string): number {
+  try {
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink() ? stat.size : -1;
   } catch {
-    return null;
+    return -1;
   }
 }

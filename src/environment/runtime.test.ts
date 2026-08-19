@@ -219,11 +219,11 @@ describe('owned environment capture', () => {
       ),
     ).rejects.toThrow(/timed out/);
 
-    expect(pendingState).toMatchObject({ kind: 'launcher' });
-    if (!pendingState || pendingState.kind !== 'launcher') {
+    if (pendingState?.kind !== 'launcher') {
       throw new Error('expected persisted launcher state');
     }
-    expect(processIdentityMatches(pendingState.launcher.process)).toBe(false);
+    const launcherState = pendingState;
+    expect(processIdentityMatches(launcherState.launcher.process)).toBe(false);
   }, 15000);
 
   it('preserves direct stdout/stderr and file history/live evidence', async () => {

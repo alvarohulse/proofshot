@@ -65,6 +65,10 @@ export function buildSanitizedCommandIntent(
   args: string[],
 ): SanitizedCommandIntent {
   const command = args[0]?.toLowerCase() || 'unknown';
+  if (command === 'screenshot') {
+    const filename = args.slice(1).find((argument) => !argument.startsWith('-'));
+    return { command, summary: [command, filename || REDACTED].join(' ') };
+  }
   const sanitizedArgs = sanitizeArguments(command, args);
   return {
     command,
@@ -267,10 +271,27 @@ export function sanitizeDiagnosticMessage(value: string | undefined): string | u
   if (!value) {
     return value;
   }
-  const sanitizedTokens = value
+  return redactDiagnosticAssignmentsOutsideUrls(value);
+}
+
+function sanitizeDiagnosticTokens(value: string): string {
+  return value
     .replace(/\b(?:Basic|Bearer)\s+[^\s"',;]+/gi, REDACTED)
-    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED);
-  return redactDiagnosticAssignmentsOutsideUrls(sanitizedTokens);
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
+    .replace(
+      /(\b(?:password|passcode|secret|token)\b\s*(?:is|:|=|using)\s*)([^\s,;]+?)([.,;]?)(?=\s|$)/gi,
+      `$1${REDACTED}$3`,
+    )
+    .replace(
+      /(\b(?:type|enter|input)\s+)[^\s,;]+(\s+in(?:to)?\s+(?:the\s+)?(?:password|passcode)\b)/gi,
+      `$1${REDACTED}$2`,
+    )
+    .replace(
+      /(\b(?:log\s*in|sign\s*in|authenticate)\b[^\r\n]{0,40}?\b(?:using|with)\s+)(?=[^\s,;]*(?:\d|[-_/@:=]))([^\s,;]+(?:\s*\/\s*[^\s,;]+)?)/gi,
+      (_match, prefix: string, value: string) =>
+        `${prefix}${REDACTED}${/[.;]$/.test(value) ? value.at(-1) : ''}`,
+    )
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, REDACTED);
 }
 
 function redactDiagnosticAssignmentsOutsideUrls(value: string): string {
@@ -284,7 +305,7 @@ function redactDiagnosticAssignmentsOutsideUrls(value: string): string {
     sanitizedUrls.push(sanitizeUrlValue(url));
     return marker;
   });
-  let sanitized = redactDiagnosticAssignments(masked);
+  let sanitized = sanitizeDiagnosticTokens(redactDiagnosticAssignments(masked));
   sanitizedUrls.forEach((url, index) => {
     sanitized = sanitized.replace(`${markerPrefix}${index}\0`, () => url);
   });

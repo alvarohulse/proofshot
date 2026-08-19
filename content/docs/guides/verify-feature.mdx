@@ -96,7 +96,7 @@ proofshot stop
 This:
 1. Collects browser console errors and output
 2. Stops video recording
-3. Trims dead time and finalizes the video as H.264 `session.mp4` (requires ffmpeg)
+3. Trims dead time from the H.264 `session.mp4` recording when ffmpeg is available
 4. Scans server logs for errors across 10+ languages
 5. Generates `SUMMARY.md` and `viewer.html`
 6. Clears the active session
@@ -116,6 +116,16 @@ Open `viewer.html` in a browser to see the interactive proof viewer with:
 - Console and server error badges
 
 Or read `SUMMARY.md` for a text-based report.
+
+### Replay the stabilized flow
+
+Exploration may use snapshot references, repeated passes, and refreshes. Final reviewer evidence should use a version 1 replay case with stable selectors, at least one explicit `assert-visible`, one screenshot, and high-level `humanTesting` instructions:
+
+```sh
+proofshot replay ./proofshot.checkout.json
+```
+
+Replay creates a fresh isolated session, uses its exact ID for every command, writes `USER_TESTING.md`, and fails unless the canonical verdict is `PASS`. The target repository still owns the scenario and expected product behavior; ProofShot owns only deterministic replay and evidence integrity.
 </Steps>
 
 <Callout type="warning">
@@ -128,7 +138,7 @@ Every `proofshot exec` or `agent-browser` command operates on the same browser s
 Run `proofshot start` first. If several live sessions match the worktree, inspect `proofshot session list` and pass the exact ID with `--session`.
 
 **Video has long pauses with no activity**
-Install [ffmpeg](https://ffmpeg.org/) and ProofShot will automatically trim dead time from the video (5s buffer before the first action, 3s buffer after the last) and convert the finalized recording to H.264 MP4.
+Install [ffmpeg](https://ffmpeg.org/) and ProofShot will automatically trim dead time from the H.264 MP4 recording (5s buffer before the first action, 3s buffer after the last).
 
 **No server errors detected but I know there are errors**
 Server error detection only works when ProofShot starts the server itself (`--run`). If your server was already running, ProofShot can't capture its logs.

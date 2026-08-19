@@ -63,6 +63,29 @@ describe('buildExecInvocation', () => {
     });
   });
 
+  it('accepts legal zero-argument open and one-argument key presses', () => {
+    expect(() => assertControlledAgentBrowserCommand(['open'])).not.toThrow();
+    expect(() => assertControlledAgentBrowserCommand(['press', 'Enter'])).not.toThrow();
+  });
+
+  it.each([
+    ['is', 'visible'],
+    ['check'],
+    ['key'],
+    ['focus'],
+    ['upload', '#file'],
+    ['get', 'attr', '#field'],
+    ['mouse', 'move', '10'],
+    ['set', 'viewport', '1280'],
+    ['storage', 'local', 'set', 'theme'],
+    ['cookies', 'set', '--curl'],
+    ['cookies', 'set', '--curl='],
+  ])('rejects incomplete controlled commands before execution: %j', (...args) => {
+    expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
+      /requires/,
+    );
+  });
+
   it.each([
     ['snapshot', '--session=another-session'],
     ['open', 'https://example.com', '--allowed-domains=attacker.invalid'],
@@ -102,7 +125,7 @@ describe('buildExecInvocation', () => {
       ['future-command', 'value'],
     ]) {
       expect(() => assertControlledAgentBrowserCommand(args)).toThrow(
-        /not permitted|cannot override ProofShot-owned browser state/,
+        /not permitted|cannot override browser state/,
       );
     }
     expect(() =>
@@ -160,8 +183,8 @@ describe('buildExecInvocation', () => {
       ),
     ).toEqual([
       'screenshot',
-      '--full',
       '/evidence/session/step (1).png',
+      '--full',
     ]);
 
     for (const args of [
@@ -170,6 +193,7 @@ describe('buildExecInvocation', () => {
       ['screenshot', '../outside.png'],
       ['screenshot', '/tmp/outside.png'],
       ['screenshot', 'step.jpg'],
+      ['screenshot', 'step.PNG'],
       ['screenshot', '--screenshot-dir', '/tmp'],
     ]) {
       expect(() =>
@@ -202,6 +226,19 @@ describe('buildExecInvocation', () => {
     ).not.toThrow();
     expect(() =>
       assertControlledAgentBrowserCommand(['network', 'requests']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand(['mouse', 'wheel']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand(['find', 'text', 'Submit']),
+    ).not.toThrow();
+    expect(() =>
+      assertControlledAgentBrowserCommand([
+        'cookies',
+        'set',
+        '--curl=/tmp/request.txt',
+      ]),
     ).not.toThrow();
     expect(() =>
       assertControlledAgentBrowserCommand(['keyboard', 'type', 'hello']),

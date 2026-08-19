@@ -380,7 +380,7 @@ describe('startCommand', () => {
     expect(finalState).toMatchObject({
       outputDir: canonicalOutputDirectory,
       sessionDir: canonicalSessionDirectory,
-      videoPath: path.join(canonicalSessionDirectory, 'session.webm'),
+      videoPath: path.join(canonicalSessionDirectory, 'session.mp4'),
     });
     expect(mocks.ensureOutputDir).toHaveBeenNthCalledWith(
       2,
@@ -483,6 +483,7 @@ describe('startCommand', () => {
     );
     expect(mocks.registerSession).toHaveBeenLastCalledWith(
       expect.objectContaining({
+        recordingAttempted: true,
         recordingStartedAt: expect.any(String),
         recordingActive: true,
       }),

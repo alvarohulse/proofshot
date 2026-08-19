@@ -31,6 +31,7 @@ export interface SessionState {
   port: number;
   serverCommand: string | null;
   serverAlreadyRunning: boolean;
+  recordingAttempted?: boolean;
   recordingActive: boolean;
   browserLaunchAttempted?: boolean;
   bundleComplete?: boolean;

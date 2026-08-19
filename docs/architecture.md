@@ -28,11 +28,11 @@ The choice of agent-browser as the browser automation layer is the most importan
 
 **Persistent daemon.** agent-browser runs a Node.js daemon that maintains browser state across CLI calls. This means `proofshot exec click @e3` and the next `proofshot exec screenshot step.png` operate on the same browser tab and page state. Without this, each command would need to reconnect to the browser.
 
-**Stable element references.** The `@eN` ref system (`@e1`, `@e2`, etc.) provides stable handles to interactive elements. An agent takes a snapshot, sees `@e3: Submit button`, and can target it reliably. This is far more robust than CSS selectors or XPath for AI-driven interaction.
+**Snapshot element references.** The `@eN` ref system (`@e1`, `@e2`, etc.) provides handles within an exploratory browser session. An agent takes a snapshot, sees `@e3: Submit button`, and can target it during that session; finalized replay cases instead use stable selectors because snapshot references are ephemeral.
 
 **Lightweight context.** agent-browser's snapshot output is ~93% smaller than Playwright MCP's equivalent. This matters because AI agents have context limits — smaller snapshots mean more room for reasoning.
 
-**Built-in recording.** Playwright's screencast API is exposed directly, so video capture works without ffmpeg. Finalization uses ffmpeg to trim the WebM capture and convert it to H.264 MP4.
+**Built-in recording.** Playwright's screencast API is exposed directly, and ProofShot records H.264 MP4 through agent-browser's real-time encoding path. Finalization uses ffmpeg only to trim dead time.
 
 All browser commands pass through one wrapper that injects the exact session, private config, namespace, socket root, allowlist, and a cleaned environment:
 
@@ -94,7 +94,7 @@ proofshot stop
 1. Claim a stop-operation lease and collect console evidence
 2. Flush HAR capture to a private pending file, validate it, atomically adopt it, and write a metadata-only network summary
 3. Stop video and close only exact owned browser/environment/server processes
-4. **Finalize video** — trim dead time, convert to H.264 `session.mp4`, and adjust action timestamps
+4. **Finalize video** — wait for the direct H.264 `session.mp4` recording to be stable and non-empty, then trim dead time when ffmpeg is available and adjust action timestamps
 5. Generate canonical evidence, verdict, summary, viewer, and provenance manifest
 6. Unregister completed ownership, or retain the exact browser record after `--no-close`
 
@@ -218,4 +218,4 @@ ProofShot rejects inherited `AGENT_BROWSER_JSON` and the equivalent config key, 
 
 **Config file walk-up.** `proofshot.config.json` is searched from cwd upward to filesystem root, supporting monorepo layouts where config lives at the repo root.
 
-**Fail closed at trust boundaries.** Wrong browser versions, shared/cloud browser modes, ownership mismatches, corrupt operation locks, synthetic final proof, and invalid private evidence cannot be presented as successful proof. Missing ffmpeg still preserves the original WebM.
+**Fail closed at trust boundaries.** Wrong browser versions, shared/cloud browser modes, ownership mismatches, corrupt operation locks, synthetic final proof, and invalid private evidence cannot be presented as successful proof. Missing ffmpeg preserves the original untrimmed MP4.

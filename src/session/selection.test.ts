@@ -50,6 +50,18 @@ describe('resolveLiveSession', () => {
     ).toBeNull();
   });
 
+  it('does not allow exec against a recovery session', () => {
+    const recovery = buildSession('ps-recovery', {
+      lifecycleStatus: 'recovery',
+    });
+    mocks.listRegisteredSessions.mockReturnValue([recovery]);
+    mocks.canAddressOwnedBrowserSession.mockReturnValue(true);
+
+    expect(
+      resolveLiveSession({ controlDir: '/project/output', operation: 'exec' }),
+    ).toBeNull();
+  });
+
   it('prefers one verified live stop target over stale active records', () => {
     const stale = buildSession('ps-stale');
     const live = buildSession('ps-live', {
