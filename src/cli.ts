@@ -6,6 +6,7 @@ import { diffCommand } from './commands/diff.js';
 import { cleanCommand } from './commands/clean.js';
 import { prCommand } from './commands/pr.js';
 import { execCommand } from './commands/exec.js';
+import { replayCommand } from './commands/replay.js';
 import { doctorCommand } from './commands/doctor.js';
 import { sessionCleanCommand, sessionListCommand } from './commands/session.js';
 import { PROOFSHOT_VERSION } from './version.js';
@@ -120,6 +121,14 @@ export function createCLI(): Command {
     .allowUnknownOption()
     .action(async (args, options) => {
       await execCommand(args, { session: options.session });
+    });
+
+  program
+    .command('replay')
+    .description('Run a stabilized flow in a fresh isolated ProofShot session')
+    .argument('<case-file>', 'Versioned JSON replay case')
+    .action(async (caseFile) => {
+      await replayCommand(caseFile);
     });
 
   const session = program

@@ -17,7 +17,7 @@ No. Skills install at user level (your home directory), so one `proofshot instal
 [agent-browser](https://github.com/vercel-labs/agent-browser) is a Rust CLI + Node.js daemon that manages Chromium. ProofShot pins 0.34.0, requires its Node 24 runtime, and delegates browser interaction/recording to it. A dedicated launcher lets the project continue using its own runtime, such as Node 22 from `.nvmrc`.
 
 **Do I need ffmpeg?**
-No. ffmpeg is optional. Without it, ProofShot skips video trimming (you get the full uncut recording) and `.webm` to `.mp4` conversion (GitHub PR comments may not display `.webm` inline). Everything else works the same.
+No. ffmpeg is optional. Without it, ProofShot keeps the full untrimmed H.264 MP4 recording. Everything else works the same.
 
 ## Usage
 
@@ -66,7 +66,7 @@ Another process is using the port. Either stop that process, use a different por
 Install ffmpeg to enable automatic video trimming. Without it, you get the full uncut recording.
 
 **PR comment shows no video**
-GitHub markdown doesn't render `.webm` inline. Install ffmpeg so `proofshot stop` can finalize the recording as `.mp4` before publication.
+Install ffmpeg when you want ProofShot to trim idle time from the recorded MP4 before publication.
 
 ---
 

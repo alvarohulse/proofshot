@@ -144,6 +144,12 @@ export async function prCommand(options: PROptions): Promise<void> {
     0,
   );
   const verdict = combineVerdicts(selections);
+  const userTesting = selections
+    .map((selection) => readUserTesting(selection))
+    .filter(
+      (value): value is { label: string; instructions: string[] } =>
+        value !== null,
+    );
   const preparedAssets = prepareSelectedAssets(selections);
   if (preparedAssets.length === 0) {
     throw new Error('The selected session has no publishable screenshots or video.');
@@ -172,6 +178,7 @@ export async function prCommand(options: PROptions): Promise<void> {
       errorCount,
       verdict: verdict.status,
       verdictReasons: verdict.reasons,
+      userTesting,
       branch: selections[0]?.manifest.branch || target.branch,
       commitSha: selections[0]?.manifest.commitSha || target.headSha,
     };
@@ -253,6 +260,7 @@ export async function prCommand(options: PROptions): Promise<void> {
     errorCount,
     verdict: verdict.status,
     verdictReasons: verdict.reasons,
+    userTesting,
     branch: selections[0]?.manifest.branch || target.branch,
     commitSha: selections[0]?.manifest.commitSha || target.headSha,
   };
@@ -441,6 +449,31 @@ function readVerdictSummary(
       )
     : [];
   return { status: manifest.verdict, reasons };
+}
+
+function readUserTesting(
+  selection: PublicationSelection,
+): { label: string; instructions: string[] } | null {
+  const artifact = selection.manifest.artifacts.find(
+    (candidate) => candidate.kind === 'instructions',
+  );
+  if (!artifact) return null;
+  const contents = fs.readFileSync(path.join(selection.sessionDir, artifact.path));
+  if (
+    contents.length !== artifact.size ||
+    createHash('sha256').update(contents).digest('hex') !== artifact.sha256
+  ) {
+    throw new Error('User-testing instructions changed after publication selection.');
+  }
+  const instructions = contents
+    .toString('utf-8')
+    .split('\n')
+    .map((line) => line.match(/^\d+\.\s+(.+)$/)?.[1])
+    .filter((line): line is string => Boolean(line));
+  if (instructions.length === 0) {
+    throw new Error('Finalized user-testing instructions were malformed.');
+  }
+  return { label: selection.manifest.sessionId, instructions };
 }
 
 function selectLegacyPublication(options: {

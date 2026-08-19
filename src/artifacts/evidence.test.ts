@@ -145,7 +145,7 @@ describe('canonical evidence and verdicts', () => {
         group: 'browser',
       }),
     );
-    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.status).toBe('FAIL');
     expect(verdict.duplicateScreenshotHashes).toEqual([
       ['first.png', 'second.png'],
     ]);
@@ -187,6 +187,13 @@ describe('canonical evidence and verdicts', () => {
       consoleEvidenceAvailable: true,
       actions: [
         {
+          action: 'is visible #ready',
+          relativeTimeSec: 0.25,
+          timestamp: '2026-08-09T00:01:23.250Z',
+          outcome: 'passed',
+          expectedSelector: '#ready',
+        },
+        {
           action: 'screenshot proof.png',
           relativeTimeSec: 0.5,
           timestamp: '2026-08-09T00:01:23.500Z',
@@ -210,6 +217,76 @@ describe('canonical evidence and verdicts', () => {
       7,
     ]);
     expect(verdict.status).toBe('PASS');
+  });
+
+  it('requires a passed explicit assertion for a PASS verdict', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-no-assertion-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'no-assertion',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [],
+      consoleEntries: [],
+      serverEntries: [],
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain(
+      'No explicit behavioral assertion passed.',
+    );
+  });
+
+  it('keeps nonfatal console and network failures from receiving PASS', () => {
+    const sessionDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'proofshot-nonfatal-failures-'),
+    );
+    temporaryDirectories.push(sessionDir);
+
+    const { verdict } = writeCanonicalEvidence({
+      sessionId: 'nonfatal-failures',
+      sessionDir,
+      durationSec: 1,
+      videoPath: path.join(sessionDir, 'unused.webm'),
+      recordingWasActive: false,
+      consoleEvidenceAvailable: true,
+      actions: [
+        {
+          action: 'is visible #ready',
+          relativeTimeSec: 0,
+          timestamp: '2026-08-09T00:00:00.000Z',
+          outcome: 'passed',
+          expectedSelector: '#ready',
+        },
+      ],
+      consoleEntries: [
+        { text: 'Error: recoverable browser problem', relativeTimeSec: 0.5 },
+      ],
+      serverEntries: [],
+      networkSummary: {
+        version: 1,
+        requestCount: 1,
+        requests: [
+          {
+            endpoint: 'http://localhost/api/save',
+            method: 'POST',
+            status: 500,
+            durationMs: 10,
+            error: null,
+          },
+        ],
+      },
+    });
+
+    expect(verdict.status).toBe('INCOMPLETE');
+    expect(verdict.reasons).toContain('1 nonfatal incident(s) detected.');
+    expect(verdict.reasons).toContain('1 failed network request(s) detected.');
   });
 
   it('marks decoded blank screenshots as incomplete evidence', () => {

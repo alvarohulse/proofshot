@@ -615,12 +615,22 @@ function buildVerdict(
   const pendingActions = options.actions.filter(
     (action) => action.outcome === undefined,
   );
+  const passedAssertions = options.actions.filter(
+    (action) => action.expectedSelector && action.outcome === 'passed',
+  );
   const hasSyntheticDomMutation = options.actions.some(
     (action) =>
       action.category === 'synthetic-dom' || /^eval\b/i.test(action.action),
   );
   const fatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === 'fatal',
+  ).length;
+  const nonfatalIncidentCount = evidence.incidents.filter(
+    (incident) => incident.severity === 'error',
+  ).length;
+  const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
+    (request) =>
+      request.error !== null || request.status === 0 || request.status >= 400,
   ).length;
   const blockingReasons = options.consoleEvidenceAvailable
     ? []
@@ -651,6 +661,15 @@ function buildVerdict(
           `${pendingActions.length} browser action(s) had no recorded outcome.`,
         ]
       : []),
+    ...(passedAssertions.length === 0
+      ? ['No explicit behavioral assertion passed.']
+      : []),
+    ...(nonfatalIncidentCount > 0
+      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
+      : []),
+    ...(failedNetworkRequestCount > 0
+      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
+      : []),
     ...(reusedScreenshotPaths > 0
       ? ['One or more screenshot paths were reused by multiple actions.']
       : []),
@@ -663,11 +682,11 @@ function buildVerdict(
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : incompleteReasons.length > 0
-        ? 'INCOMPLETE'
-        : failureReasons.length > 0
+      : failureReasons.length > 0
           ? 'FAIL'
-          : 'PASS';
+          : incompleteReasons.length > 0
+            ? 'INCOMPLETE'
+            : 'PASS';
   return {
     version: 1,
     status,

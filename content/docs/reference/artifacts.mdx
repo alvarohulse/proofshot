@@ -12,7 +12,7 @@ Each ProofShot session creates a timestamped folder in your output directory (de
 | File | Created by | Description |
 |------|------------|-------------|
 | `metadata.json` | `start` | Repository, branch, commit/tree provenance, initial dirty state, timestamp, and description. |
-| `session.mp4` | `stop` | Finalized H.264 video recording. `start` captures `session.webm`; `stop` trims and converts it when ffmpeg is available. |
+| `session.mp4` | `start` / `stop` | H.264 video captured directly; `stop` trims dead time when ffmpeg is available. |
 | `session-log.json` | `exec` | Action timeline. Each entry records the command, relative timestamp, and element data (bounding box, label) for `@eN` targets. Appended with each `exec` call. |
 | `server.log` | `start` | Dev server stdout and stderr. Only created when ProofShot starts the server via `--run`. |
 | `console-output.log` | `stop` | Browser console output collected at stop time. |

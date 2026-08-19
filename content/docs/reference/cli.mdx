@@ -89,7 +89,7 @@ proofshot stop [options]
 2. Atomically finalizes private HAR evidence and a sanitized network summary, then stops video recording
 3. Closes the exact owned browser session (unless `--no-close`)
 4. Stops only the tmux session/server, direct processes, capture helpers, and dev-server process identities created by this ProofShot start
-5. Trims video dead time and converts the finalized recording to H.264 `session.mp4` (requires ffmpeg): 5s buffer before first action, 3s after last
+5. Trims dead time from the finalized H.264 `session.mp4` when ffmpeg is available: 5s buffer before first action, 3s after last
 6. Scans `server.log` for errors across 10+ languages
 7. Generates `SUMMARY.md`, canonical `evidence.json`, structured `verdict.json`, `viewer.html`, and a hashed provenance manifest
 8. Unregisters completed ownership, or retains the exact session after `--no-close` until a later plain `stop`
@@ -126,6 +126,18 @@ With one live session, `exec` selects it automatically. Multiple live sessions r
 - Element bounding box and label (for `click`, `fill`, `type` targeting `@eN` refs)
 
 This data powers the interactive viewer's timeline and overlays. Synthetic DOM actions are diagnostic only and force an incomplete final verdict. Raw structured agent-browser output stays in private local evidence.
+
+---
+
+## `proofshot replay`
+
+Run a stabilized flow from a versioned JSON case in a fresh isolated session.
+
+```sh
+proofshot replay <case-file>
+```
+
+The case contains `version: 1`, a description, `start` options, ordered command arrays, and `humanTesting` instructions. Replay rejects ephemeral `@eN` snapshot references before starting, requires an `assert-visible` step and screenshot, uses the exact new session ID throughout, writes `USER_TESTING.md`, and attempts exact stop after any post-start failure. A successful command requires the finalized canonical verdict to be `PASS`.
 
 ---
 

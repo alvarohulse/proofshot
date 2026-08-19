@@ -34,7 +34,7 @@ The choice of [agent-browser](https://github.com/vercel-labs/agent-browser) as t
 
 **Lightweight context.** Snapshot output is significantly smaller than alternatives, leaving more room in the agent's context window for reasoning.
 
-**Built-in recording.** Playwright's screencast API is exposed directly, so video recording works without ffmpeg during capture.
+**Built-in recording.** Playwright's screencast API is exposed directly, and ProofShot selects agent-browser's real-time H.264 MP4 encoding path during capture.
 
 ## Session lifecycle
 
@@ -77,7 +77,7 @@ Each `proofshot exec` call:
 
 ## Design principles
 
-**Graceful degradation.** Missing ffmpeg? Video trimming and MP4 conversion are skipped, preserving the original `session.webm`. Element data capture fails? Overlays are skipped. Browser already closed? Silent catch. Non-critical failures never abort a session.
+**Graceful degradation.** Missing ffmpeg? Video trimming is skipped, preserving the original `session.mp4`. Element data capture fails? Overlays are skipped. Browser already closed? The evidence is marked incomplete rather than overstated.
 
 **Pinned browser contract.** ProofShot pins agent-browser 0.34.0 and fails before launch on older versions. Managed launchers keep its Node 24 runtime separate from project runtimes.
 

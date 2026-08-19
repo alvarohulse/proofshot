@@ -24,6 +24,7 @@ export type ManifestArtifactKind =
   | 'evidence'
   | 'verdict'
   | 'network-summary'
+  | 'instructions'
   | 'log';
 
 export type ManifestArtifact = {
@@ -296,6 +297,7 @@ function isArtifactManifest(value: unknown): value is ArtifactManifest {
           'evidence',
           'verdict',
           'network-summary',
+          'instructions',
           'log',
         ].includes(artifact.kind),
     )
@@ -413,6 +415,7 @@ function classifyArtifact(file: string): ManifestArtifactKind | null {
   if (isSessionRoot && basename === 'network-summary.json') {
     return 'network-summary';
   }
+  if (isSessionRoot && basename === 'USER_TESTING.md') return 'instructions';
   return null;
 }
 

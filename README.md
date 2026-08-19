@@ -91,7 +91,7 @@ proofshot exec screenshot step-login.png            # Capture proof
 proofshot stop
 ```
 
-The skill file teaches the agent this workflow automatically. The user just says *"verify this with proofshot"* and the agent handles the rest.
+Exploratory `start` / `exec` / `stop` sessions remain useful while refining a flow. Once the flow is stable, encode it with stable selectors and run `proofshot replay case.json`; replay rejects ephemeral `@eN` references before creating a session and writes the same high-level human instructions into the finalized evidence.
 
 ## Output Artifacts
 
@@ -99,7 +99,7 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 
 | File | Description |
 |------|-------------|
-| `session.mp4` | Finalized H.264 video recording (`session.webm` is retained only when ffmpeg is unavailable) |
+| `session.mp4` | H.264 video recorded directly and finalized at stop |
 | `viewer.html` | Standalone interactive viewer with scrub bar, canonical timeline, and grouped Environment/Browser source tabs |
 | `SUMMARY.md` | Markdown report with errors, screenshots, and video |
 | `step-*.png` | Screenshots captured at key moments |
@@ -108,6 +108,7 @@ Each session produces a timestamped folder in `./proofshot-artifacts/`:
 | `verdict.json` | Structured `PASS`, `FAIL`, `INCOMPLETE`, or `BLOCKED` verdict |
 | `artifact-manifest.json` | Finalized repository/commit/runtime provenance and ordered artifact hashes |
 | `network-summary.json` | Sanitized request method/status/timing/error metadata |
+| `USER_TESTING.md` | High-level instructions generated from a replay case |
 
 Raw agent-browser JSON, HAR, browser-console, and ProofShot-owned server evidence stays under the session's `private/` directory with user-only permissions. It is excluded from manifests and publication; only curated media and sanitized summaries are reviewable artifacts.
 
@@ -199,6 +200,16 @@ proofshot exec screenshot step-checkout.png
 
 Failed `assert-visible` checks are recorded in `session-log.json` and contribute to the structured verdict.
 Action receipts include sanitized intent, interaction category, timing, outcome, and page context. Synthetic DOM actions make final proof incomplete; they remain useful only for diagnosis.
+
+### `proofshot replay`
+
+Run one stabilized use case in a fresh isolated session:
+
+```bash
+proofshot replay ./proofshot.checkout.json
+```
+
+The version 1 JSON case owns a description, `start` options, ordered agent-browser command arrays, and high-level `humanTesting` instructions. It must use stable selectors, include `assert-visible`, and capture a screenshot. ProofShot addresses every action and cleanup operation with the exact returned session ID, writes `USER_TESTING.md`, and succeeds only when the canonical verdict is `PASS`.
 
 ### `proofshot diff`
 
