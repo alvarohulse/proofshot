@@ -200,7 +200,8 @@ proofshot pr --upload-provider github-web-attachments
 2. Selects one compatible complete `PASS` or `FAIL` manifest automatically, or the exact finalized sessions passed with repeated `--session` flags
 3. Rejects source drift, mixed commits, unsafe paths/symlinks, hash mismatches, incomplete verdicts, and ambiguous screenshot choices
 4. Uploads only the selected manifest artifacts
-5. Posts only after every requested artifact uploads successfully
+5. Includes replay-generated User Testing instructions when their manifest artifact is present
+6. Posts only after every requested artifact uploads successfully
 
 `repo-contents` uses the official GitHub contents API and stores artifacts on a dedicated branch.
 

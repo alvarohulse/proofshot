@@ -94,7 +94,7 @@ proofshot stop
 1. Claim a stop-operation lease and collect console evidence
 2. Flush HAR capture to a private pending file, validate it, atomically adopt it, and write a metadata-only network summary
 3. Stop video and close only exact owned browser/environment/server processes
-4. **Finalize video** — trim dead time, convert to H.264 `session.mp4`, and adjust action timestamps
+4. **Finalize video** — wait for the direct H.264 `session.mp4` recording to be stable and non-empty, then trim dead time when ffmpeg is available and adjust action timestamps
 5. Generate canonical evidence, verdict, summary, viewer, and provenance manifest
 6. Unregister completed ownership, or retain the exact browser record after `--no-close`
 
