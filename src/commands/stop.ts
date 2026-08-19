@@ -543,7 +543,7 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     serverLog,
     serverErrorCount,
     environmentSources: (finalizedEnvironment?.sources || []).map(
-      (source) => source.title,
+      (source) => sanitizeDiagnosticMessage(source.title) || '[REDACTED]',
     ),
     userTesting: readUserTestingInstructions(sessionDir),
     durationSec,

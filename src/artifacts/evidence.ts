@@ -588,7 +588,11 @@ function buildVerdict(
     successfulScreenshotPaths.length - new Set(successfulScreenshotPaths).size;
   for (const action of options.actions) {
     const match = action.action.match(/^screenshot\s+(.+)$/);
-    if (match && !screenshotFiles.has(path.basename(match[1]))) {
+    if (
+      match &&
+      action.outcome === 'passed' &&
+      !screenshotFiles.has(path.basename(match[1]))
+    ) {
       missingArtifacts.push(path.basename(match[1]));
     }
   }
@@ -625,7 +629,7 @@ function buildVerdict(
   const passedAssertions = options.actions.filter(
     (action) =>
       action.outcome === 'passed' &&
-      (action.expectedSelector || /^\s*is\s+visible\b/i.test(action.action)),
+      Boolean(action.expectedSelector),
   );
   const hasSyntheticDomMutation = options.actions.some(
     (action) =>
@@ -653,9 +657,10 @@ function buildVerdict(
       ? [`${expectedSelectorFailures.length} expected selector assertion(s) failed.`]
       : []),
   ];
+  const uniqueMissingArtifacts = [...new Set(missingArtifacts)];
   const evidenceTrustReasons = [
-    ...(missingArtifacts.length > 0
-      ? [`${missingArtifacts.length} required artifact(s) were missing or invalid.`]
+    ...(uniqueMissingArtifacts.length > 0
+      ? [`${uniqueMissingArtifacts.length} required artifact(s) were missing or invalid.`]
       : []),
     ...(evidence.mediaTruncated
       ? ['Recorded media ends before the canonical action timeline.']
@@ -712,7 +717,7 @@ function buildVerdict(
     status,
     reasons: [...blockingReasons, ...failureReasons, ...incompleteReasons],
     fatalIncidentCount,
-    missingArtifacts: [...new Set(missingArtifacts)],
+    missingArtifacts: uniqueMissingArtifacts,
     duplicateScreenshotHashes,
     expectedSelectorFailures,
     mediaTruncated: evidence.mediaTruncated,
@@ -750,6 +755,9 @@ function probeMedia(videoPath: string): {
     };
     const startTime = Number(parsed.format?.start_time || 0);
     const duration = Number(parsed.format?.duration);
+    if (!Number.isFinite(duration)) {
+      return { durationSec: null, status: 'unavailable' };
+    }
     const playableDuration = duration - startTime;
     return Number.isFinite(playableDuration) && playableDuration >= 0
       ? { durationSec: playableDuration, status: 'available' }

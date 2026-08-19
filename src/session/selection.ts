@@ -66,7 +66,9 @@ function selectSessionsForOperation(
   if (operation === 'exec') {
     return sessions.filter(
       (session) =>
-        session.recordingActive && canAddressOwnedBrowserSession(session),
+        session.lifecycleStatus !== 'recovery' &&
+        session.recordingActive &&
+        canAddressOwnedBrowserSession(session),
     );
   }
 
