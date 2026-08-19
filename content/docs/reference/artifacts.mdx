@@ -12,7 +12,7 @@ Each ProofShot session creates a timestamped folder in your output directory (de
 | File | Created by | Description |
 |------|------------|-------------|
 | `metadata.json` | `start` | Repository, branch, commit/tree provenance, initial dirty state, timestamp, and description. |
-| `session.mp4` | `start` / `stop` | H.264 video captured directly; `stop` trims dead time when ffmpeg is available. |
+| `session.mp4` | `start` / `stop` | H.264 video captured directly; `stop` trims dead time. |
 | `session-log.json` | `exec` | Action timeline. Each entry records the command, relative timestamp, and element data (bounding box, label) for `@eN` targets. Appended with each `exec` call. |
 | `network-summary.json` | `stop` | Sanitized metadata-only network request summary. |
 | `step-*.png` | `exec screenshot` | Screenshots captured at key moments. Filenames come from the `exec screenshot` argument. |

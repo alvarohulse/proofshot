@@ -17,7 +17,7 @@ No. Skills install at user level (your home directory), so one `proofshot instal
 [agent-browser](https://github.com/vercel-labs/agent-browser) is a Rust CLI + Node.js daemon that manages Chromium. ProofShot pins 0.34.0, requires its Node 24 runtime, and delegates browser interaction/recording to it. A dedicated launcher lets the project continue using its own runtime, such as Node 22 from `.nvmrc`.
 
 **Do I need ffmpeg?**
-No. ffmpeg is optional. Without it, ProofShot keeps the full untrimmed H.264 MP4 recording. Everything else works the same.
+Yes, for recording on Linux or macOS. `proofshot start` requires an executable ffmpeg before it creates a session; see the [`proofshot start` requirements](/docs/reference/cli#proofshot-start).
 
 ## Usage
 
@@ -34,7 +34,7 @@ Yes. Registry-backed session IDs, browser namespaces, sockets, operation leases,
 JavaScript/Node.js, Python, Ruby/Rails, Go, Java/Kotlin, Rust, PHP, C#/.NET, Elixir/Phoenix, plus generic patterns for `FATAL`, `CRITICAL`, and segfaults. See [How to add error patterns](/docs/guides/add-error-pattern) to extend support.
 
 **How does video trimming work?**
-When ffmpeg is available, `proofshot stop` cuts dead time from the H.264 `session.mp4` recording — keeping a 5-second buffer before the first action and a 3-second buffer after the last. All timestamps in `session-log.json` are adjusted by the trim offset to stay in sync with the finalized video.
+`proofshot stop` cuts dead time from the H.264 `session.mp4` recording — keeping a 5-second buffer before the first action and a 3-second buffer after the last. All timestamps in `session-log.json` are adjusted by the trim offset to stay in sync with the finalized video.
 
 ## Troubleshooting
 
@@ -63,10 +63,10 @@ ProofShot runs headless by default. Use `--headed` to see the browser window: `p
 Another process is using the port. Either stop that process, use a different port (`--port`), or omit `--run` to let ProofShot attach to the existing server.
 
 **Video has long pauses**
-Install ffmpeg to enable automatic video trimming. Without it, you get the full uncut recording.
+Recording requires executable ffmpeg. If the preflight cannot resolve it, install ffmpeg and start a new session; see the [`proofshot start` requirements](/docs/reference/cli#proofshot-start).
 
 **PR comment shows no video**
-Install ffmpeg when you want ProofShot to trim idle time from the recorded MP4 before publication.
+Check that the completed session contains `session.mp4`; a successful recording session has already passed the ffmpeg preflight.
 
 ---
 

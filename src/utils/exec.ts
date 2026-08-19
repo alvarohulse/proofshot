@@ -1,4 +1,6 @@
 import { execFileSync } from 'child_process';
+import * as path from 'path';
+import { prepareQuietFfmpegWrapper } from '../browser/ffmpeg-wrapper.js';
 import { getIsolatedAgentBrowserEnvironment } from '../browser/isolation.js';
 import { sanitizeDiagnosticMessage } from '../browser/provenance.js';
 
@@ -23,21 +25,22 @@ export interface AgentBrowserCommandOptions {
   timeoutMs?: number;
 }
 
+type AgentBrowserDefaults = Pick<
+  AgentBrowserCommandOptions,
+  'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
+> & {
+  ffmpegWrapperDirectory?: string;
+};
+
 export type AgentBrowserInvocation = {
   executablePath: string;
   args: string[];
 };
 
-let defaultAgentBrowserOptions: Pick<
-  AgentBrowserCommandOptions,
-  'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
-> = {};
+let defaultAgentBrowserOptions: AgentBrowserDefaults = {};
 
 export function setAgentBrowserDefaults(
-  options: Pick<
-    AgentBrowserCommandOptions,
-    'allowedDomains' | 'configPath' | 'executablePath' | 'namespace' | 'socketDir'
-  >,
+  options: AgentBrowserDefaults,
 ): void {
   defaultAgentBrowserOptions = { ...options };
 }
@@ -47,13 +50,29 @@ export function getAgentBrowserEnvironment(
     AgentBrowserCommandOptions,
     'allowedDomains' | 'namespace' | 'socketDir'
   > = {},
+  prepareFfmpegWrapper: () => string | null = prepareQuietFfmpegWrapper,
 ): NodeJS.ProcessEnv {
   const allowedDomains =
     options.allowedDomains ?? defaultAgentBrowserOptions.allowedDomains;
   const socketDir = options.socketDir ?? defaultAgentBrowserOptions.socketDir;
   const namespace = options.namespace ?? defaultAgentBrowserOptions.namespace;
+  const isolatedEnvironment = getIsolatedAgentBrowserEnvironment(process.env);
+  const preparedFfmpegWrapperDirectory =
+    defaultAgentBrowserOptions.ffmpegWrapperDirectory ?? prepareFfmpegWrapper();
+  const ffmpegWrapperDirectory =
+    preparedFfmpegWrapperDirectory?.includes(path.delimiter)
+      ? null
+      : preparedFfmpegWrapperDirectory;
+  const currentPath = isolatedEnvironment.PATH || '';
   return {
-    ...getIsolatedAgentBrowserEnvironment(process.env),
+    ...isolatedEnvironment,
+    ...(ffmpegWrapperDirectory
+      ? {
+          PATH: currentPath
+            ? `${ffmpegWrapperDirectory}${path.delimiter}${currentPath}`
+            : ffmpegWrapperDirectory,
+        }
+      : {}),
     AGENT_BROWSER_IDLE_TIMEOUT_MS:
       process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || '1800000',
     ...(socketDir ? { AGENT_BROWSER_SOCKET_DIR: socketDir } : {}),

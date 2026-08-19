@@ -96,7 +96,7 @@ proofshot stop
 This:
 1. Collects browser console errors and output
 2. Stops video recording
-3. Trims dead time from the H.264 `session.mp4` recording when ffmpeg is available
+3. Trims dead time from the H.264 `session.mp4` recording
 4. Scans server logs for errors across 10+ languages
 5. Generates `SUMMARY.md` and `viewer.html`
 6. Clears the active session
@@ -138,7 +138,7 @@ Every `proofshot exec` or `agent-browser` command operates on the same browser s
 Run `proofshot start` first. If several live sessions match the worktree, inspect `proofshot session list` and pass the exact ID with `--session`.
 
 **Video has long pauses with no activity**
-Install [ffmpeg](https://ffmpeg.org/) and ProofShot will automatically trim dead time from the H.264 MP4 recording (5s buffer before the first action, 3s buffer after the last).
+ProofShot trims dead time automatically. If `start` cannot find executable ffmpeg, install [ffmpeg](https://ffmpeg.org/) and begin a new session; see the [`proofshot start` requirements](/docs/reference/cli#proofshot-start).
 
 **No server errors detected but I know there are errors**
 Server error detection only works when ProofShot starts the server itself (`--run`). If your server was already running, ProofShot can't capture its logs.

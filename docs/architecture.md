@@ -32,7 +32,7 @@ The choice of agent-browser as the browser automation layer is the most importan
 
 **Lightweight context.** agent-browser's snapshot output is ~93% smaller than Playwright MCP's equivalent. This matters because AI agents have context limits — smaller snapshots mean more room for reasoning.
 
-**Built-in recording.** Playwright's screencast API is exposed directly, and ProofShot records H.264 MP4 through agent-browser's real-time encoding path. Finalization uses ffmpeg only to trim dead time.
+**Built-in recording.** Playwright's screencast API is exposed directly, and ProofShot records H.264 MP4 through agent-browser's real-time encoding path. On Linux and macOS, each resolved FFmpeg binary receives an immutable private wrapper that adds `-nostats -loglevel error` before agent-browser starts its daemon, suppressing progress output while preserving errors and preventing its undrained FFmpeg stderr pipe from stalling finalization. Windows recording fails closed until the pinned recorder has an upstream stderr-draining fix. Finalization also uses FFmpeg to trim dead time.
 
 All browser commands pass through one wrapper that injects the exact session, private config, namespace, socket root, allowlist, and a cleaned environment:
 
@@ -94,7 +94,7 @@ proofshot stop
 1. Claim a stop-operation lease and collect console evidence
 2. Flush HAR capture to a private pending file, validate it, atomically adopt it, and write a metadata-only network summary
 3. Stop video and close only exact owned browser/environment/server processes
-4. **Finalize video** — wait for the direct H.264 `session.mp4` recording to be stable and non-empty, then trim dead time when ffmpeg is available and adjust action timestamps
+4. **Finalize video** — wait for the direct H.264 `session.mp4` recording to be stable and non-empty, then trim dead time and adjust action timestamps
 5. Generate canonical evidence, verdict, summary, viewer, and provenance manifest
 6. Unregister completed ownership, or retain the exact browser record after `--no-close`
 
@@ -218,4 +218,4 @@ ProofShot rejects inherited `AGENT_BROWSER_JSON` and the equivalent config key, 
 
 **Config file walk-up.** `proofshot.config.json` is searched from cwd upward to filesystem root, supporting monorepo layouts where config lives at the repo root.
 
-**Fail closed at trust boundaries.** Wrong browser versions, shared/cloud browser modes, ownership mismatches, corrupt operation locks, synthetic final proof, and invalid private evidence cannot be presented as successful proof. Missing ffmpeg preserves the original untrimmed MP4.
+**Fail closed at trust boundaries.** Wrong browser versions, shared/cloud browser modes, ownership mismatches, corrupt operation locks, synthetic final proof, invalid private evidence, and an unavailable quiet FFmpeg wrapper prevent a recording session from starting.

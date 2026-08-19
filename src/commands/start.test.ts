@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   resolveAgentBrowserRuntime: vi.fn(),
   loadIsolatedAgentBrowserConfig: vi.fn(),
   writeIsolatedAgentBrowserConfig: vi.fn(),
+  assertSafeAgentBrowserRecordingPlatform: vi.fn(),
+  prepareQuietFfmpegWrapper: vi.fn(),
   claimSessionOperation: vi.fn(),
   registerSession: vi.fn(),
   releaseSessionOperation: vi.fn(),
@@ -78,6 +80,11 @@ vi.mock('../browser/isolation.js', () => ({
   resolveAgentBrowserRuntime: mocks.resolveAgentBrowserRuntime,
   loadIsolatedAgentBrowserConfig: mocks.loadIsolatedAgentBrowserConfig,
   writeIsolatedAgentBrowserConfig: mocks.writeIsolatedAgentBrowserConfig,
+}));
+vi.mock('../browser/ffmpeg-wrapper.js', () => ({
+  assertSafeAgentBrowserRecordingPlatform:
+    mocks.assertSafeAgentBrowserRecordingPlatform,
+  prepareQuietFfmpegWrapper: mocks.prepareQuietFfmpegWrapper,
 }));
 
 vi.mock('../artifacts/bundle.js', () => ({
@@ -173,6 +180,9 @@ describe('startCommand', () => {
     mocks.loadIsolatedAgentBrowserConfig.mockReturnValue({});
     mocks.writeIsolatedAgentBrowserConfig.mockReturnValue(
       '/audit/private/agent-browser/config.json',
+    );
+    mocks.prepareQuietFfmpegWrapper.mockReturnValue(
+      '/home/user/.local/state/proofshot/runtime/ffmpeg-bin/test',
     );
     mocks.claimSessionOperation.mockImplementation((session, kind) => {
       const lease = {

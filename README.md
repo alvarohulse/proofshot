@@ -71,6 +71,8 @@ The first command installs the CLI and the exact agent-browser 0.34.0 package. a
 
 Starting a dev server with `--run` also requires `lsof` on Linux/macOS; Windows uses PowerShell's `Get-NetTCPConnection`. Run `proofshot doctor` to verify the listener-inspection prerequisite.
 
+Recording is temporarily supported only on Linux and macOS; see the [`proofshot start` requirements](content/docs/reference/cli.mdx#proofshot-start).
+
 ## How It Works
 
 Three-step workflow: **start**, **test**, **stop**.

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildAgentBrowserInvocation,
   executeAgentBrowser,
+  getAgentBrowserEnvironment,
   setAgentBrowserDefaults,
 } from './exec.js';
 
@@ -68,6 +69,43 @@ describe('agent-browser argv execution', () => {
         '-i',
       ],
     });
+  });
+
+  it('routes agent-browser FFmpeg calls through the quiet wrapper', () => {
+    const environment = getAgentBrowserEnvironment(
+      {},
+      () => '/private/proofshot/ffmpeg-bin',
+    );
+
+    expect(environment.PATH?.split(path.delimiter)[0]).toBe(
+      '/private/proofshot/ffmpeg-bin',
+    );
+  });
+
+  it('reuses the exact wrapper accepted during recording preflight', () => {
+    setAgentBrowserDefaults({
+      executablePath: '/opt/node24/bin/agent-browser',
+      ffmpegWrapperDirectory: '/private/proofshot/accepted-ffmpeg-bin',
+    });
+
+    const environment = getAgentBrowserEnvironment({}, () => {
+      throw new Error('the accepted wrapper must not be re-derived');
+    });
+
+    expect(environment.PATH?.split(path.delimiter)[0]).toBe(
+      '/private/proofshot/accepted-ffmpeg-bin',
+    );
+  });
+
+  it('never prepends a wrapper path containing the platform delimiter', () => {
+    const environment = getAgentBrowserEnvironment(
+      {},
+      () => `/tmp/proof${path.delimiter}state/ffmpeg-bin`,
+    );
+
+    expect(environment.PATH).not.toContain(
+      `/tmp/proof${path.delimiter}state/ffmpeg-bin`,
+    );
   });
 
   it('keeps shell metacharacters, newlines, URLs, and output paths as argv data', () => {
