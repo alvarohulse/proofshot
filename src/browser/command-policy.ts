@@ -113,6 +113,9 @@ const ALLOWED_STORAGE_TYPES = new Set(['local', 'session']);
 const ALLOWED_STORAGE_OPERATIONS = new Set(['clear', 'get', 'set']);
 const SCREENSHOT_FLAGS = new Set(['--annotate', '--full', '-f']);
 const MAX_BATCH_DEPTH = 8;
+// The pinned 0.34.0 parser supplies defaults for commands omitted here (for
+// example `open`, `scroll`, `mouse wheel`, and `find text Submit`). Entries
+// below are only commands whose grammar requires additional positional args.
 const MINIMUM_COMMAND_ARGUMENTS: Record<string, number> = {
   check: 2,
   click: 2,
@@ -288,8 +291,12 @@ function requireArguments(args: string[], minimum: number, usage: string): void 
 
 function assertCookieArguments(args: string[]): void {
   if (args[1]?.toLowerCase() !== 'set') return;
-  const curlIndex = args.findIndex((argument) => normalizeFlag(argument) === '--curl');
+  const curlIndex = args.findIndex(
+    (argument) => normalizeFlag(argument) === '--curl',
+  );
   if (curlIndex >= 0) {
+    const inlineValue = args[curlIndex].split('=', 2)[1];
+    if (inlineValue) return;
     requireArguments(args.slice(curlIndex), 2, 'cookies set --curl <file>');
     return;
   }

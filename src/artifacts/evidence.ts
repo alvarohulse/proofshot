@@ -115,7 +115,8 @@ export function writeCanonicalEvidence(
     sanitizedOptions.sessionDir,
     sanitizedOptions.actions,
   );
-  const mediaDurationSec = probeMediaDuration(options.videoPath);
+  const mediaProbe = probeMedia(options.videoPath);
+  const mediaDurationSec = mediaProbe.durationSec;
   const actionDuration = sanitizedOptions.actions
     .map((entry) => entry.relativeTimeSec)
     .filter(Number.isFinite)
@@ -145,7 +146,7 @@ export function writeCanonicalEvidence(
     network: options.networkSummary,
     ...(options.runtime ? { runtime: options.runtime } : {}),
   };
-  const verdict = buildVerdict(sanitizedOptions, evidence);
+  const verdict = buildVerdict(sanitizedOptions, evidence, mediaProbe.status);
   writeJsonAtomically(
     path.join(options.sessionDir, 'evidence.json'),
     evidence,
@@ -333,7 +334,7 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
     }
   >();
   for (const event of events) {
-    const severity = classifyIncident(event.text, event.origin);
+    const severity = classifyIncident(event.text);
     if (!severity) {
       continue;
     }
@@ -371,10 +372,7 @@ function buildIncidents(events: EvidenceEvent[]): EvidenceIncident[] {
   }));
 }
 
-function classifyIncident(
-  text: string,
-  origin: EvidenceEvent['origin'],
-): 'fatal' | 'error' | null {
+function classifyIncident(text: string): 'fatal' | 'error' | null {
   if (
     /\bFATAL\b|\bpanic:|uncaught exception|unhandled rejection|capture worker exited before stop|malformed canonical evidence row|\[process exited with code (?!0\])/i.test(
       text,
@@ -382,10 +380,7 @@ function classifyIncident(
   ) {
     return 'fatal';
   }
-  if (
-    origin === 'browser' &&
-    /\bError:|ERR[_!]|Exception:|Traceback/i.test(text)
-  ) {
+  if (/\bError:|ERR[_!]|Exception:|Traceback/i.test(text)) {
     return 'error';
   }
   return null;
@@ -565,16 +560,19 @@ function inspectPng(contents: Buffer): {
 function buildVerdict(
   options: EvidenceBuildOptions,
   evidence: CanonicalEvidence,
+  mediaProbeStatus: MediaProbeStatus,
 ): Verdict {
   const missingArtifacts: string[] = [];
   if (options.networkEvidenceRequired && !options.networkSummary) {
     missingArtifacts.push('network-summary.json');
   }
-  if (options.recordingWasActive && !fs.existsSync(options.videoPath)) {
-    missingArtifacts.push(path.basename(options.videoPath));
-  } else if (
+  const videoSize = readRegularFileSize(options.videoPath);
+  if (
     options.recordingWasActive &&
-    (evidence.mediaDurationSec === null || evidence.mediaDurationSec <= 0)
+    (videoSize <= 0 ||
+      mediaProbeStatus === 'invalid' ||
+      (mediaProbeStatus === 'available' &&
+        (evidence.mediaDurationSec === null || evidence.mediaDurationSec <= 0)))
   ) {
     missingArtifacts.push(path.basename(options.videoPath));
   }
@@ -637,6 +635,11 @@ function buildVerdict(
   const nonfatalIncidentCount = evidence.incidents.filter(
     (incident) => incident.severity === 'error',
   ).length;
+  const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
+    (request) =>
+      request.error != null || request.status === 0 || request.status >= 400,
+  ).length;
+  const browserErrorCount = evidence.browserErrorCount ?? 0;
   const blockingReasons = options.consoleEvidenceAvailable
     ? []
     : ['Browser console evidence was unavailable.'];
@@ -646,9 +649,6 @@ function buildVerdict(
       : []),
     ...(expectedSelectorFailures.length > 0
       ? [`${expectedSelectorFailures.length} expected selector assertion(s) failed.`]
-      : []),
-    ...(nonfatalIncidentCount > 0
-      ? [`${nonfatalIncidentCount} browser incident(s) detected.`]
       : []),
   ];
   const incompleteReasons = [
@@ -663,6 +663,15 @@ function buildVerdict(
       : []),
     ...(duplicateScreenshotHashes.length > 0
       ? ['Duplicate key-frame screenshot hashes were detected.']
+      : []),
+    ...(nonfatalIncidentCount > 0
+      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
+      : []),
+    ...(failedNetworkRequestCount > 0
+      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
+      : []),
+    ...(browserErrorCount > 0
+      ? [`${browserErrorCount} uncaught browser error(s) detected.`]
       : []),
     ...(pendingActions.length > 0
       ? [
@@ -703,9 +712,14 @@ function buildVerdict(
   };
 }
 
-export function probeMediaDuration(videoPath: string): number | null {
-  if (!fs.existsSync(videoPath)) {
-    return null;
+type MediaProbeStatus = 'available' | 'unavailable' | 'invalid' | 'missing';
+
+function probeMedia(videoPath: string): {
+  durationSec: number | null;
+  status: MediaProbeStatus;
+} {
+  if (readRegularFileSize(videoPath) <= 0) {
+    return { durationSec: null, status: 'missing' };
   }
   try {
     const output = execFileSync(
@@ -731,9 +745,33 @@ export function probeMediaDuration(videoPath: string): number | null {
     const duration = Number(parsed.format?.duration);
     const playableDuration = duration - startTime;
     return Number.isFinite(playableDuration) && playableDuration >= 0
-      ? playableDuration
-      : null;
+      ? { durationSec: playableDuration, status: 'available' }
+      : { durationSec: null, status: 'invalid' };
+  } catch (error) {
+    return isExecutableUnavailable(error)
+      ? { durationSec: null, status: 'unavailable' }
+      : { durationSec: null, status: 'invalid' };
+  }
+}
+
+export function probeMediaDuration(videoPath: string): number | null {
+  return probeMedia(videoPath).durationSec;
+}
+
+function isExecutableUnavailable(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    ['EACCES', 'ENOENT', 'ETIMEDOUT'].includes(String(error.code))
+  );
+}
+
+function readRegularFileSize(filePath: string): number {
+  try {
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink() ? stat.size : -1;
   } catch {
-    return null;
+    return -1;
   }
 }

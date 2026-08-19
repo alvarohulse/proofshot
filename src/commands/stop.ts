@@ -362,32 +362,29 @@ export async function stopCommand(options: StopOptions): Promise<void> {
     try {
       await finalizeRecording(session.videoPath, session.sessionName);
     } catch (error) {
+      session.lifecycleStatus = 'recovery';
       session.cleanupError =
         `Recording finalization failed: ${
           error instanceof Error ? error.message : String(error)
         }`;
-      console.log(
-        chalk.yellow('⚠') +
-          ` Recording finalization could not be verified: ${session.cleanupError}`,
-      );
       persistOwnedSession(session);
+      throw error;
     }
   } else if (recordingWasActive) {
     try {
       await verifyFinalizedRecording(session.videoPath);
     } catch (error) {
+      session.lifecycleStatus = 'recovery';
       session.cleanupError =
         `Recording finalization could not be verified: ${
           error instanceof Error ? error.message : String(error)
         }`;
-      console.log(
-        chalk.yellow('⚠') +
-          ` Recording finalization could not be verified: ${session.cleanupError}`,
-      );
       persistOwnedSession(session);
+      throw error;
     }
   }
   session.recordingActive = false;
+  session.cleanupError = null;
   persistOwnedSession(session);
 
   // Step 3: Close browser (unless --no-close)

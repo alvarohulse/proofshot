@@ -55,18 +55,15 @@ async function waitForStableRecording(outputPath: string): Promise<void> {
   const absoluteDeadline = Date.now() + RECORDING_STABILITY_MAX_WAIT_MS;
   let quietDeadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
   let previousSize = -1;
-  let stableObservations = 0;
 
-  while (Date.now() <= Math.min(quietDeadline, absoluteDeadline)) {
+  while (Date.now() <= absoluteDeadline) {
+    const now = Date.now();
     const size = readRegularFileSize(outputPath);
-    if (size > 0 && size === previousSize) {
-      stableObservations += 1;
-      if (stableObservations >= 2) return;
-    } else {
-      stableObservations = 0;
-      if (size > previousSize) {
-        quietDeadline = Date.now() + RECORDING_STABILITY_TIMEOUT_MS;
-      }
+    if (size !== previousSize) {
+      quietDeadline = now + RECORDING_STABILITY_TIMEOUT_MS;
+    } else if (now >= quietDeadline) {
+      if (size > 0) return;
+      break;
     }
     previousSize = size;
     await new Promise((resolve) =>
