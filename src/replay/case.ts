@@ -81,7 +81,7 @@ export function parseReplayCase(value: unknown): ReplayCase {
     assertControlledAgentBrowserCommand(translated);
     if (command[0]?.toLowerCase() === 'screenshot') {
       const { filename, flags } = parseScreenshotCommand(command);
-      return { command: ['screenshot', filename, ...flags] };
+      return { command: ['screenshot', ...flags, filename] };
     }
     return { command };
   });

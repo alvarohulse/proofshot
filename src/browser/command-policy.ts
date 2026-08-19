@@ -157,7 +157,7 @@ function assertControlledAgentBrowserCommandAtDepth(
   }
   if (PROOFSHOT_OWNED_COMMANDS.has(command)) {
     throw new Error(
-      `agent-browser ${command} cannot override ProofShot-owned browser state.`,
+      `agent-browser ${command} is ProofShot-owned and cannot override browser state.`,
     );
   }
   if (!ALLOWED_COMMANDS.has(command)) {
