@@ -642,15 +642,6 @@ function buildVerdict(
     ...(expectedSelectorFailures.length > 0
       ? [`${expectedSelectorFailures.length} expected selector assertion(s) failed.`]
       : []),
-    ...(duplicateScreenshotHashes.length > 0
-      ? ['Duplicate key-frame screenshot hashes were detected.']
-      : []),
-    ...(nonfatalIncidentCount > 0
-      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
-      : []),
-    ...(failedNetworkRequestCount > 0
-      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
-      : []),
   ];
   const incompleteReasons = [
     ...(missingArtifacts.length > 0
@@ -661,6 +652,15 @@ function buildVerdict(
       : []),
     ...(evidence.sources.some((source) => source.truncationCount > 0)
       ? ['One or more evidence sources were truncated.']
+      : []),
+    ...(duplicateScreenshotHashes.length > 0
+      ? ['Duplicate key-frame screenshot hashes were detected.']
+      : []),
+    ...(nonfatalIncidentCount > 0
+      ? [`${nonfatalIncidentCount} nonfatal incident(s) detected.`]
+      : []),
+    ...(failedNetworkRequestCount > 0
+      ? [`${failedNetworkRequestCount} failed network request(s) detected.`]
       : []),
     ...(pendingActions.length > 0
       ? [
@@ -684,10 +684,10 @@ function buildVerdict(
   const status: VerdictStatus =
     blockingReasons.length > 0
       ? 'BLOCKED'
-      : failureReasons.length > 0
+      : incompleteReasons.length > 0
+        ? 'INCOMPLETE'
+        : failureReasons.length > 0
           ? 'FAIL'
-          : incompleteReasons.length > 0
-            ? 'INCOMPLETE'
           : 'PASS';
   return {
     version: 1,
