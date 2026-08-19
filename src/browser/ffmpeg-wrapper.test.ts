@@ -56,4 +56,39 @@ describe('quiet FFmpeg wrapper', () => {
       0o700,
     );
   });
+
+  it('keeps wrappers for different FFmpeg installations immutable and isolated', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proofshot-ffmpeg-wrapper-'));
+    temporaryDirectories.push(root);
+    const firstFfmpeg = path.join(root, 'first', 'ffmpeg');
+    const secondFfmpeg = path.join(root, 'second', 'ffmpeg');
+    fs.mkdirSync(path.dirname(firstFfmpeg), { recursive: true });
+    fs.mkdirSync(path.dirname(secondFfmpeg), { recursive: true });
+    fs.writeFileSync(firstFfmpeg, '#!/bin/sh\necho first\n', { mode: 0o700 });
+    fs.writeFileSync(secondFfmpeg, '#!/bin/sh\necho second\n', { mode: 0o700 });
+    const stateRoot = path.join(root, 'state');
+
+    const firstWrapperDirectory = prepareQuietFfmpegWrapper({
+      ffmpegExecutable: firstFfmpeg,
+      platform: 'linux',
+      stateRoot,
+    });
+    const secondWrapperDirectory = prepareQuietFfmpegWrapper({
+      ffmpegExecutable: secondFfmpeg,
+      platform: 'linux',
+      stateRoot,
+    });
+
+    expect(firstWrapperDirectory).not.toBe(secondWrapperDirectory);
+    expect(
+      execFileSync(path.join(firstWrapperDirectory!, 'ffmpeg'), [], {
+        encoding: 'utf-8',
+      }).trim(),
+    ).toBe('first');
+    expect(
+      execFileSync(path.join(secondWrapperDirectory!, 'ffmpeg'), [], {
+        encoding: 'utf-8',
+      }).trim(),
+    ).toBe('second');
+  });
 });

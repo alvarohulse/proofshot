@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -40,7 +40,16 @@ export function prepareQuietFfmpegWrapper(
   const stateRoot =
     options.stateRoot ??
     path.join(os.homedir(), '.local', 'state', 'proofshot');
-  const wrapperDirectory = path.join(stateRoot, 'runtime', 'ffmpeg-bin');
+  const ffmpegPathHash = createHash('sha256')
+    .update(ffmpegExecutable)
+    .digest('hex')
+    .slice(0, 16);
+  const wrapperDirectory = path.join(
+    stateRoot,
+    'runtime',
+    'ffmpeg-bin',
+    ffmpegPathHash,
+  );
   fs.mkdirSync(wrapperDirectory, { recursive: true, mode: 0o700 });
   fs.chmodSync(wrapperDirectory, 0o700);
 
