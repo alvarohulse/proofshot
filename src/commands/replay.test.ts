@@ -63,9 +63,9 @@ describe('replayCommand', () => {
     await replayCommand(casePath);
 
     expect(mocks.execCommand.mock.calls).toEqual([
-      [['click', '#create'], { session: 'ps-replay-123' }],
-      [['assert-visible', '#created'], { session: 'ps-replay-123' }],
-      [['screenshot', 'created.png'], { session: 'ps-replay-123' }],
+      [['click', '#create'], { session: 'ps-replay-123', throwOnFailure: true }],
+      [['assert-visible', '#created'], { session: 'ps-replay-123', throwOnFailure: true }],
+      [['screenshot', 'created.png'], { session: 'ps-replay-123', throwOnFailure: true }],
     ]);
     expect(mocks.stopCommand).toHaveBeenCalledWith({
       session: 'ps-replay-123',
