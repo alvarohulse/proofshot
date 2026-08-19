@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   buildAgentBrowserInvocation,
   executeAgentBrowser,
+  getAgentBrowserEnvironment,
   setAgentBrowserDefaults,
 } from './exec.js';
 
@@ -68,6 +69,17 @@ describe('agent-browser argv execution', () => {
         '-i',
       ],
     });
+  });
+
+  it('routes agent-browser FFmpeg calls through the quiet wrapper', () => {
+    const environment = getAgentBrowserEnvironment(
+      {},
+      () => '/private/proofshot/ffmpeg-bin',
+    );
+
+    expect(environment.PATH?.split(path.delimiter)[0]).toBe(
+      '/private/proofshot/ffmpeg-bin',
+    );
   });
 
   it('keeps shell metacharacters, newlines, URLs, and output paths as argv data', () => {
