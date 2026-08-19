@@ -15,7 +15,7 @@ npm run dev            # Watch mode build
 ```
 src/
 ├── cli.ts                  # Commander.js command registration
-├── commands/               # One file per CLI command (install, start, stop, exec, diff, pr, clean)
+├── commands/               # One file per CLI command (install, start, stop, exec, replay, diff, pr, clean)
 ├── browser/                # agent-browser CLI wrappers (session, capture, interact, navigate)
 ├── server/                 # Dev server detection, startup, port waiting
 ├── session/                # Global registry, per-session leases, selection, manifests
@@ -40,7 +40,8 @@ src/
 1. `proofshot start` — validates a local isolated browser, claims a start lease, opens a unique agent-browser namespace, starts recording/network capture, and writes metadata
 2. `proofshot exec [--session ID] <args>` — claims an exec lease, logs sanitized provenance/private structured output, and forwards to the exact browser
 3. `proofshot stop [--session ID]` — claims a stop lease, atomically finalizes private evidence, performs exact cleanup, and generates canonical artifacts
-4. `proofshot pr [number]` — finds sessions for current branch, uploads artifacts to GitHub, posts PR comment
+4. `proofshot replay <case-file>` — validates a version 1 stable-selector case, runs it in one fresh exact session, and requires the finalized verdict to be `PASS`
+5. `proofshot pr [number]` — finds sessions for current branch, uploads artifacts to GitHub, posts PR comment
 
 ## Adding a new command
 
@@ -67,7 +68,7 @@ Edit `src/utils/error-patterns.ts` — add a new entry to the `PATTERNS` array:
 | File | Created by | Contains |
 |---|---|---|
 | `metadata.json` | `start` | Git branch, commit SHA, timestamp (persists after stop) |
-| `session.mp4` | `stop` | Finalized H.264 recording (`start` captures temporary `session.webm`) |
+| `session.mp4` | `start` / `stop` | H.264 recording captured directly; `stop` trims dead time when ffmpeg is available |
 | `session-log.json` | `exec` (appended each call) | Action timeline with relative timestamps |
 | `private/server.log` | `start` (piped stdout+stderr) | Private raw dev server output |
 | `private/browser/console-output.log` | `stop` | Private raw browser console output |
@@ -76,6 +77,7 @@ Edit `src/utils/error-patterns.ts` — add a new entry to the `PATTERNS` array:
 | `step-*.png` | `exec screenshot` | Screenshots at key moments |
 | `SUMMARY.md` | `stop` | Markdown report with errors and screenshots |
 | `viewer.html` | `stop` | Standalone HTML viewer with video + timeline |
+| `USER_TESTING.md` | `replay` | Human testing instructions generated from the replay case |
 
 ## Versioning & releases
 

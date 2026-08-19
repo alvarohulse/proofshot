@@ -137,7 +137,7 @@ Run a stabilized flow from a versioned JSON case in a fresh isolated session.
 proofshot replay <case-file>
 ```
 
-The case contains `version: 1`, a description, `start` options, ordered command arrays, and `humanTesting` instructions. Replay rejects ephemeral `@eN` snapshot references before starting, requires an `assert-visible` step and screenshot, uses the exact new session ID throughout, writes `USER_TESTING.md`, and attempts exact stop after any post-start failure. A successful command requires the finalized canonical verdict to be `PASS`.
+The case contains `version: 1`, a description, `start` options, ordered command arrays, and `humanTesting` instructions. Replay rejects ephemeral `@eN` snapshot references before starting, requires an `assert-visible` step and screenshot, uses the exact new session ID throughout, writes `USER_TESTING.md`, and attempts exact stop after any post-start failure. A successful command requires the finalized canonical verdict to be `PASS`: a behavioral assertion must pass, and console and network evidence must be complete and free of errors. Raw HAR, browser output, credentials, and customer data remain private and are never published.
 
 ---
 

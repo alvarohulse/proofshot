@@ -71,7 +71,7 @@ Each `proofshot exec` call:
 1. Claims a stop lease and collects console evidence
 2. Atomically finalizes private HAR evidence and writes a metadata-only network summary
 3. Stops video recording and closes only the exact owned browser/environment/server processes
-4. Trims video dead time using ffmpeg, converts to H.264 `session.mp4`, and adjusts action timestamps
+4. Trims dead time from the H.264 `session.mp4` using ffmpeg and adjusts action timestamps
 5. Generates canonical evidence, verdict, summary, viewer, and provenance manifest
 6. Unregisters completed ownership, or retains the exact browser record after `--no-close`
 

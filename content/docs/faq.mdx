@@ -34,7 +34,7 @@ Yes. Registry-backed session IDs, browser namespaces, sockets, operation leases,
 JavaScript/Node.js, Python, Ruby/Rails, Go, Java/Kotlin, Rust, PHP, C#/.NET, Elixir/Phoenix, plus generic patterns for `FATAL`, `CRITICAL`, and segfaults. See [How to add error patterns](/docs/guides/add-error-pattern) to extend support.
 
 **How does video trimming work?**
-When ffmpeg is available, `proofshot stop` cuts dead time from the video — keeping a 5-second buffer before the first action and a 3-second buffer after the last — then finalizes it as H.264 `session.mp4`. All timestamps in `session-log.json` are adjusted by the trim offset to stay in sync with the finalized video.
+When ffmpeg is available, `proofshot stop` cuts dead time from the H.264 `session.mp4` recording — keeping a 5-second buffer before the first action and a 3-second buffer after the last. All timestamps in `session-log.json` are adjusted by the trim offset to stay in sync with the finalized video.
 
 ## Troubleshooting
 

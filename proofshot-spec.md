@@ -148,7 +148,7 @@ Phase 1: proofshot start
 4. proofshot waits for server to be ready (detects "ready on" or port open)
 5. proofshot calls: agent-browser open http://localhost:3000
 6. proofshot calls: agent-browser set viewport 1280 720
-7. proofshot calls: agent-browser record start ./proofshot-artifacts/session.webm
+7. proofshot calls: agent-browser record start ./proofshot-artifacts/session.mp4
 8. proofshot saves session state to ./proofshot-artifacts/.session.json
 9. proofshot outputs: "Session started. Use agent-browser to test. Run proofshot stop when done."
 
@@ -166,7 +166,7 @@ Phase 3: proofshot stop
 4. proofshot calls: agent-browser close → closes browser
 5. proofshot reads server-errors.log for server-side errors
 6. proofshot collects all screenshots in the output dir
-7. proofshot trims the WebM capture and converts it to H.264 session.mp4 with ffmpeg
+7. proofshot optionally trims dead time from the H.264 session.mp4 recording with ffmpeg
 8. proofshot generates SUMMARY.md with: description, video, screenshots, console errors, server errors
 9. proofshot outputs: proof artifact summary to stdout
 ```
@@ -178,7 +178,7 @@ Phase 3: proofshot stop
 
 Dev server: Vite on :5173
 Browser: Chromium (headless)
-Recording: ./proofshot-artifacts/session-2026-02-25.webm
+Recording: ./proofshot-artifacts/session-2026-02-25.mp4
 Errors log: ./proofshot-artifacts/server-errors.log
 
 Use agent-browser to navigate and test:
@@ -376,7 +376,7 @@ ProofShot uses a `.session.json` file in the configured/default output directory
   "sessionName": "ps-2026-02-a1b2c3d4e5f6",
   "targetUrl": "http://localhost:5173/login",
   "agentBrowserSocketDir": "/run/user/1000/proofshot/agent-browser",
-  "videoPath": "/audit/custom-evidence/2026-02-25_login-form/session.webm",
+  "videoPath": "/audit/custom-evidence/2026-02-25_login-form/session.mp4",
   "serverErrorLog": "/audit/custom-evidence/2026-02-25_login-form/server.log",
   "port": 5173,
   "serverProcess": { "pid": 12345, "processGroupId": 12345, "sessionId": 12345, "startTime": "987654" },
@@ -386,7 +386,7 @@ ProofShot uses a `.session.json` file in the configured/default output directory
 
 `proofshot exec` and `proofshot stop` read this file from separate CLI processes. Cleanup verifies the immutable identities and signals only process groups inside the recorded process sessions; it never kills by command name or occupied port.
 
-While recording, `videoPath` points to the WebM capture. Successful finalization updates it to `session.mp4`.
+While recording, `videoPath` points to the H.264 MP4 capture. Finalization may trim dead time while preserving that path.
 
 ---
 
@@ -614,6 +614,6 @@ The log file is included in the SUMMARY.md and can be fed back to the agent.
 ## 10. Open Questions (To Decide During Build)
 
 1. **Name:** "ProofShot" is a working name. Need to check npm availability.
-2. **Video format:** agent-browser captures WebM; `proofshot stop` finalizes it as H.264 MP4 with ffmpeg for portable playback and GitHub publication.
+2. **Video format:** agent-browser captures H.264 MP4 directly; `proofshot stop` uses ffmpeg only to trim dead time when available.
 3. **Monorepo support:** For now, assume single project root.
 4. **Server error log rotation:** For long sessions, the log could get large. Probably fine for v1.
