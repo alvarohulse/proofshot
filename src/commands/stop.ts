@@ -101,7 +101,17 @@ function sanitizeEvidenceText(value: string): string {
 
 function isRegularFile(filePath: string): boolean {
   try {
-    return fs.lstatSync(filePath).isFile();
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function hasPositiveRecording(filePath: string): boolean {
+  try {
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink() && stat.size > 0;
   } catch {
     return false;
   }
@@ -369,7 +379,13 @@ export async function stopCommand(options: StopOptions): Promise<void> {
         }`;
       session.recordingActive = true;
       persistOwnedSession(session);
-      throw error;
+      if (hasPositiveRecording(session.videoPath)) {
+        throw error;
+      }
+      console.warn(
+        chalk.yellow('⚠') +
+          ' Recording produced no usable file; continuing cleanup with incomplete evidence.',
+      );
     }
   } else if (recordingWasActive) {
     try {
@@ -566,6 +582,8 @@ export async function stopCommand(options: StopOptions): Promise<void> {
   // Write adjusted log back to disk so timestamps match the trimmed video
   if (trimOffsetSec > 0 && !session.sessionLogAdjusted && viewerEntries.length > 0) {
     const logPath = path.join(sessionDir, 'session-log.json');
+    session.sessionLogAdjusted = true;
+    persistOwnedSession(session);
     writeTextFileAtomically(logPath, JSON.stringify(viewerEntries, null, 2) + '\n');
   }
   if (!session.sessionLogAdjusted) {

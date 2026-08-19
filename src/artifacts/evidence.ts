@@ -588,7 +588,11 @@ function buildVerdict(
     successfulScreenshotPaths.length - new Set(successfulScreenshotPaths).size;
   for (const action of options.actions) {
     const match = action.action.match(/^screenshot\s+(.+)$/);
-    if (match && !screenshotFiles.has(path.basename(match[1]))) {
+    if (
+      match &&
+      action.outcome !== 'failed' &&
+      !screenshotFiles.has(path.basename(match[1]))
+    ) {
       missingArtifacts.push(path.basename(match[1]));
     }
   }
@@ -625,7 +629,7 @@ function buildVerdict(
   const passedAssertions = options.actions.filter(
     (action) =>
       action.outcome === 'passed' &&
-      (action.expectedSelector || /^\s*is\s+visible\b/i.test(action.action)),
+      Boolean(action.expectedSelector),
   );
   const hasSyntheticDomMutation = options.actions.some(
     (action) =>
@@ -639,7 +643,7 @@ function buildVerdict(
   ).length;
   const failedNetworkRequestCount = (evidence.network?.requests || []).filter(
     (request) =>
-      request.error != null || request.status === 0 || request.status >= 400,
+      request.error != null || request.status >= 400,
   ).length;
   const browserErrorCount = evidence.browserErrorCount ?? 0;
   const blockingReasons = options.consoleEvidenceAvailable
@@ -654,8 +658,8 @@ function buildVerdict(
       : []),
   ];
   const evidenceTrustReasons = [
-    ...(missingArtifacts.length > 0
-      ? [`${missingArtifacts.length} required artifact(s) were missing or invalid.`]
+    ...(new Set(missingArtifacts).size > 0
+      ? [`${new Set(missingArtifacts).size} required artifact(s) were missing or invalid.`]
       : []),
     ...(evidence.mediaTruncated
       ? ['Recorded media ends before the canonical action timeline.']
@@ -751,6 +755,9 @@ function probeMedia(videoPath: string): {
     const startTime = Number(parsed.format?.start_time || 0);
     const duration = Number(parsed.format?.duration);
     const playableDuration = duration - startTime;
+    if (!Number.isFinite(duration)) {
+      return { durationSec: null, status: 'unavailable' };
+    }
     return Number.isFinite(playableDuration) && playableDuration >= 0
       ? { durationSec: playableDuration, status: 'available' }
       : { durationSec: null, status: 'invalid' };
